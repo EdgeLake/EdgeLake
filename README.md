@@ -1,4 +1,4 @@
-![AnyLog Logo](imgs/anylog_logo.png)
+![AnyLog Logo](other/anylog_logo.png)
 # AnyLog Service for  OpenHorizon
 
 AnyLog is a decentralized network to manage IoT data. Nodes in the network are compute instances that execute the AnyLog 
