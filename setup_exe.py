@@ -9,25 +9,12 @@ from setuptools import setup, find_packages
 from setuptools.command.install import install
 from setuptools import Extension
 
-IS_OPEN_SOURCE = False
-if "--open-source" in sys.argv:
-    IS_OPEN_SOURCE = True
-    sys.argv.pop()
-
 ROOT_PATH = os.path.dirname(os.path.expanduser(os.path.expanduser(os.path.abspath(__file__))))
 CONFIG_FILE = os.path.join(ROOT_PATH, 'setup.cfg')
 
-if IS_OPEN_SOURCE is True:
-    ANYLOG_PY = os.path.join(ROOT_PATH, 'anylog_node', 'anylog.py')
-    if 'AnyLog-Network' not in ROOT_PATH:
-        ANYLOG_PY = os.path.join(ROOT_PATH, 'AnyLog-Network', 'anylog_node', 'anylog.py')
-else:
-    ANYLOG_PY = os.path.join(ROOT_PATH, 'anylog_enterprise', 'anylog.py')
-    if 'AnyLog-Network' not in ROOT_PATH:
-        ANYLOG_PY = os.path.join(ROOT_PATH, 'AnyLog-Network', 'anylog_enterprise', 'anylog.py')
-
-if not os.path.isfile(ANYLOG_PY):
-    raise ValueError(f"Failed to locate {ANYLOG_PY}")
+EDGELAKE_PY = os.path.join(ROOT_PATH, 'edge_lake', 'edgelake.py')
+if 'EdgeLake' not in ROOT_PATH:
+    EDGELAKE_PY = os.path.join(ROOT_PATH, 'EdgeLake', 'edge_lake', 'edgelake.py')
 
 
 config = configparser.ConfigParser()
@@ -38,28 +25,24 @@ PKG_AUTHOR = config['metadata']['author']
 PKG_CONTACT = config['metadata']['contact']
 PKG_DESCRIPTION = config['metadata']['description']
 
-subprocess.run(["cython", "--embed", ANYLOG_PY])
+subprocess.run(["cython", "--embed", EDGELAKE_PY])
 
 
 class InstallCommand(install):
     def run(self):
         # Run PyInstaller to create an executable
-        if not os.path.isfile(ANYLOG_PY):
-            raise ValueError(f"Failed to locate {ANYLOG_PY}")
+        if not os.path.isfile(EDGELAKE_PY):
+            raise ValueError(f"Failed to locate {EDGELAKE_PY}")
         exe_extension = '.exe' if sys.platform == 'win32' else ''
-        subprocess.run(["pyinstaller", "--onefile", f"--name=anylog_v{PKG_VERSION}{exe_extension}", ANYLOG_PY])
+        subprocess.run(["pyinstaller", "--onefile", f"--name=edgelake", EDGELAKE_PY])
 
         try:
             install.run(self)
         except Exception as error:
-            print(f"install.run fails (Error: {error}) | AnyLog Path: {ANYLOG_PY}")
+            print(f"install.run fails (Error: {error}) | AnyLog Path: {EDGELAKE_PY}")
 
 
-if IS_OPEN_SOURCE is True:
-    ext_modules = [Extension("anylog_node.anylog", [ANYLOG_PY])]
-else:
-    ext_modules = [Extension("anylog_node.anylog", [ANYLOG_PY]),
-                   Extension("anylog_enterprise.anylog", [ANYLOG_PY])]
+ext_modules = [Extension("edge_lake.edgelake", [EDGELAKE_PY])]
 
 try:
     setup(
@@ -75,9 +58,9 @@ try:
             'python-dateutil>=2.8.2',
             'cryptography>=3.4.8'
         ],
-        scripts=["anylog.py"],  # This assumes that your main script is anylog.py
+        scripts=["edgelake.py"],  # This assumes that your main script is edgelake.py
         cmdclass={"install": InstallCommand},
         ext_modules=cythonize(ext_modules)
     )
 except Exception as error:
-    print(f"setup fails (Error: {error}) | AnyLog Path: {ANYLOG_PY}")
+    print(f"setup fails (Error: {error}) | AnyLog Path: {EDGELAKE_PY}")
