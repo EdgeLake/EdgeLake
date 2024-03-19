@@ -174,7 +174,7 @@ def get_prompt():
         if name:
             prompt = "\rAL " + name + " > "
         else:
-            prompt = "\rAL > "
+            prompt = "\rEL > "
 
     if peer_nodes_:
         prompt += (peer_nodes_ + " >> ")

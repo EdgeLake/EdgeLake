@@ -403,7 +403,7 @@ def print_list(the_list: list):
         output(str(index).ljust(40) + " : " + entry, False)
         output("\r\n", False)
         index = index + 1
-    output('AL > ', False)
+    output('EL > ', False)
 
 
 # --------------------------------------------------------------------

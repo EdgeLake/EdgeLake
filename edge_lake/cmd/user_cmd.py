@@ -30,19 +30,19 @@ trace_level = 0
 file_path = __file__  # Path to this file
 
 # Get info from system variables
-# ANYLOG_LIB is a path to an EdgeLake directory that includes the source
-# ANYLOG_HOME is a path to an EdgeLake directory that includes the user files
+# EDGELAKE_LIB is a path to an EdgeLake directory that includes the source
+# EDGELAKE_HOME is a path to an EdgeLake directory that includes the user files
 if sys.platform.startswith('win'):
-    path_prefix = os.getenv("ANYLOG_LIB")  # system variable to the AnyLog Code
-    data_home = os.getenv("ANYLOG_HOME")  # system variable to the AnyLog Data
+    path_prefix = os.getenv("EDGELAKE_LIB")  # system variable to the AnyLog Code
+    data_home = os.getenv("EDGELAKE_HOME")  # system variable to the AnyLog Data
 else:
-    path_prefix = os.environ.get("ANYLOG_LIB")  # system variable to the AnyLog Code
-    data_home = os.environ.get("ANYLOG_HOME")  # system variable to the AnyLog Data
+    path_prefix = os.environ.get("EDGELAKE_LIB")  # system variable to the AnyLog Code
+    data_home = os.environ.get("EDGELAKE_HOME")  # system variable to the AnyLog Data
 
 if trace_level:
     print(f"\n\rfile_path   from __file__:    '{file_path}'")
-    print(f"\n\rpath_prefix from ANYLOG_LIB:  '{path_prefix}'")
-    print(f"\n\rdata_home   from ANYLOG_HOME: '{data_home}'")
+    print(f"\n\rpath_prefix from EDGELAKE_LIB:  '{path_prefix}'")
+    print(f"\n\rdata_home   from EDGELAKE_HOME: '{data_home}'")
 
 if path_prefix:
     # With system variables
@@ -70,7 +70,7 @@ else:
         path_prefix = path_prefix.replace('/', '\\')
 
 if not path_prefix:
-    print(f"\n\Path to 'EdgeLake' folder is not provided - define sys param: ANYLOG_HOME")
+    print(f"\n\Path to 'EdgeLake' folder is not provided - define sys param: EDGELAKE_HOME")
     exit(-1)
 else:
     index = path_prefix.rfind("EdgeLake")
@@ -80,7 +80,7 @@ if index > 0:
     if path_prefix[index - 1] == '/' or path_prefix[index - 1] == '\\':
         index -= 1  # Skeep second slash if available
 if index >= 0:
-    anylog_path = path_prefix[:index]
+    edgelake_path = path_prefix[:index]
 
 api_dir = os.path.expanduser(os.path.expandvars(path_prefix + 'api'))
 generic_dir = os.path.expanduser(os.path.expandvars(path_prefix + 'generic'))
@@ -94,7 +94,7 @@ members_dir = os.path.expanduser(os.path.expandvars(path_prefix + 'members'))
 
 if sys.platform.startswith('win'):
     # Location for windows specific libraries if needed
-    sys.path.insert(0, anylog_path + "/EdgeLake/packages/windows")
+    sys.path.insert(0, edgelake_path + "/EdgeLake/packages/windows")
 
 import edge_lake.cmd.member_cmd as member_cmd
 import edge_lake.generic.utils_print as utils_print

@@ -125,7 +125,7 @@ def set_directory_locations(home_path):
     home_path = os.path.expanduser(os.path.expandvars(home_path))
     network_path = home_path + path_separator + "EdgeLake" + path_separator
 
-    add_param("anylog_path", home_path)  # Path to EdgeLake
+    add_param("edgelake_path", home_path)  # Path to EdgeLake
 
     add_param("blockchain_sql", "%sblockchain%sblockchain.sql" % (network_path, path_separator))  # Blockchain file
     add_param("blockchain_file", "%sblockchain%sblockchain.json" % (network_path, path_separator))  # Blockchain file

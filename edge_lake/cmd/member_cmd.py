@@ -15745,7 +15745,7 @@ def get_git_version(status, io_buff_in, cmd_words, trace):
 
     if not ret_val:
         if words_count == 3:
-            directory = params.get_value_if_available("!anylog_path")
+            directory = params.get_value_if_available("!edgelake_path")
         elif words_count == 4:
             directory = params.get_value_if_available(cmd_words[3])
         else:
