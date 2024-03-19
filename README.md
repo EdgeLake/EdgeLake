@@ -1,7 +1,8 @@
 ![AnyLog Logo](other/anylog_logo.png)
-# AnyLog Service for  OpenHorizon
 
-AnyLog is a decentralized network to manage IoT data. Nodes in the network are compute instances that execute the AnyLog 
+# EdgeLake: Empowering Data Management with AnyLog Open-Source
+
+EdgeLage (by AnyLog) is a decentralized network to manage IoT data. Nodes in the network are compute instances that execute the AnyLog 
 Software. Joining a network requires the following steps:
 1. Install the AnyLog Software on computer instance
 2. Configure a node such that it can join an exiting network (or create a new network).
