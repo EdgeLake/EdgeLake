@@ -127,6 +127,9 @@ class Ethereum(gateway.BlockchainNode):
     An Object containing the connection info to Ethereum
     '''
 
+    def set_public_key(self, public_key):
+        self.public_key = Web3.to_checksum_address((public_key))
+
     # -------------------------------------------------------------
     # Connect to platform
     # -------------------------------------------------------------
@@ -183,7 +186,7 @@ class Ethereum(gateway.BlockchainNode):
     # -------------------------------------------------------------
     def set_contract_address(self, status):
         try:
-            self.contract_address = self.connection.toChecksumAddress(self.contract) # Returns the given address with an EIP55 checksum.
+            self.contract_address = self.connection.to_checksum_address((self.contract)) # Returns the given address with an EIP55 checksum.
         except:
             errno, value = sys.exc_info()[:2]
             err_msg = "Ethereum failed to associate a contract ti an account - Error: %s" % str(value)
@@ -298,10 +301,11 @@ class Ethereum(gateway.BlockchainNode):
                     nonce = self.get_next_nonce(self.public_key)
 
 
-                    transaction = contract_instance.functions.insert(policy_id, policy).buildTransaction(
+                    transaction = contract_instance.functions.insert(policy_id, policy).build_transaction(
                         {
                             # 'gas': self.gas_write,     # 3172000
-                            'chainId': 5,           # Goerli chain ID - need to externalize
+                            #'chainId': 5,           # Goerli chain ID - need to externalize
+                            'chainId':11155111,        # SEPOLIA
                             # 'gasPrice': self.w3.toWei('1000000', 'wei'),
                             'nonce': nonce,
                         }
@@ -353,11 +357,12 @@ class Ethereum(gateway.BlockchainNode):
                     # Builds a transaction dictionary based on the contract function call specified.
                     # Info at https://web3py.readthedocs.io/en/stable/contracts.html?highlight=buildTransaction#web3.contract.ContractFunction.build_transaction
                     # Details at https://web3js.readthedocs.io/en/v1.2.0/web3-eth.html?highlight=transaction#id62
-                    transaction = contract_instance.functions.get().buildTransaction(
+                    transaction = contract_instance.functions.get().build_transaction(
                         {
 
                             # 'gas': self.gas_read,     # 3000000
-                            'chainId': 5,       # Goerli chain ID - need to externalize
+                            #'chainId': 5,       # Goerli chain ID - need to externalize
+                            'chainId': 11155111,  # SEPOLIA
                             # 'gasPrice': self.w3.toWei('1000000', 'wei'),
                             'nonce': nonce,
                         }
@@ -369,10 +374,10 @@ class Ethereum(gateway.BlockchainNode):
                     tx_receipt = self.wait_for_tx_receipt(tx_hash)
 
                     if is_data:
-                        logs = contract_instance.events.get_data_event().processReceipt(tx_receipt)
+                        logs = contract_instance.events.get_data_event().process_receipt(tx_receipt)
                         key = "data"
                     else:
-                        logs = contract_instance.events.get_key_event().processReceipt(tx_receipt)
+                        logs = contract_instance.events.get_key_event().process_receipt(tx_receipt)
                         key = "keys"
                 except:
                     data = None
@@ -410,7 +415,7 @@ class Ethereum(gateway.BlockchainNode):
                 # Builds a transaction dictionary based on the contract function call specified.
                 # Info at https://web3py.readthedocs.io/en/stable/contracts.html?highlight=buildTransaction#web3.contract.ContractFunction.build_transaction
                 # Details at https://web3js.readthedocs.io/en/v1.2.0/web3-eth.html?highlight=transaction#id62
-                transaction = tx_hash.constructor().buildTransaction()              # method to prepare contract transaction
+                transaction = tx_hash.constructor().build_transaction()              # method to prepare contract transaction
                 nonce = self.get_next_nonce(public_key)
                 transaction['nonce'] =nonce  # Get correct transaction nonce for sender from the node
                 signed_tx = self.sign_tx(transaction)
@@ -476,6 +481,6 @@ class Ethereum(gateway.BlockchainNode):
             self.nonce_values[key] += 1     # set on next
             nonce = self.nonce_values[key]
         else:
-            nonce = self.connection.eth.getTransactionCount(key)
+            nonce = self.connection.eth.get_transaction_count(key)
             self.nonce_values[key] = nonce
         return nonce
