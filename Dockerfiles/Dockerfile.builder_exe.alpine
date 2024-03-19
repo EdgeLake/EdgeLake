@@ -1,0 +1,19 @@
+FROM python:3.9-alpine as base
+
+# declare params
+WORKDIR /app/
+COPY . AnyLog-Network
+RUN rm -rf AnyLog-Network/anylog_enterprise
+
+RUN apk update && apk upgrade && \
+    apk add --no-cache bash git openssh-client gcc python3-dev build-base libffi-dev musl-dev && \
+    python3 -m pip install --upgrade pip wheel pyinstaller && \
+    python3 -m pip install --upgrade -r /app/AnyLog-Network/dockerfiles/requirements.txt && \
+    apk del build-base libffi-dev && \
+    # open source
+#    python3 /app/AnyLog-Network/setup_exe.py install --open-source
+    # closed source
+     python3 /app/AnyLog-Network/setup_exe.py install
+
+FROM base AS deployment
+ENTRYPOINT ["/bin/bash"]

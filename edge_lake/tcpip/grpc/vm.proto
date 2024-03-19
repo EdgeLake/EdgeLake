@@ -1,0 +1,20 @@
+
+syntax = "proto3";
+
+package clihandler;
+
+option go_package="github.com/kubearmor-client/vm/clihandler";
+
+message CliRequest {
+    string KvmName = 1;
+}
+
+message ResponseStatus {
+    string ScriptData = 1;
+    string StatusMsg = 2;
+    int32 Status = 3;
+}
+
+service HandleCli {
+    rpc HandleCliRequest (CliRequest) returns (ResponseStatus);
+}

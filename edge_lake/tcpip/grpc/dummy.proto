@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package mygrpc;
+
+service SerializeService {
+  rpc GetSampleData (Empty) returns (SampleDataResponse);
+}
+
+message Empty {}
+
+message SampleDataResponse {
+  repeated string serialized_data = 1;
+}
