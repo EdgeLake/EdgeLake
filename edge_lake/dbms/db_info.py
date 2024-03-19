@@ -11,24 +11,24 @@ such non-permitted act to AnyLog, Inc.
 '''
 
 
-# generic_dir = os.path.expanduser(os.path.expandvars('$HOME/AnyLog-Network/source/generic'))
+# generic_dir = os.path.expanduser(os.path.expandvars('$HOME/EdgeLake/source/generic'))
 # sys.path.insert(0, generic_dir)
 
-import anylog_node.dbms.cursor_info as cursor_info
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_io as utils_io
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.utils_columns as utils_columns
-import anylog_node.generic.utils_sql as utils_sql
-import anylog_node.dbms.partitions as partitions
-import anylog_node.dbms.unify_results as unify_results
-import anylog_node.generic.params as params
-from anylog_node.generic.process_log import add
-from anylog_node.dbms.sqlite_dbms import get_dbms_connect_info
-from anylog_node.generic.utils_data import get_string_hash
-from anylog_node.dbms.dbms import connect_dbms, is_blobs_dbms
-from anylog_node.generic.stats import operator_update_inserts
+import edge_lake.dbms.cursor_info as cursor_info
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_io as utils_io
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.utils_columns as utils_columns
+import edge_lake.generic.utils_sql as utils_sql
+import edge_lake.dbms.partitions as partitions
+import edge_lake.dbms.unify_results as unify_results
+import edge_lake.generic.params as params
+from edge_lake.generic.process_log import add
+from edge_lake.dbms.sqlite_dbms import get_dbms_connect_info
+from edge_lake.generic.utils_data import get_string_hash
+from edge_lake.dbms.dbms import connect_dbms, is_blobs_dbms
+from edge_lake.generic.stats import operator_update_inserts
 
 
 active_dbms = {}  # DBMS info as f(dbms name)

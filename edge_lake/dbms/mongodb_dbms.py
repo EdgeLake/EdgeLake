@@ -14,9 +14,9 @@ else:
     mongo_installed = True
 
 import sys
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_io as utils_io
-import anylog_node.generic.utils_print as utils_print
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_io as utils_io
+import edge_lake.generic.utils_print as utils_print
 
 
 # ---------------------------------------------------------------

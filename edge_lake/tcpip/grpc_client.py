@@ -46,14 +46,14 @@ else:
             google_protobuff_installed_ = True
 
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.process_log as process_log
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.params as params
-from anylog_node.generic.interpreter import get_value_dict
-from anylog_node.generic.streaming_data import add_data
-from anylog_node.tcpip.mqtt_client import process_policy
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.process_log as process_log
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.params as params
+from edge_lake.generic.interpreter import get_value_dict
+from edge_lake.generic.streaming_data import add_data
+from edge_lake.tcpip.mqtt_client import process_policy
 
 connect_list_ = {}                  # The list of connections, key is ip and port, values include: exit_event, policy_id, mapping_policy, policy_type, policy_name
 conn_list_attr_ = [

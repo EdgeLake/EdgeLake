@@ -30,8 +30,8 @@ trace_level = 0
 file_path = __file__  # Path to this file
 
 # Get info from system variables
-# ANYLOG_LIB is a path to an AnyLog-Network directory that includes the source
-# ANYLOG_HOME is a path to an AnyLog-Network directory that includes the user files
+# ANYLOG_LIB is a path to an EdgeLake directory that includes the source
+# ANYLOG_HOME is a path to an EdgeLake directory that includes the user files
 if sys.platform.startswith('win'):
     path_prefix = os.getenv("ANYLOG_LIB")  # system variable to the AnyLog Code
     data_home = os.getenv("ANYLOG_HOME")  # system variable to the AnyLog Data
@@ -48,13 +48,13 @@ if path_prefix:
     # With system variables
     if path_prefix[-1] != '/' and path_prefix[-1] != '\\':
         path_prefix += '/'
-    path_prefix += "AnyLog-Network/anylog_node/"
+    path_prefix += "EdgeLake/edge_lake/"
     if sys.platform.startswith('win'):
         path_prefix = path_prefix.replace('/', '\\')
 else:
     # No system variables
-    # Try to find the AnyLog-Network directory in the path to this file
-    if file_path.rfind("AnyLog-Network") == -1:
+    # Try to find the EdgeLake directory in the path to this file
+    if file_path.rfind("EdgeLake") == -1:
         # this is not a complete path - add current path
         current_path = os.getcwd()
         if current_path[-1] != '/' and current_path[-1] != '\\' and file_path[0] != '/' and file_path[0] != '\\':
@@ -62,7 +62,7 @@ else:
         else:
             file_path = current_path + file_path
 
-    index = file_path.rfind("anylog_node")
+    index = file_path.rfind("edge_lake")
     if index >= 0:
         path_prefix = file_path[:index + 7]
 
@@ -70,10 +70,10 @@ else:
         path_prefix = path_prefix.replace('/', '\\')
 
 if not path_prefix:
-    print(f"\n\Path to 'AnyLog-Network' folder is not provided - define sys param: ANYLOG_HOME")
+    print(f"\n\Path to 'EdgeLake' folder is not provided - define sys param: ANYLOG_HOME")
     exit(-1)
 else:
-    index = path_prefix.rfind("AnyLog-Network")
+    index = path_prefix.rfind("EdgeLake")
 if index > 0:
     index -= 1  # Skip last slash
 if index > 0:
@@ -94,17 +94,17 @@ members_dir = os.path.expanduser(os.path.expandvars(path_prefix + 'members'))
 
 if sys.platform.startswith('win'):
     # Location for windows specific libraries if needed
-    sys.path.insert(0, anylog_path + "/AnyLog-Network/packages/windows")
+    sys.path.insert(0, anylog_path + "/EdgeLake/packages/windows")
 
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.utils_threads as utils_threads
-import anylog_node.generic.params as params
-import anylog_node.generic.process_status as process_status
-import anylog_node.job.job_scheduler as job_scheduler
-import anylog_node.generic.input_kbrd as input_kbrd
-from anylog_node.generic.utils_columns import utc_delta
-from anylog_node.generic.node_info import is_with_cli, get_license_message
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.utils_threads as utils_threads
+import edge_lake.generic.params as params
+import edge_lake.generic.process_status as process_status
+import edge_lake.job.job_scheduler as job_scheduler
+import edge_lake.generic.input_kbrd as input_kbrd
+from edge_lake.generic.utils_columns import utc_delta
+from edge_lake.generic.node_info import is_with_cli, get_license_message
 
 
 try:
@@ -126,7 +126,7 @@ class UserInput:
             data_dir = data_home
         else:
             data_dir = os.getcwd()
-            index = data_dir.rfind("AnyLog-Network")
+            index = data_dir.rfind("EdgeLake")
             if index != -1:
                 if index == 0:
                     data_dir = '.'

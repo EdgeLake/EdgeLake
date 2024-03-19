@@ -10,8 +10,8 @@ to be broadly interpreted) you or your such affiliates shall unconditionally ass
 such non-permitted act to AnyLog, Inc.
 '''
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.version as version
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.version as version
 
 # Error codes are in process_status.py:
 

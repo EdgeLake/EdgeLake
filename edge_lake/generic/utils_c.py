@@ -22,7 +22,7 @@ import ctypes.util
 # ----------------------------------------------------------------
 def load_lib(lib_name):
     try:
-        lib_dir = os.path.expanduser(os.path.expandvars('$HOME/AnyLog-Network/source/generic/c_code'))
+        lib_dir = os.path.expanduser(os.path.expandvars('$HOME/EdgeLake/source/generic/c_code'))
         c_lib = ctypes.CDLL(lib_dir + "/" + lib_name)  # load a c code that does the user input
 
     except OSError as e:

@@ -11,24 +11,24 @@ such non-permitted act to AnyLog, Inc.
 '''
 import copy
 
-import anylog_node.tcpip.message_header as message_header
-import anylog_node.generic.utils_print as utils_print
+import edge_lake.tcpip.message_header as message_header
+import edge_lake.generic.utils_print as utils_print
 import time
 import threading
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.process_log as process_log
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.generic.utils_threads as utils_threads
-import anylog_node.job.job_handle as job_handle
-import anylog_node.job.job_scheduler as job_scheduler
-import anylog_node.job.job_member as job_member
-import anylog_node.dbms.db_info as db_info
-import anylog_node.generic.al_parser as al_parser
-import anylog_node.generic.params as params
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.process_log as process_log
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.utils_threads as utils_threads
+import edge_lake.job.job_handle as job_handle
+import edge_lake.job.job_scheduler as job_scheduler
+import edge_lake.job.job_member as job_member
+import edge_lake.dbms.db_info as db_info
+import edge_lake.generic.al_parser as al_parser
+import edge_lake.generic.params as params
 
-# from anylog_node.generic.utils_io import write_to_stream
+# from edge_lake.generic.utils_io import write_to_stream
 
 query_log_time = -1  # if the value is 0 or greater, log the queries that show execution time greater or equal to query_log_time
 

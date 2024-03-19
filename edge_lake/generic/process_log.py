@@ -12,8 +12,8 @@ such non-permitted act to AnyLog, Inc.
 import threading
 import time
 
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.utils_json as utils_json
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.utils_json as utils_json
 
 EVENTS = 0
 ERRORS = 1

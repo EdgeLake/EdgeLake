@@ -33,10 +33,10 @@ else:
     kubernetes_installed_ = True
 
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.process_log as process_log
-import anylog_node.generic.interpreter as interpreter
-import anylog_node.generic.utils_print as utils_print
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.process_log as process_log
+import edge_lake.generic.interpreter as interpreter
+import edge_lake.generic.utils_print as utils_print
 from enum import Enum
 
 

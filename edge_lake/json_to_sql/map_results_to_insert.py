@@ -9,8 +9,8 @@ creation of derivative, compilation, decompilation, tampering or modification of
 to be broadly interpreted) you or your such affiliates shall unconditionally assign and transfer any intellectual property created by any
 such non-permitted act to AnyLog, Inc.
 '''
-import anylog_node.generic.process_status as process_status
-from anylog_node.json_to_sql.map_json_to_insert import map_columns
+import edge_lake.generic.process_status as process_status
+from edge_lake.json_to_sql.map_json_to_insert import map_columns
 
 
 # ============================================================================

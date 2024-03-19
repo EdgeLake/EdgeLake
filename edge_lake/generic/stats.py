@@ -12,13 +12,13 @@ such non-permitted act to AnyLog, Inc.
 
 # Maintain statistics on different modules
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_columns as utils_columns
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.utils_data as utils_data
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_columns as utils_columns
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.utils_data as utils_data
 
-from anylog_node.generic.node_info import get_node_name
+from edge_lake.generic.node_info import get_node_name
 '''
 Commands Suppoerted
 

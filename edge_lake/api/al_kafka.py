@@ -17,12 +17,12 @@ such non-permitted act to AnyLog, Inc.
 # https://www.tutorialsbuddy.com/confluent-kafka-python-consumer-example
 
 import sys
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_threads as utils_threads
-import anylog_node.generic.interpreter as interpreter
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.tcpip.mqtt_client as mqtt_client
-import anylog_node.generic.process_log as process_log
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_threads as utils_threads
+import edge_lake.generic.interpreter as interpreter
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.tcpip.mqtt_client as mqtt_client
+import edge_lake.generic.process_log as process_log
 
 msg_counter_ = 0        # Number of messages received
 counter_by_topic_ = {}

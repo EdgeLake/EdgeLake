@@ -17,9 +17,9 @@ import operator
 from datetime import date, datetime, timedelta, timezone
 from dateutil import parser, tz
 
-import anylog_node.generic.process_log as process_log
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_data as utils_data
+import edge_lake.generic.process_log as process_log
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_data as utils_data
 
 
 cast_to_type_ = {        # Map casting name to data type

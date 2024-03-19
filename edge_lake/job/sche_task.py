@@ -11,8 +11,8 @@ such non-permitted act to AnyLog, Inc.
 '''
 
 import time
-from anylog_node.generic.utils_data import seconds_to_hms
-from anylog_node.generic.utils_columns import get_current_utc_time, _utc_to_local
+from edge_lake.generic.utils_data import seconds_to_hms
+from edge_lake.generic.utils_columns import get_current_utc_time, _utc_to_local
 
 # =======================================================================================================================
 # Maintain info on scheduled tasks

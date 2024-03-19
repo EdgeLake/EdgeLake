@@ -1,6 +1,6 @@
 import subprocess
 
-import anylog_node.generic.process_status as process_status
+import edge_lake.generic.process_status as process_status
 
 def get_data(status):
 

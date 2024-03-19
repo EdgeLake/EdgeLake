@@ -14,8 +14,8 @@ such non-permitted act to AnyLog, Inc.
 import threading
 import time
 
-import anylog_node.job.job_instance as job_instance
-import anylog_node.job.job_handle as job_handle
+import edge_lake.job.job_instance as job_instance
+import edge_lake.job.job_handle as job_handle
 
 
 JOB_INSTANCES = 100  # non-scheduled (run once) jobs

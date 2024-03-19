@@ -25,11 +25,11 @@ set alert where dbms = dmci and table = sensor_table and min < 10
 set alert where dbms = dmci and table = sensor_table and avg > 100
 '''
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.interpreter as interpreter
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.generic.utils_print as utils_print
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.interpreter as interpreter
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.utils_print as utils_print
 
 # dbms --> table --> Intervals List (Interval ID, Min, Max, Sum, Count)
 #                --> Time       # Start time

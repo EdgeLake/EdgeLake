@@ -12,10 +12,10 @@ such non-permitted act to AnyLog, Inc.
 import pprint
 import threading
 import time
-import anylog_node.generic.params as params
+import edge_lake.generic.params as params
 import sys
-from anylog_node.generic.utils_json import str_to_json, str_to_list
-from anylog_node.generic.node_info import get_prompt as get_prompt
+from edge_lake.generic.utils_json import str_to_json, str_to_list
+from edge_lake.generic.node_info import get_prompt as get_prompt
 
 try:
     if sys.platform.startswith('win'):

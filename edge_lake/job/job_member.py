@@ -9,8 +9,8 @@ creation of derivative, compilation, decompilation, tampering or modification of
 to be broadly interpreted) you or your such affiliates shall unconditionally assign and transfer any intellectual property created by any
 such non-permitted act to AnyLog, Inc.
 '''
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.version as version
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.version as version
 
 # =======================================================================================================================
 # Maintains the data and information on a node that participates in the query

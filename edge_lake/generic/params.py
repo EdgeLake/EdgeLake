@@ -14,13 +14,13 @@ import sys
 import threading
 import re
 
-import anylog_node.tcpip.tcpip_server as tcpip_server
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_columns as utils_columns
-import anylog_node.cmd.member_cmd as member_cmd
+import edge_lake.tcpip.tcpip_server as tcpip_server
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_columns as utils_columns
+import edge_lake.cmd.member_cmd as member_cmd
 
 # List of chars that terminate a key
 end_key_chars = {
@@ -123,9 +123,9 @@ def set_directory_locations(home_path):
     if home_path[-1] == '\\' or  home_path[-1] == '/':
         home_path = home_path[:-1]
     home_path = os.path.expanduser(os.path.expandvars(home_path))
-    network_path = home_path + path_separator + "AnyLog-Network" + path_separator
+    network_path = home_path + path_separator + "EdgeLake" + path_separator
 
-    add_param("anylog_path", home_path)  # Path to AnyLog-Network
+    add_param("anylog_path", home_path)  # Path to EdgeLake
 
     add_param("blockchain_sql", "%sblockchain%sblockchain.sql" % (network_path, path_separator))  # Blockchain file
     add_param("blockchain_file", "%sblockchain%sblockchain.json" % (network_path, path_separator))  # Blockchain file

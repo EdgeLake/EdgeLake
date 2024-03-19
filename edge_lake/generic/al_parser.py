@@ -9,12 +9,12 @@ creation of derivative, compilation, decompilation, tampering or modification of
 to be broadly interpreted) you or your such affiliates shall unconditionally assign and transfer any intellectual property created by any
 such non-permitted act to AnyLog, Inc.
 '''
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.generic.utils_sql as utils_sql
-import anylog_node.generic.utils_columns as utils_columns
-import anylog_node.job.leading_query as leading_query
-import anylog_node.generic.process_log as process_log
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.utils_sql as utils_sql
+import edge_lake.generic.utils_columns as utils_columns
+import edge_lake.job.leading_query as leading_query
+import edge_lake.generic.process_log as process_log
 
 
 # -----------------------------------------------------------

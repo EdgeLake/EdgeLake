@@ -17,14 +17,14 @@ such non-permitted act to AnyLog, Inc.
 import traceback
 import threading
 
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.generic.process_log as process_log
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.al_parser as al_parser
-import anylog_node.job.job_handle as job_handle
-import anylog_node.job.task_scheduler as task_scheduler
-from anylog_node.job.job_instance import JobInfo
-import anylog_node.generic.params as params
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.generic.process_log as process_log
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.al_parser as al_parser
+import edge_lake.job.job_handle as job_handle
+import edge_lake.job.task_scheduler as task_scheduler
+from edge_lake.job.job_instance import JobInfo
+import edge_lake.generic.params as params
 
 with_traceback_ = False
 traceback_text_ = ""

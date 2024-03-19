@@ -17,8 +17,8 @@ such non-permitted act to AnyLog, Inc.
 
 from abc import ABC, abstractmethod
 
-import anylog_node.generic.interpreter as interpreter
-import anylog_node.generic.process_status as process_status
+import edge_lake.generic.interpreter as interpreter
+import edge_lake.generic.process_status as process_status
 
 class BlockchainNode(ABC):
     def __init__(self, provider):

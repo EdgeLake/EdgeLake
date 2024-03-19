@@ -18,14 +18,14 @@ import ipaddress
 from time import sleep
 import traceback  # Enable for stacktrace
 
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.process_status as process_status
-import anylog_node.tcpip.message_header as message_header
-import anylog_node.generic.process_log as process_log
-import anylog_node.generic.params  as params
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.generic.interpreter as interpreter
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.process_status as process_status
+import edge_lake.tcpip.message_header as message_header
+import edge_lake.generic.process_log as process_log
+import edge_lake.generic.params  as params
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.generic.interpreter as interpreter
 
 active_connections_ = [
     #           External            Local    bind address

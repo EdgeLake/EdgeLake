@@ -10,17 +10,17 @@ to be broadly interpreted) you or your such affiliates shall unconditionally ass
 such non-permitted act to AnyLog, Inc.
 '''
 
-import anylog_node.generic.params as params
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.process_log as process_log
-import anylog_node.generic.interpreter as interpreter
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.generic.utils_io as utils_io
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_columns as utils_columns
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.dbms.db_info as db_info
+import edge_lake.generic.params as params
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.process_log as process_log
+import edge_lake.generic.interpreter as interpreter
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.generic.utils_io as utils_io
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_columns as utils_columns
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.dbms.db_info as db_info
 
 # ------------------------------------------------------------------------------------
 # Archive Documents, videos, etc

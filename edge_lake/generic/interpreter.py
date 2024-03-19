@@ -9,11 +9,11 @@ creation of derivative, compilation, decompilation, tampering or modification of
 to be broadly interpreted) you or your such affiliates shall unconditionally assign and transfer any intellectual property created by any
 such non-permitted act to AnyLog, Inc.
 '''
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.generic.params as params
-import anylog_node.generic.process_status as process_status
-from anylog_node.generic.utils_columns import input_to_date
-from anylog_node.generic.utils_io import test_dir_exists_and_writeable
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.params as params
+import edge_lake.generic.process_status as process_status
+from edge_lake.generic.utils_columns import input_to_date
+from edge_lake.generic.utils_io import test_dir_exists_and_writeable
 
 # =======================================================================================================================
 # Interprets AnyLog commands

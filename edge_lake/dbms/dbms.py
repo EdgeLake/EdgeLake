@@ -9,13 +9,13 @@ creation of derivative, compilation, decompilation, tampering or modification of
 to be broadly interpreted) you or your such affiliates shall unconditionally assign and transfer any intellectual property created by any
 such non-permitted act to AnyLog, Inc.
 '''
-from anylog_node.dbms.psql_dbms import PSQL
-from anylog_node.dbms.pi_dbms import PIDB
-from anylog_node.dbms.sqlite_dbms import SQLITE
-from anylog_node.dbms.oledb_dbms import OLEDB
-from anylog_node.dbms.mongodb_dbms import MONGODB
+from edge_lake.dbms.psql_dbms import PSQL
+from edge_lake.dbms.pi_dbms import PIDB
+from edge_lake.dbms.sqlite_dbms import SQLITE
+from edge_lake.dbms.oledb_dbms import OLEDB
+from edge_lake.dbms.mongodb_dbms import MONGODB
 
-import anylog_node.generic.process_status as process_status
+import edge_lake.generic.process_status as process_status
 
 supported_databases_ = {
                         # Data type, name extention

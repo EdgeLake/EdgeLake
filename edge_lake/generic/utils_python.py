@@ -11,8 +11,8 @@ such non-permitted act to AnyLog, Inc.
 '''
 import sys
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.params as params
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.params as params
 import datetime  # may be needed to user calls
 
 

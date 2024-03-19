@@ -10,12 +10,12 @@ to be broadly interpreted) you or your such affiliates shall unconditionally ass
 such non-permitted act to AnyLog, Inc.
 '''
 
-import anylog_node.dbms.db_info as db_info
-import anylog_node.tcpip.http_client as http_client
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_sql as utils_sql
-import anylog_node.generic.utils_print as utils_print
+import edge_lake.dbms.db_info as db_info
+import edge_lake.tcpip.http_client as http_client
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_sql as utils_sql
+import edge_lake.generic.utils_print as utils_print
 
 
 class OLEDB:

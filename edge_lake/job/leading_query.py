@@ -9,7 +9,7 @@ creation of derivative, compilation, decompilation, tampering or modification of
 to be broadly interpreted) you or your such affiliates shall unconditionally assign and transfer any intellectual property created by any
 such non-permitted act to AnyLog, Inc.
 '''
-import anylog_node.generic.utils_columns as utils_columns
+import edge_lake.generic.utils_columns as utils_columns
 
 
 class LeadingQuery():

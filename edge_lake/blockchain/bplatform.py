@@ -1,11 +1,11 @@
 # import hashlib
-import anylog_node.blockchain.ethereum as ethereum
-import anylog_node.blockchain.hyperledger as hyperledger
+import edge_lake.blockchain.ethereum as ethereum
+import edge_lake.blockchain.hyperledger as hyperledger
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.interpreter as interpreter
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.interpreter as interpreter
 
 bconnect_ = {}      # Connection info to the blockchain platforms
 

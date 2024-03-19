@@ -12,13 +12,13 @@ such non-permitted act to AnyLog, Inc.
 import time
 from datetime import datetime, timedelta
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.params as params
-import anylog_node.generic.process_log as process_log
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.job.sche_task as sche_task
-from anylog_node.generic.utils_print import output_nested_lists
-from anylog_node.generic.utils_columns import get_current_utc_time
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.params as params
+import edge_lake.generic.process_log as process_log
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.job.sche_task as sche_task
+from edge_lake.generic.utils_print import output_nested_lists
+from edge_lake.generic.utils_columns import get_current_utc_time
 
 scheduled_tasks = []        # a 2 dimensional array holding scheduled tasks as a [scheduler id][task whaeas entry 0 is not used]
 

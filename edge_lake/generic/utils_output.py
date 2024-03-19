@@ -17,13 +17,13 @@ import threading
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-import anylog_node.generic.params as params
-import anylog_node.generic.utils_io as utils_io
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.interpreter as interpreter
-from anylog_node.generic.node_info import get_node_name
+import edge_lake.generic.params as params
+import edge_lake.generic.utils_io as utils_io
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.interpreter as interpreter
+from edge_lake.generic.node_info import get_node_name
 
 
 smtp_client_ = None     # Client object

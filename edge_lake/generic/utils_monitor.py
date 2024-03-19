@@ -27,17 +27,17 @@ except:
 else:
     psutil_installed = True
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.generic.params as params
-import anylog_node.generic.utils_columns as utils_columns
-import anylog_node.generic.streaming_data as streaming_data
-import anylog_node.blockchain.metadata as metadata
-from anylog_node.generic.input_kbrd import get_enter_counter
-import anylog_node.cmd.member_cmd as member_cmd
-from anylog_node.members.aloperator import output_info, output_summary
-from anylog_node.generic.node_info import get_node_name, test_import
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.params as params
+import edge_lake.generic.utils_columns as utils_columns
+import edge_lake.generic.streaming_data as streaming_data
+import edge_lake.blockchain.metadata as metadata
+from edge_lake.generic.input_kbrd import get_enter_counter
+import edge_lake.cmd.member_cmd as member_cmd
+from edge_lake.members.aloperator import output_info, output_summary
+from edge_lake.generic.node_info import get_node_name, test_import
 
 continuous_status_ = False  # Set to true if continuous is running
 

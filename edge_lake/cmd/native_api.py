@@ -9,17 +9,17 @@ creation of derivative, compilation, decompilation, tampering or modification of
 to be broadly interpreted) you or your such affiliates shall unconditionally assign and transfer any intellectual property created by any
 such non-permitted act to AnyLog, Inc.
 '''
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.generic.params as params
-import anylog_node.generic.process_status as process_status
-import anylog_node.job.job_scheduler as  job_scheduler
-import anylog_node.dbms.cursor_info as cursor_info
-import anylog_node.dbms.db_info as db_info
-import anylog_node.generic.utils_io as utils_io
-import anylog_node.generic.utils_print as utils_print
-from anylog_node.generic.interpreter import get_multiple_values
-from anylog_node.generic.utils_json import str_to_json, to_string
-from anylog_node.generic.utils_columns import change_columns_values
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.generic.params as params
+import edge_lake.generic.process_status as process_status
+import edge_lake.job.job_scheduler as  job_scheduler
+import edge_lake.dbms.cursor_info as cursor_info
+import edge_lake.dbms.db_info as db_info
+import edge_lake.generic.utils_io as utils_io
+import edge_lake.generic.utils_print as utils_print
+from edge_lake.generic.interpreter import get_multiple_values
+from edge_lake.generic.utils_json import str_to_json, to_string
+from edge_lake.generic.utils_columns import change_columns_values
 
 # ------------------------------------------------------------------------
 # Call sql statement

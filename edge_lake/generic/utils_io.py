@@ -18,14 +18,14 @@ import gzip
 from os import walk
 import base64
 
-import anylog_node.generic.process_log as process_log
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_threads as utils_threads
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.params as params
+import edge_lake.generic.process_log as process_log
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_threads as utils_threads
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.params as params
 
-from anylog_node.generic.utils_columns import seconds_to_date, get_current_utc_time
-from anylog_node.generic.utils_json import str_to_json
+from edge_lake.generic.utils_columns import seconds_to_date, get_current_utc_time
+from edge_lake.generic.utils_json import str_to_json
 
 
 last_time_stamp = 0  # value based on time providing unique string
@@ -906,7 +906,7 @@ def test_file_type(file_name: str, file_type:str):
 # Given a file_name with path return the table name (second segment in the name)
 #
 # Example:
-#    $HOME/AnyLog-Network/data/contractor/in/lsl_demo.ping.12345.json --> ping
+#    $HOME/EdgeLake/data/contractor/in/lsl_demo.ping.12345.json --> ping
 #
 # ==================================================================
 def get_table_name_from_file_name(file_name: str):

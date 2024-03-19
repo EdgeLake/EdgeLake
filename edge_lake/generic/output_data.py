@@ -24,17 +24,17 @@ such non-permitted act to AnyLog, Inc.
 
 # Add count and time statistics
 
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_io as utils_io
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.utils_sql as utils_sql
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.params as params
-from anylog_node.generic.interpreter import get_multiple_values, get_one_value
-from anylog_node.generic.utils_data import seconds_to_hms
-from anylog_node.generic.utils_columns import get_current_time
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.api.al_kafka as al_kafka
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_io as utils_io
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.utils_sql as utils_sql
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.params as params
+from edge_lake.generic.interpreter import get_multiple_values, get_one_value
+from edge_lake.generic.utils_data import seconds_to_hms
+from edge_lake.generic.utils_columns import get_current_time
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.api.al_kafka as al_kafka
 
 class OutputManager():
 

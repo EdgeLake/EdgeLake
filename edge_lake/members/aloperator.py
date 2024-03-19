@@ -9,24 +9,24 @@ creation of derivative, compilation, decompilation, tampering or modification of
 to be broadly interpreted) you or your such affiliates shall unconditionally assign and transfer any intellectual property created by any
 such non-permitted act to AnyLog, Inc.
 '''
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.process_log as process_log
-import anylog_node.generic.interpreter as interpreter
-import anylog_node.json_to_sql.map_json_to_insert as map_json_to_insert
-import anylog_node.generic.utils_io as utils_io
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.dbms.db_info as db_info
-import anylog_node.generic.utils_columns as utils_columns
-import anylog_node.tcpip.net_utils as net_utils
-import anylog_node.generic.utils_queue as utils_queue
-import anylog_node.generic.params as params
-import anylog_node.dbms.partitions as partitions
-import anylog_node.blockchain.metadata as metadata
-from anylog_node.generic.streaming_data import flush_buffered_data
-import anylog_node.dbms.create_table as create_table
-import anylog_node.generic.utils_threads as utils_threads
-import anylog_node.generic.stats as stats
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.process_log as process_log
+import edge_lake.generic.interpreter as interpreter
+import edge_lake.json_to_sql.map_json_to_insert as map_json_to_insert
+import edge_lake.generic.utils_io as utils_io
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.dbms.db_info as db_info
+import edge_lake.generic.utils_columns as utils_columns
+import edge_lake.tcpip.net_utils as net_utils
+import edge_lake.generic.utils_queue as utils_queue
+import edge_lake.generic.params as params
+import edge_lake.dbms.partitions as partitions
+import edge_lake.blockchain.metadata as metadata
+from edge_lake.generic.streaming_data import flush_buffered_data
+import edge_lake.dbms.create_table as create_table
+import edge_lake.generic.utils_threads as utils_threads
+import edge_lake.generic.stats as stats
 
 mem_view = None
 

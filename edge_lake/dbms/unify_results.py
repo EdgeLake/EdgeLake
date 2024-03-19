@@ -13,11 +13,11 @@ import os
 import sys
 # from email.errors import NonASCIILocalPartDefect
 
-import anylog_node.dbms.db_info as db_info
-import anylog_node.dbms.projection_entry as projection_entry
-import anylog_node.generic.utils_sql as utils_sql
-import anylog_node.generic.utils_columns as utils_columns
-import anylog_node.generic.utils_data as utils_data
+import edge_lake.dbms.db_info as db_info
+import edge_lake.dbms.projection_entry as projection_entry
+import edge_lake.generic.utils_sql as utils_sql
+import edge_lake.generic.utils_columns as utils_columns
+import edge_lake.generic.utils_data as utils_data
 
 
 # ==================================================================

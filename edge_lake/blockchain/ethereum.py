@@ -23,10 +23,10 @@ except:
 else:
     web3_installed = True
 
-import anylog_node.blockchain.gateway as gateway
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.process_log as process_log
-# import anylog_node.generic.interpreter as interpreter
+import edge_lake.blockchain.gateway as gateway
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.process_log as process_log
+# import edge_lake.generic.interpreter as interpreter
 
 # --------------------------------------------------------------------------------------
 #  Connect to Ethereum - using the provider connection URL,

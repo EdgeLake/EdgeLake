@@ -12,19 +12,19 @@ such non-permitted act to AnyLog, Inc.
 import requests
 from requests.exceptions import HTTPError
 
-import anylog_node.dbms.db_info as db_info
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.params as params
-import anylog_node.generic.al_parser as al_parser
-import anylog_node.generic.utils_sql as utils_sql
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.utils_columns as utils_columns
-import anylog_node.tcpip.message_header as message_header
-import anylog_node.tcpip.net_client as net_client
-import anylog_node.tcpip.http_client as http_client
+import edge_lake.dbms.db_info as db_info
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.params as params
+import edge_lake.generic.al_parser as al_parser
+import edge_lake.generic.utils_sql as utils_sql
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.utils_columns as utils_columns
+import edge_lake.tcpip.message_header as message_header
+import edge_lake.tcpip.net_client as net_client
+import edge_lake.tcpip.http_client as http_client
 
 PI_DEBUG = False
 

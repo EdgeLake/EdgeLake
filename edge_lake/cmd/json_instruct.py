@@ -12,9 +12,9 @@ such non-permitted act to AnyLog, Inc.
 
 # process instructions declared in a JSON format
 
-import anylog_node.generic.utils_python as utils_python
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.generic.params as params
+import edge_lake.generic.utils_python as utils_python
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.params as params
 
 compiled_code = {}
 

@@ -17,8 +17,8 @@ import sys
 import re
 
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_json as utils_json
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_json as utils_json
 
 
 # ==================================================================

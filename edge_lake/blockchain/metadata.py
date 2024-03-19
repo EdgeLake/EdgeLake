@@ -10,13 +10,13 @@ to be broadly interpreted) you or your such affiliates shall unconditionally ass
 such non-permitted act to AnyLog, Inc.
 '''
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.interpreter as interpreter
-import anylog_node.generic.utils_threads as utils_threads
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.blockchain.blockchain as blockchain
-import anylog_node.tcpip.net_utils as net_utils
-from anylog_node.generic.utils_columns import get_current_utc_time, get_current_time_in_sec, utc_to_timezone
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.interpreter as interpreter
+import edge_lake.generic.utils_threads as utils_threads
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.blockchain.blockchain as blockchain
+import edge_lake.tcpip.net_utils as net_utils
+from edge_lake.generic.utils_columns import get_current_utc_time, get_current_time_in_sec, utc_to_timezone
 
 # ----------------------------------------------------------
 # A metadata layer based on the blockchain data

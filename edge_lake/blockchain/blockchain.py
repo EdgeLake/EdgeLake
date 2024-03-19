@@ -14,18 +14,18 @@ import json
 import os
 import time
 
-import anylog_node.blockchain.bsync as bsync
+import edge_lake.blockchain.bsync as bsync
 
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_io as utils_io
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.tcpip.net_utils as net_utils
-import anylog_node.members.policies as policies
-import anylog_node.generic.params as params
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_io as utils_io
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.tcpip.net_utils as net_utils
+import edge_lake.members.policies as policies
+import edge_lake.generic.params as params
 
-from anylog_node.generic.utils_columns import compare
+from edge_lake.generic.utils_columns import compare
 
 main_ledger_ = []       # The ledger with updated policies
 

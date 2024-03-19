@@ -44,20 +44,20 @@ except:
 else:
     jwt_installed = True
 
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.interpreter as interpreter
-import anylog_node.generic.process_log as process_log
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.streaming_data as streaming_data
-import anylog_node.generic.utils_columns as utils_columns
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.generic.utils_threads as utils_threads
-from anylog_node.generic.params import get_value_if_available
-import anylog_node.tcpip.net_utils as net_utils
-import anylog_node.json_to_sql.mapping_policy as mapping_policy
-from anylog_node.generic.node_info import get_node_name
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.interpreter as interpreter
+import edge_lake.generic.process_log as process_log
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.streaming_data as streaming_data
+import edge_lake.generic.utils_columns as utils_columns
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.utils_threads as utils_threads
+from edge_lake.generic.params import get_value_if_available
+import edge_lake.tcpip.net_utils as net_utils
+import edge_lake.json_to_sql.mapping_policy as mapping_policy
+from edge_lake.generic.node_info import get_node_name
 
 if paho_installed == True:
     MQTT_ERR_AGAIN = mqtt.MQTT_ERR_AGAIN

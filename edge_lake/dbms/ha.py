@@ -10,13 +10,13 @@ to be broadly interpreted) you or your such affiliates shall unconditionally ass
 such non-permitted act to AnyLog, Inc.
 '''
 
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.dbms.db_info as db_info
-import anylog_node.blockchain.metadata as metadata
-import anylog_node.generic.process_status as process_status
-import anylog_node.tcpip.message_header as message_header
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.utils_io as utils_io
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.dbms.db_info as db_info
+import edge_lake.blockchain.metadata as metadata
+import edge_lake.generic.process_status as process_status
+import edge_lake.tcpip.message_header as message_header
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.utils_io as utils_io
 
 safe_tsd_ids_ = {}       # Keeps the safe ID (validated_id) from every node
 

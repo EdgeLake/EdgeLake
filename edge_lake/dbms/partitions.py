@@ -11,11 +11,11 @@ such non-permitted act to AnyLog, Inc.
 '''
 from calendar import monthrange
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.generic.utils_sql as utils_sql
-import anylog_node.generic.utils_columns as utils_columns
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.utils_sql as utils_sql
+import edge_lake.generic.utils_columns as utils_columns
 
 partition_struct = {}  # describes how data is partitioned
 

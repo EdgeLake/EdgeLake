@@ -12,17 +12,17 @@ such non-permitted act to AnyLog, Inc.
 import threading
 import time
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_io as utils_io
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.interpreter as interpreter
-import anylog_node.dbms.db_info as db_info
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.generic.streaming_conditions as streaming_conditions
-from anylog_node.json_to_sql.map_json_to_insert import buffered_json_to_sql
-from anylog_node.generic.process_log import add_and_print
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_io as utils_io
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.interpreter as interpreter
+import edge_lake.dbms.db_info as db_info
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.generic.streaming_conditions as streaming_conditions
+from edge_lake.json_to_sql.map_json_to_insert import buffered_json_to_sql
+from edge_lake.generic.process_log import add_and_print
 
 bufferd_data_ = {}  # A dictionary to maintain buffered data as a f(dbms + table + source + instruction + type)
 streaming_mutex = threading.Lock()  # global mutex to sync threads creating states

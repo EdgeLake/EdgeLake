@@ -14,13 +14,13 @@ import sys
 import configparser
 import importlib
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.tcpip.tcpip_server as tcpip_server
-import anylog_node.tcpip.net_utils as net_utils
+import edge_lake.generic.process_status as process_status
+import edge_lake.tcpip.tcpip_server as tcpip_server
+import edge_lake.tcpip.net_utils as net_utils
 
 try:
     CONFIG_FILE = os.path.expandvars(os.path.expanduser(os.path.join('$ANYLOG_HOME', 'setup.cfg')))
-    SOURCE_CONFIG_FILE = os.path.join(os.path.abspath(__file__).split("anylog_node")[0],  'setup.cfg')
+    SOURCE_CONFIG_FILE = os.path.join(os.path.abspath(__file__).split("edge_lake")[0],  'setup.cfg')
 except:
     CONFIG_FILE = None
     SOURCE_CONFIG_FILE = None

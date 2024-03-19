@@ -11,10 +11,10 @@ such non-permitted act to AnyLog, Inc.
 '''
 import datetime
 import decimal
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.generic.utils_columns as utils_columns
-import anylog_node.generic.utils_print as utils_print
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.utils_columns as utils_columns
+import edge_lake.generic.utils_print as utils_print
 
 
 trace_level_ = 0

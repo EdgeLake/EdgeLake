@@ -17,63 +17,63 @@ import subprocess
 import copy
 from difflib import SequenceMatcher
 
-import anylog_node.cmd.monitor as monitor
-import anylog_node.cmd.data_monitor as data_monitor
-import anylog_node.api.al_kafka as al_kafka
-import anylog_node.tcpip.http_client as http_client
-import anylog_node.tcpip.http_server as http_server
-import anylog_node.tcpip.tcpip_server as tcpip_server
-import anylog_node.tcpip.net_client as net_client
-import anylog_node.tcpip.net_utils as net_utils
-import anylog_node.tcpip.message_server as message_server
-import anylog_node.tcpip.message_header as message_header
-import anylog_node.tcpip.mqtt_client as mqtt_client
-import anylog_node.tcpip.grpc_client as grpc_client
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.utils_timer as utils_timer
-import anylog_node.generic.params as params
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_sql as utils_sql
-import anylog_node.generic.utils_output as utils_output
-import anylog_node.generic.utils_python as utils_python
-import anylog_node.generic.utils_monitor as utils_monitor
-import anylog_node.generic.utils_queue as utils_queue
-import anylog_node.generic.events as events
-import anylog_node.generic.interpreter as interpreter
-import anylog_node.generic.input_kbrd as input_kbrd
-import anylog_node.generic.utils_threads as utils_threads
-import anylog_node.generic.utils_columns as utils_columns
-import anylog_node.generic.streaming_data as streaming_data
-import anylog_node.generic.output_data as output_data
-import anylog_node.generic.streaming_conditions as streaming_conditions
-import anylog_node.job.job_scheduler as job_scheduler
-import anylog_node.job.job_instance as job_instance
-import anylog_node.job.task_scheduler as task_scheduler
-import anylog_node.dbms.ha as ha
-import anylog_node.dbms.cursor_info as cursor_info
-import anylog_node.dbms.db_info as db_info
-import anylog_node.dbms.pi_dbms as pi_dbms
-import anylog_node.dbms.unify_results as unify_results
-import anylog_node.dbms.partitions as partitions
-import anylog_node.blockchain.blockchain as blockchain
-import anylog_node.blockchain.bsync as bsync
-import anylog_node.blockchain.bplatform as bplatform
-import anylog_node.blockchain.metadata as metadata
-import anylog_node.json_to_sql.map_results_to_insert as map_results_to_insert
-import anylog_node.json_to_sql.map_json_to_insert as map_json_to_insert
-import anylog_node.members.aloperator as aloperator
-import anylog_node.members.alarchiver as alarchiver
-import anylog_node.members.policies as policies
-import anylog_node.cmd.json_instruct as json_instruct
-import anylog_node.generic.process_log as process_log
-import anylog_node.generic.stats as stats
-import anylog_node.generic.version as version
+import edge_lake.cmd.monitor as monitor
+import edge_lake.cmd.data_monitor as data_monitor
+import edge_lake.api.al_kafka as al_kafka
+import edge_lake.tcpip.http_client as http_client
+import edge_lake.tcpip.http_server as http_server
+import edge_lake.tcpip.tcpip_server as tcpip_server
+import edge_lake.tcpip.net_client as net_client
+import edge_lake.tcpip.net_utils as net_utils
+import edge_lake.tcpip.message_server as message_server
+import edge_lake.tcpip.message_header as message_header
+import edge_lake.tcpip.mqtt_client as mqtt_client
+import edge_lake.tcpip.grpc_client as grpc_client
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.utils_timer as utils_timer
+import edge_lake.generic.params as params
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_sql as utils_sql
+import edge_lake.generic.utils_output as utils_output
+import edge_lake.generic.utils_python as utils_python
+import edge_lake.generic.utils_monitor as utils_monitor
+import edge_lake.generic.utils_queue as utils_queue
+import edge_lake.generic.events as events
+import edge_lake.generic.interpreter as interpreter
+import edge_lake.generic.input_kbrd as input_kbrd
+import edge_lake.generic.utils_threads as utils_threads
+import edge_lake.generic.utils_columns as utils_columns
+import edge_lake.generic.streaming_data as streaming_data
+import edge_lake.generic.output_data as output_data
+import edge_lake.generic.streaming_conditions as streaming_conditions
+import edge_lake.job.job_scheduler as job_scheduler
+import edge_lake.job.job_instance as job_instance
+import edge_lake.job.task_scheduler as task_scheduler
+import edge_lake.dbms.ha as ha
+import edge_lake.dbms.cursor_info as cursor_info
+import edge_lake.dbms.db_info as db_info
+import edge_lake.dbms.pi_dbms as pi_dbms
+import edge_lake.dbms.unify_results as unify_results
+import edge_lake.dbms.partitions as partitions
+import edge_lake.blockchain.blockchain as blockchain
+import edge_lake.blockchain.bsync as bsync
+import edge_lake.blockchain.bplatform as bplatform
+import edge_lake.blockchain.metadata as metadata
+import edge_lake.json_to_sql.map_results_to_insert as map_results_to_insert
+import edge_lake.json_to_sql.map_json_to_insert as map_json_to_insert
+import edge_lake.members.aloperator as aloperator
+import edge_lake.members.alarchiver as alarchiver
+import edge_lake.members.policies as policies
+import edge_lake.cmd.json_instruct as json_instruct
+import edge_lake.generic.process_log as process_log
+import edge_lake.generic.stats as stats
+import edge_lake.generic.version as version
 
-from anylog_node.json_to_sql.mapping_policy import set_mapping_trace
-from anylog_node.json_to_sql.suggest_create_table import *
-from anylog_node.dbms.dbms import connect_dbms, get_real_dbms_name
-import anylog_node.generic.node_info as node_info
-import anylog_node.tcpip.port_forwarding as port_forwarding
+from edge_lake.json_to_sql.mapping_policy import set_mapping_trace
+from edge_lake.json_to_sql.suggest_create_table import *
+from edge_lake.dbms.dbms import connect_dbms, get_real_dbms_name
+import edge_lake.generic.node_info as node_info
+import edge_lake.tcpip.port_forwarding as port_forwarding
 
 
 code_version_ = 0    # git log -1 --oneline --decorate
@@ -5313,7 +5313,7 @@ def get_debug_instructions(method_name):
 
 # =======================================================================================================================
 # Get one or 2 file names which can be assigned names and substring separated by comma.
-# for example:  file copy !watch_dir + "my_file.json" "D:\AnyLog-Code/AnyLog-Network/data/error/" + "file.2"
+# for example:  file copy !watch_dir + "my_file.json" "D:\AnyLog-Code/EdgeLake/data/error/" + "file.2"
 # =======================================================================================================================
 def get_file_names(words_array, counter_files, offset, end_array):
     '''
@@ -7129,7 +7129,7 @@ def rename_time_file(status, io_buff_in, cmd_words, trace):
 # =======================================================================================================================
 # Update new JSON file
 # example: time file new [file name] [status]
-# test_file = D:\AnyLog-Code\AnyLog-Network\data\prep\lsl_demo.ping_sensor.0.123.0.json
+# test_file = D:\AnyLog-Code\EdgeLake\data\prep\lsl_demo.ping_sensor.0.123.0.json
 # time file new !test_file updated
 # New - validates that the file exists
 # time file new !prep_dir/lsl_demo.ping_sensor.0.c490e6000d2287962d890a7cba2e1e74.0.51.2.201011010121.json
@@ -8008,8 +8008,8 @@ def _run_streamer(status, io_buff_in, cmd_words, trace):
 # Subscribe to a gRPC broker
 # Example: run grpc client where broker = IP and port = port
 '''
-run grpc client where ip = 127.0.0.1 and port = 50051 and grpc_dir = D:/AnyLog-Code/AnyLog-Network/dummy_source_code/kubearmor/proto and proto = kubearmor and function = WatchLogs and request = RequestMessage and response = Log and service = LogService and value = (Filter = policy) and debug = true and limit = 2 and ingest = false
-run grpc client where ip = 127.0.0.1 and port = 50051 and grpc_dir = D:/AnyLog-Code/AnyLog-Network/dummy_source_code/kubearmor/proto and proto = kubearmor and function = HealthCheck and request = NonceMessage and response = ReplyMessage and service = LogService and value = (nonce = 10.int) and debug = true and limit = 1 and ingest = false
+run grpc client where ip = 127.0.0.1 and port = 50051 and grpc_dir = D:/AnyLog-Code/EdgeLake/dummy_source_code/kubearmor/proto and proto = kubearmor and function = WatchLogs and request = RequestMessage and response = Log and service = LogService and value = (Filter = policy) and debug = true and limit = 2 and ingest = false
+run grpc client where ip = 127.0.0.1 and port = 50051 and grpc_dir = D:/AnyLog-Code/EdgeLake/dummy_source_code/kubearmor/proto and proto = kubearmor and function = HealthCheck and request = NonceMessage and response = ReplyMessage and service = LogService and value = (nonce = 10.int) and debug = true and limit = 1 and ingest = false
 '''
 # =======================================================================================================================
 def _run_grpc_client(status, io_buff_in, cmd_words, trace):
@@ -15753,7 +15753,7 @@ def get_git_version(status, io_buff_in, cmd_words, trace):
 
         if not ret_val:
             # Pull info from github
-            github_cmd = 'git -C "%s/AnyLog-Network" log -1' % directory
+            github_cmd = 'git -C "%s/EdgeLake" log -1' % directory
             ret_val, github_str = system_call(status, github_cmd, 5)
             if not ret_val:
                 # Format the info
@@ -18538,7 +18538,7 @@ commands = {
         'command': _run_sys_process,
         'help': {'usage': 'system [timeout = seconds] [OS command]',
                  'example': 'system ls\n'
-                            'system timeout = 20 python3 /home/ubuntu/AnyLog-Network/tests/gui/min_max_avg_per_day.py',
+                            'system timeout = 20 python3 /home/ubuntu/EdgeLake/tests/gui/min_max_avg_per_day.py',
                  'text': 'Executes the specified OS command\n'
                          'timeout is an optional value allowing to exits after the threshold, default value is 5 and 0 value means no threshold.',
                  'keywords' : ["cli", "script"],
@@ -18791,7 +18791,7 @@ commands = {
     'process': {
         'command': _process_script,
         'help': {'usage': 'process [path and file name]',
-                 'example': 'process $HOME/AnyLog-Network/tests/scripts/test_sensor.txt',
+                 'example': 'process $HOME/EdgeLake/tests/scripts/test_sensor.txt',
                  'text': 'Process the commands in the specified file',
                 'link' : 'blob/master/node%20configuration.md#the-configuration-process',
                 'keywords' : ["cli", "configuration"],},
@@ -18801,7 +18801,7 @@ commands = {
     'thread': {
         'command': _new_thread,
         'help': {'usage': 'thread [path and file name]',
-                 'example': 'thread $HOME/AnyLog-Network/tests/scripts/test_sensor.txt',
+                 'example': 'thread $HOME/EdgeLake/tests/scripts/test_sensor.txt',
                  'text': 'Initiate a new thread to process the commands in the specified file',
                  'keywords' : ["script"],},
         'trace': 0,
@@ -19046,7 +19046,7 @@ commands = {
         'command': _python,
         'help': {'usage': 'python [python string]',
                  'example': "ip_port = python !ip + ':4028'\n"
-                            "python 'D:/Node/AnyLog-Network/data/watch/'.rsplit('/',1)[0] + '.out'\n" 
+                            "python 'D:/Node/EdgeLake/data/watch/'.rsplit('/',1)[0] + '.out'\n" 
                             "new_dir = python !watch_dir.rsplit('/',1)[0] + '.out'",
                  'text': 'Execute a Python command. Keys are replaced with values from dictionary',
                  'link' : 'blob/master/cli.md#the-python-command',

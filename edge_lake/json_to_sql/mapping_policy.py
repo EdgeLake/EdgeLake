@@ -42,16 +42,16 @@ else:
 
 
 import sys
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_columns as utils_columns
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.params as params
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_io as utils_io
-import anylog_node.dbms.partitions as partitions
-import anylog_node.dbms.db_info as db_info
-import anylog_node.cmd.member_cmd as member_cmd
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_columns as utils_columns
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.params as params
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_io as utils_io
+import edge_lake.dbms.partitions as partitions
+import edge_lake.dbms.db_info as db_info
+import edge_lake.cmd.member_cmd as member_cmd
 
 mapping_trace_ = 0      # Updated using the command: trace level = 1 mapping
 

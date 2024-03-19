@@ -11,12 +11,12 @@ such non-permitted act to AnyLog, Inc.
 '''
 import os
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.cmd.member_cmd as member_cmd
-from anylog_node.generic.utils_columns import get_current_utc_time
-from anylog_node.generic.params import get_value_if_available
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.cmd.member_cmd as member_cmd
+from edge_lake.generic.utils_columns import get_current_utc_time
+from edge_lake.generic.params import get_value_if_available
 
 # ------------------------------------------------------------------------------------
 # Code to validate that the cluster policy exists

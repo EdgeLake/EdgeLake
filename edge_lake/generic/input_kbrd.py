@@ -10,7 +10,7 @@ to be broadly interpreted) you or your such affiliates shall unconditionally ass
 such non-permitted act to AnyLog, Inc.
 '''
 import sys
-import anylog_node.generic.utils_c as utils_c
+import edge_lake.generic.utils_c as utils_c
 
 '''
 F1 (27) (79 - O)  (80 - P)    # same as Insert Key

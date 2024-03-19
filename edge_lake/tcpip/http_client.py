@@ -18,11 +18,11 @@ requests.packages.urllib3.disable_warnings()
 from requests.exceptions import HTTPError
 import base64
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_output as utils_output
-import anylog_node.generic.interpreter as interpreter
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_output as utils_output
+import edge_lake.generic.interpreter as interpreter
 
 #                          Must     Add      Is
 #                          exists   Counter  Unique

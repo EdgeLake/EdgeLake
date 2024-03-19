@@ -10,10 +10,10 @@ to be broadly interpreted) you or your such affiliates shall unconditionally ass
 such non-permitted act to AnyLog, Inc.
 '''
 import threading
-import anylog_node.generic.params as params
-import anylog_node.generic.utils_print as utils_print
-from anylog_node.generic.utils_columns import get_current_time
-import anylog_node.generic.node_info as node_info
+import edge_lake.generic.params as params
+import edge_lake.generic.utils_print as utils_print
+from edge_lake.generic.utils_columns import get_current_time
+import edge_lake.generic.node_info as node_info
 
 # ------------------------------------------------------------------------------
 # Maintain a message Queue

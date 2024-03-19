@@ -16,14 +16,14 @@ such non-permitted act to AnyLog, Inc.
 # If a partition does not exist - create the partition
 # ============================================================================================
 
-import anylog_node.dbms.db_info as db_info
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.generic.utils_sql as utils_sql
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.json_to_sql.suggest_create_table as suggest_create_table
-import anylog_node.tcpip.net_utils as net_utils
+import edge_lake.dbms.db_info as db_info
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.generic.utils_sql as utils_sql
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.json_to_sql.suggest_create_table as suggest_create_table
+import edge_lake.tcpip.net_utils as net_utils
 
 
 operator_active_ = False

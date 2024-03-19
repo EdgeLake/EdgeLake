@@ -14,12 +14,12 @@ import sys
 import sqlite3
 from sqlite3 import Error
 
-import anylog_node.generic.utils_io as utils_io
-import anylog_node.generic.utils_sql as utils_sql
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.params as params
-from anylog_node.generic.params import get_path_separator
-import anylog_node.generic.interpreter as interpreter
+import edge_lake.generic.utils_io as utils_io
+import edge_lake.generic.utils_sql as utils_sql
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.params as params
+from edge_lake.generic.params import get_path_separator
+import edge_lake.generic.interpreter as interpreter
 
 
 # =======================================================================================================================

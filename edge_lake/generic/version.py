@@ -12,7 +12,7 @@ such non-permitted act to AnyLog, Inc.
 # --------------------------------------------------------------------------------------------------------
 # The methods in this file are implemented with a different version - Contact AnyLog for details
 # --------------------------------------------------------------------------------------------------------
-import anylog_node.generic.process_status as process_status
+import edge_lake.generic.process_status as process_status
 
 PUBLIC_KEY_CHARS_ = 0
 PUBLIC_KEY_LENGTH_ = 0

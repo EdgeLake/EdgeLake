@@ -13,10 +13,10 @@ such non-permitted act to AnyLog, Inc.
 # import json
 import os
 
-import anylog_node.generic.utils_io as utils_io
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.generic.process_status as process_status
-import anylog_node.json_to_sql.mapping_policy as mapping_policy
+import edge_lake.generic.utils_io as utils_io
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.process_status as process_status
+import edge_lake.json_to_sql.mapping_policy as mapping_policy
 
 # ==================================================================
 #

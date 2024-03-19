@@ -14,8 +14,8 @@ import ipaddress
 import uuid
 import hashlib
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.process_log as process_log
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.process_log as process_log
 
 # Conversion table to allow proper dbms names and table names
 translate_dict_ = {}

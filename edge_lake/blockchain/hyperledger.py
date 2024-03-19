@@ -23,11 +23,11 @@ except:
 else:
     jgateway_installed = True
 
-import anylog_node.blockchain.gateway as gateway
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.process_log as process_log
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.interpreter as interpreter
+import edge_lake.blockchain.gateway as gateway
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.process_log as process_log
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.interpreter as interpreter
 
 # --------------------------------------------------------------------------------------
 #  Connect to Hyperledger - using the provider connection URL,

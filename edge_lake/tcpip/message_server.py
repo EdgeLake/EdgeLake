@@ -14,18 +14,18 @@ import socket
 import sys
 import time
 
-import anylog_node.tcpip.net_utils as net_utils
-import anylog_node.generic.utils_threads as utils_threads
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.process_log as process_log
-import anylog_node.tcpip.mqtt_client as mqtt_client
-import anylog_node.generic.interpreter as interpreter
-import anylog_node.generic.version as version
-from anylog_node.generic.utils_columns import seconds_to_date, format_syslog_date
-from anylog_node.generic.streaming_data import add_data
-from anylog_node.generic.params import get_param
+import edge_lake.tcpip.net_utils as net_utils
+import edge_lake.generic.utils_threads as utils_threads
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.process_log as process_log
+import edge_lake.tcpip.mqtt_client as mqtt_client
+import edge_lake.generic.interpreter as interpreter
+import edge_lake.generic.version as version
+from edge_lake.generic.utils_columns import seconds_to_date, format_syslog_date
+from edge_lake.generic.streaming_data import add_data
+from edge_lake.generic.params import get_param
 
 
 

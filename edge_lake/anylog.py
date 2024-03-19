@@ -1,6 +1,6 @@
 import sys
 
-import anylog_node.cmd.user_cmd as entry_point
+import edge_lake.cmd.user_cmd as entry_point
 
 def main():
     argv = sys.argv

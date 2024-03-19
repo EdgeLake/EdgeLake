@@ -19,10 +19,10 @@ except:
 import os
 import sys
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.interpreter as interpreter
-import anylog_node.generic.utils_sql as utils_sql
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.interpreter as interpreter
+import edge_lake.generic.utils_sql as utils_sql
 
 
 class PSQL:

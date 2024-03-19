@@ -13,11 +13,11 @@ import json
 import re
 import sys
 
-import anylog_node.generic.process_log as process_log
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.utils_python as utils_python
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.cmd.member_cmd as member_cmd
+import edge_lake.generic.process_log as process_log
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.utils_python as utils_python
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.cmd.member_cmd as member_cmd
 # =======================================================================================================================
 # Chars not supported in JSON string
 # =======================================================================================================================

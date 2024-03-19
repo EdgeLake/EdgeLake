@@ -11,12 +11,12 @@ such non-permitted act to AnyLog, Inc.
 '''
 
 
-import anylog_node.generic.process_status as process_status
-import anylog_node.tcpip.message_header as message_header
-import anylog_node.generic.interpreter as interpreter
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.utils_json as utils_json
+import edge_lake.generic.process_status as process_status
+import edge_lake.tcpip.message_header as message_header
+import edge_lake.generic.interpreter as interpreter
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.utils_json as utils_json
 
 '''
 Apply conditions on the streaming data

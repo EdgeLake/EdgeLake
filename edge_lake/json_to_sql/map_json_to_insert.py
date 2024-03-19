@@ -12,18 +12,18 @@ such non-permitted act to AnyLog, Inc.
 import os
 import copy
 
-import anylog_node.dbms.db_info as db_info
-import anylog_node.dbms.partitions as partitions
-import anylog_node.generic.utils_io as utils_io
-import anylog_node.generic.utils_columns as utils_columns
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.generic.process_status as process_status
-import anylog_node.generic.process_log as process_log
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.cmd.data_monitor as data_monitor
-import anylog_node.json_to_sql.mapping_policy as mapping_policy
+import edge_lake.dbms.db_info as db_info
+import edge_lake.dbms.partitions as partitions
+import edge_lake.generic.utils_io as utils_io
+import edge_lake.generic.utils_columns as utils_columns
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.process_log as process_log
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.cmd.data_monitor as data_monitor
+import edge_lake.json_to_sql.mapping_policy as mapping_policy
 
-from anylog_node.json_to_sql.suggest_create_table import policy_to_columns_list
+from edge_lake.json_to_sql.suggest_create_table import policy_to_columns_list
 
 MAX_COL_LENGTH_ = 1000
 

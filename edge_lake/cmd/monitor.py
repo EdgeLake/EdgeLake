@@ -32,15 +32,15 @@ task remove where scheduler = 1 and name = monitor_operators
 schedule name = monitor_operator and time = 15 seconds task run client 10.0.0.78:7848 monitor operators where info = !operator_stat
 '''
 
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.generic.process_status as process_status
-import anylog_node.tcpip.message_header as message_header
-import anylog_node.generic.interpreter as interpreter
-import anylog_node.generic.utils_data as utils_data
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_columns as utils_columns
-import anylog_node.generic.params as params
-import anylog_node.tcpip.net_utils as net_utils
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.generic.process_status as process_status
+import edge_lake.tcpip.message_header as message_header
+import edge_lake.generic.interpreter as interpreter
+import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_columns as utils_columns
+import edge_lake.generic.params as params
+import edge_lake.tcpip.net_utils as net_utils
 
 network_status_ = {}
 

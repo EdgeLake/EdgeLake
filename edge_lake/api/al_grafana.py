@@ -16,14 +16,14 @@ such non-permitted act to AnyLog, Inc.
 
 import time
 
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.generic.utils_io as utils_io
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_columns as utils_columns
-import anylog_node.generic.utils_sql as utils_sql
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.generic.process_status as process_status
-import anylog_node.cmd.native_api as native_api
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.generic.utils_io as utils_io
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_columns as utils_columns
+import edge_lake.generic.utils_sql as utils_sql
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.process_status as process_status
+import edge_lake.cmd.native_api as native_api
 
 # -----------------------------------------------------------------------------------
 # AnyLog JSON Connector to Grafana
@@ -668,7 +668,7 @@ def get_info_from_headers(input_headers, key_prefix):
 # Organize the reply data in the Grafana format for time-series
 # Example: data_str = '[{"target": "series B", "datapoints": [[-0.5799358614273129, 1598992658000], [-0.9281617508387254, 1599014215647], [0.18279045401831143, 1599014236823]]}]'
 # Explained here - https://grafana.com/grafana/plugins/simpod-json-datasource
-# Internal DOc - anylog_node/api/grafana/GRAFANA.md
+# Internal DOc - edge_lake/api/grafana/GRAFANA.md
 '''
 Example timeserie response - pairs of values - the first is the Y value (measured) the second is the X value (time value OR group by value)
 

@@ -11,20 +11,20 @@ such non-permitted act to AnyLog, Inc.
 '''
 import time
 
-import anylog_node.cmd.member_cmd as member_cmd
-import anylog_node.tcpip.message_header as message_header
-import anylog_node.generic.params as params
-import anylog_node.generic.process_status as process_status
-import anylog_node.dbms.db_info as db_info
-import anylog_node.generic.utils_io as utils_io
-import anylog_node.blockchain.blockchain as blockchain
-import anylog_node.generic.interpreter as interpreter
-import anylog_node.generic.utils_json as utils_json
-import anylog_node.generic.utils_print as utils_print
-import anylog_node.blockchain.metadata as metadata
-import anylog_node.dbms.ha as ha
+import edge_lake.cmd.member_cmd as member_cmd
+import edge_lake.tcpip.message_header as message_header
+import edge_lake.generic.params as params
+import edge_lake.generic.process_status as process_status
+import edge_lake.dbms.db_info as db_info
+import edge_lake.generic.utils_io as utils_io
+import edge_lake.blockchain.blockchain as blockchain
+import edge_lake.generic.interpreter as interpreter
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.blockchain.metadata as metadata
+import edge_lake.dbms.ha as ha
 
-from anylog_node.generic.utils_threads import seconds_sleep
+from edge_lake.generic.utils_threads import seconds_sleep
 #                                  Must     Add      Is
 #                                  exists   Counter  Unique
 drop_par = {"dbms_name": ("str", True, False, True),
