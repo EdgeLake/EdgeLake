@@ -1,7 +1,7 @@
 include setup.cfg
-include anylog_node/*.c
-include anylog_node/*/*.c
-include anylog_node/*.so
-include anylog_node/*/*.so
+include edge_lake/*.c
+include edge_lake/*/*.c
+include edge_lake/*.so
+include edge_lake/*/*.so
 
 
