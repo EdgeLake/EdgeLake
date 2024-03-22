@@ -157,12 +157,12 @@ def blockchain_master_to_node(status, io_buff_in, data, trace):
 #  Active ledger is renamed to .old: blockchain.json --> blockchain old
 #  New ledger becomes the active: blockchain.new --> blockchain.json
 # ----------------------------------------------------------
-def blockchain_use_new(status, io_buff_in, data, trace):
+def blockchain_use_new(status, io_buff_in, info, trace):
     '''
     A message send from the master node when a new copy of the ledger was copied to the node.
 
     The new copied ledger has a unique name.
-    This process makes the new ledger the active ledger.
+    This process makes the new ledger the active ledger
     '''
     blockchain_file = params.get_value_if_available("!blockchain_file")
     if not blockchain_file:
@@ -172,7 +172,7 @@ def blockchain_use_new(status, io_buff_in, data, trace):
         # move the blockchain to destination
         path, name, type = utils_io.extract_path_name_type(blockchain_file)
         old_file = path + name + ".old"
-        new_file = data[0]
+        new_file = info[0]
         ret_val = use_new_blockchain_file(status, io_buff_in, old_file, blockchain_file, new_file, True, trace)
 
         ret_val = member_cmd.blockchain_load(status, ["blockchain", "get", "cluster"], False, trace)    # Build the metadata layer with the new blockchain file

@@ -19,7 +19,7 @@ import edge_lake.tcpip.tcpip_server as tcpip_server
 import edge_lake.tcpip.net_utils as net_utils
 
 try:
-    CONFIG_FILE = os.path.expandvars(os.path.expanduser(os.path.join('$ANYLOG_HOME', 'setup.cfg')))
+    CONFIG_FILE = os.path.expandvars(os.path.expanduser(os.path.join('$EDGELAKE_HOME', 'setup.cfg')))
     SOURCE_CONFIG_FILE = os.path.join(os.path.abspath(__file__).split("edge_lake")[0],  'setup.cfg')
 except:
     CONFIG_FILE = None

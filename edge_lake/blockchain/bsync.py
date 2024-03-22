@@ -267,6 +267,7 @@ def synchronizer(dummy: str, conditions: dict):
 
     while 1:
 
+
         if process_status.is_exit("synchronizer"):
             process_log.add_and_print("event", "synchronizer process terminated")
             sync_time_ = -1
@@ -314,19 +315,13 @@ def synchronizer(dummy: str, conditions: dict):
             utils_io.write_unlock("new")
 
         elif source_ == "blockchain":
-            # blockchain checkout from ethereum
-            master_msg_array[3] = connection_
-            ret_val, data = member_cmd.blockchain_checkout(status, data_buffer, master_msg_array, 0, [0,0,0])    # The hash value determines a file copy is needed
-            if ret_val:
-                status_queue_.set_index(1)      # Set status on message: "Failed to connect to master on: {2}"
-            else:
-                status_queue_.set_index(0)  # Set status on message: "Sync every {A1} seconds with {A2} on: {A3}"
+            ret_val = sync_by_blockchain(status, data_buffer, master_msg_array)
 
-
-        is_modified = blockchain_stat.update_status(status)
-        if is_modified and is_dbms:
-            # If the blockchain file was modified -> Update the local blockchain file with the new policies
-            member_cmd.blockchain_update_dbms(status, update_dbms, blockchain_file, 0)
+        if is_dbms:
+            is_modified = blockchain_stat.update_status(status)
+            if is_modified:
+                # If the blockchain file was modified -> Update the local blockchain file with the new policies
+                member_cmd.blockchain_update_dbms(status, update_dbms, blockchain_file, 0)
 
         counter_process_ += 1          # Count the number of looping that was done
 
@@ -399,7 +394,38 @@ def master_synchronizer(dummy: str, conditions: dict):
     sync_time_ = -1
     process_log.add_and_print("event", "Synchronizer process terminated: %s" % process_status.get_status_text(ret_val))
 
+# --------------------------------------------------------------
+# Sync the local metadata by the blockchain platform
+# --------------------------------------------------------------
+def sync_by_blockchain(status, data_buffer, master_msg_array):
 
+    blockchain_file = params.get_value_if_available("!blockchain_file")  # The local file name
+    if not blockchain_file:
+        status.add_error("Param \"blockchain_file\" is not defined")
+        ret_val = process_status.No_local_blockchain_file
+    else:
+
+
+        # blockchain checkout from ethereum
+        master_msg_array[3] = connection_
+        ret_val, data = member_cmd.blockchain_checkout(status, data_buffer, master_msg_array, 0,
+                                                       [0, 0, 0])  # The hash value determines a file copy is needed
+        if ret_val:
+            status_queue_.set_index(1)  # Set status on message: "Failed to connect to master on: {2}"
+        else:
+            status_queue_.set_index(0)  # Set status on message: "Sync every {A1} seconds with {A2} on: {A3}"
+
+            # Write the data to a new file in the local blockchain dir, example name: 'D:\\Node\\EdgeLake\\blockchain\\blockchain.ethereum_id_2.new'
+            path, name, type = utils_io.extract_path_name_type(blockchain_file)
+            tmp_file_name = f"{path}{connection_}.bchain.id_{counter_process_ % 10 + 1}.new"     # Intermidiary file for the blockchain data
+            if not utils_io.write_str_to_file(status, data, tmp_file_name):
+                status.add_error(f"Failed to write ledger data to file {tmp_file_name}")
+                ret_val = process_status.File_write_failed
+            else:
+                info = [tmp_file_name]
+                ret_val = events.blockchain_use_new(status, data_buffer, info, 0)
+
+    return ret_val
 # --------------------------------------------------------------
 # Is Master node
 # --------------------------------------------------------------
@@ -418,4 +444,3 @@ def get_source():
 def get_counter_process():
     global counter_process_
     return counter_process_
-

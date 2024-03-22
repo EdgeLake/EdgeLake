@@ -9227,7 +9227,7 @@ def blockchain_insert(status, io_buff_in, cmd_words, trace, func_params):
     mem_view = memoryview(io_buff_in)
     is_local = interpreter.get_one_value_or_default(conditions, "local", True)
     master = interpreter.get_all_values(conditions, "master")
-    platform = interpreter.get_all_values(conditions, "platform")
+    platform = interpreter.get_all_values(conditions, "blockchain")
 
     ret_val = blockchain_insert_all(status, mem_view, policy, is_local, None, master, platform, True)
 
@@ -16865,7 +16865,7 @@ _set_methods = {
         "anylog home": {'command': set_anylog_home,
                          'help': {
                              'usage': "set anylog home [path to AnyLog root]",
-                             'example': "set anylog home $ANYLOG_HOME",
+                             'example': "set anylog home $EDGELAKE_HOME",
                              'text': "Declare the location of the root directory to the AnyLog Files.",
                              'link' : "blob/master/getting%20started.md#switching-between-different-setups",
                              'keywords' : ["configuration"],
@@ -18948,7 +18948,7 @@ commands = {
         'command': _blockchain_sync,
         'help': {'usage': 'run blockchain sync [options]',
                  'example': 'run blockchain sync where source = master and time = 3 seconds and dest = file and dest = dbms and connection = !ip_port\n'
-                            'run blockchain sync where source = eos and time = 5 minutes and destination = file and destination = dbms',
+                            'run blockchain sync where source = blockchain and time = !sync_time and dest = file and platform = ethereum',
                  'text': 'Repeatadly update the local copy of the blockchain\n'
                          'Options:\n'
                          'source - The source of the metadata (blockchain or a Master Node).\n'
