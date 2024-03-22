@@ -14,6 +14,7 @@ WORKDIR $EDGELAKE_PATH
 
 COPY . EdgeLake
 COPY setup.cfg $EDGELAKE_PATH
+COPY LICENSE $EDGELAKE_PATH
 
 EXPOSE $ANYLOG_SERVER_PORT $ANYLOG_REST_PORT $ANYLOG_BROKER_PORT
 
@@ -25,9 +26,10 @@ RUN apk update && \
     python3 -m pip install --upgrade pip && \
     python3 -m pip install --upgrade -r /app/EdgeLake/requirements.txt && \
     python3 -m pip install --upgrade pip wheel pyinstaller cython && \
-    python3 /app/EdgeLake/setup_exe.py install && \
-    git clone -b open-source https://github.com/AnyLog-co/deployment-scripts/ && \
-    rm -rf  *.spec build/ EdgeLake && mkdir EdgeLake && mv ${EDGELAKE_PATH}/setup.cfg EdgeLake/setup.cfg
+    python3 /app/EdgeLake/setup.py install && \
+    git clone https://github.com/EdgeLake/deployment-scripts/ && \
+    rm -rf  *.spec build/ EdgeLake && mkdir EdgeLake && \
+    mv ${EDGELAKE_PATH}/setup.cfg ${EDGELAKE_PATH}/EdgeLake/setup.cfg && mv ${EDGELAKE_PATH}/LICENSE ${EDGELAKE_PATH}/EdgeLake/LICENSE
 
 FROM base AS deployment
 ENTRYPOINT ${EDGELAKE_PATH}/dist/edgelake process deployment-scripts/node-deployment/main.al
