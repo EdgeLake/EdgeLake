@@ -1,7 +1,0 @@
-include setup.cfg
-include edge_lake/*.c
-include edge_lake/*/*.c
-include edge_lake/*.so
-include edge_lake/*/*.so
-
-
