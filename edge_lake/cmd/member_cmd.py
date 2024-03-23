@@ -659,7 +659,7 @@ def config_servers(status, json_object, policy_id, trace):
 
         if "broker_bind" in json_object:
             # Change if specified
-            is_bind = params.get_value_if_available(json_object["broler_bind"])
+            is_bind = params.get_value_if_available(json_object["broker_bind"])
             if not isinstance(is_bind, bool):
                 is_bind = True if (isinstance(is_bind, str) and is_bind == "true") else False
 

@@ -47,9 +47,11 @@ def connect(status, provider):
         try:
             eth_connection = Ethereum(provider)   # Init an ANyLog object
         except:
-            err_msg = "Failed to connect to Ethereum with provider: %s" % str(provider)
+            errno, value = sys.exc_info()[:2]
+            err_msg = f"Failed to connect to Ethereum with provider:{str(provider)} with error: {errno}, {value}"
             status.add_error(err_msg)
             ret_val = process_status.Connection_error
+            eth_connection = None
         else:
             ret_val = process_status.SUCCESS
 
@@ -435,6 +437,23 @@ class Ethereum(gateway.BlockchainNode):
 
         return [ret_val, contract_address]
 
+    # -------------------------------------------------------------
+    # Get thr number of transactions for a given address
+    # -------------------------------------------------------------
+    def get_trn_count(self, status, address):
+
+        try:
+            counter = self.connection.eth.get_transaction_count(address)
+        except:
+            errno, value = sys.exc_info()[:2]
+            err_msg = "Ethereum transaction count failed: {0} : {1}".format(str(errno), str(value))
+            status.add_error(err_msg)
+            counter = -1
+            ret_val = process_status.BLOCKCHAIN_operation_failed
+        else:
+            ret_val = process_status.SUCCESS
+
+        return [ret_val, counter]
 
     def wait_for_tx_receipt(self, tx_hash):
         '''

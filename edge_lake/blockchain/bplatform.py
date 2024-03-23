@@ -196,6 +196,37 @@ def blockchain_delete(status, platform_name, policy_id, trace):
     return ret_val
 
 # =======================================================================================================================
+# Return the number of transactions for an address
+# =======================================================================================================================
+def get_txn_count(status, platform_name, addr_type):
+    '''
+    platform_name - i.e. ethereum
+    addr_type - "public" for public key or "contract" for contract address
+    '''
+    txn_count = 0
+    if platform_name not in bconnect_:
+        status.add_error("Blockchain platform '%s' is not recognized or not connected" % platform_name)
+        ret_val = process_status.BLOCKCHAIN_not_recognized
+
+    else:
+        ret_val = process_status.SUCCESS
+        platform = bconnect_[platform_name]
+        if platform.is_connected():
+            if addr_type == "public":
+                address = platform.get_public_key()
+            elif addr_type == "contract":
+                address = platform.get_contract_addr()
+            else:
+                ret_val = process_status.Wrong_address
+            if not ret_val:
+                ret_val, txn_count = platform.get_trn_count(status, address)
+        else:
+            ret_val = process_status.Connection_error
+
+    return [ret_val, txn_count]
+
+
+# =======================================================================================================================
 # Checkout the JSON data from the blockchain
 # Example command: blockchain checkout from ethereum !file_name
 # =======================================================================================================================

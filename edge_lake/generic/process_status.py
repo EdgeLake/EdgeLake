@@ -323,6 +323,7 @@ Config_Error = 235
 Expired_license = 236
 NOT_SUPPORTED = 237
 ERR_msg_format = 238
+Wrong_address = 239
 
 # note that message is at location of error value + 1 (exit is set at 0)
 status_text = ["Terminating node processes",
@@ -565,6 +566,7 @@ status_text = ["Terminating node processes",
                "Expired AnyLog license key",            # 236
                "Not Supported in this Version",         # 237
                "Error in message format",               # 238
+               "Wrong Address",                         # 239
                ]
 
 

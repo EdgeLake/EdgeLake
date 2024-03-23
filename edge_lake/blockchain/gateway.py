@@ -219,4 +219,10 @@ class BlockchainNode(ABC):
     @abstractmethod
     def deploy_contract(self, status, public_key):
         pass
-
+   # -------------------------------------------------------------
+   # Get transaction count - returns 0 if not implemented
+   # Returns Number of transactions for the given address
+   # -------------------------------------------------------------
+    @abstractmethod
+    def get_trn_count(self, status, address):
+        return [process_status.NOT_SUPPORTED, -1]
