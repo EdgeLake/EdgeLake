@@ -17,7 +17,7 @@ Make your edge nodes members of a decentralized network of nodes, optimized to m
 
 ## How it Works
 * By deploying EdgeLake on a node, the node joins a decentralized, P2P network of nodes.
-* Using a network protocol and a shared metadata layer, the nodes operate a single machine that is optimized to capture, host, manage and query data at the edge. 
+* Using a network protocol and a shared metadata layer, the nodes operate as a single machine that is optimized to capture, host, manage and query data at the edge. 
 * The nodes share a metadata layer. The metadata includes policies that describe the schemas of the data, the data distribution, the participating nodes, security and data ownerships and more. 
 The shared metadata is hosted in one of the following:
   * A member node designated as a Master Node.
