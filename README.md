@@ -1,5 +1,3 @@
-![AnyLog Logo](other/anylog_logo.png)
-
 # EdgeLake
 
 Make your edge nodes members of a decentralized network of nodes, optimized to manage and monitor data and resources at the edge.
