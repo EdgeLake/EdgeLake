@@ -5,7 +5,7 @@ Make your edge nodes members of a decentralized network of nodes, optimized to m
 * Enable services on each node. 
 * Stream data from your PLCs, Sensors, and applications to the edge nodes. 
 * Query the distributed data from a single point (as if the data is hosted in a centralized database). 
-* Manage your edge resources from a single point (the network of nodes reflects a [Single System Image](https://en.wikipedia.org/wiki/Single_system_image))
+* Manage your edge resources from a single point (the network of nodes reflects a [Single System Image](https://en.wikipedia.org/wiki/Single_system_image)).
 
 ### Table of Content
 * [How it Works](#how-it-works)
@@ -101,7 +101,7 @@ make up operator
 make up query
 ```
 
-## Prerequisite & Setup considerations
+## Prerequisite and Setup considerations
 | Feature               | Requirement  |
 | --------------------- | ------------| 
 | Operating System      | Linux (Ubuntu, RedHat, Alpine, Suse), Windows, OSX |
