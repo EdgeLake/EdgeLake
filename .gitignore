@@ -1,3 +1,7 @@
 venv/
 .idea
 __pycache__/
+
+Dockerfile
+update_code.sh
+setup.py
