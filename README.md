@@ -46,13 +46,14 @@ sudo usermod -aG docker ${USER}
 newgrp docker
 ```
 
-2. Clone _docker-compose_ from EdgeLake repository
+2. Clone _docker-compose_ repository from EdgeLake
 ```shell
 git clone https://github.com/EdgeLake/docker-compose
 cd docker-compose
 ```
 
 **Deploy AnyLog**:
+
 3. Update `.env` configurations for the node(s) being deployed -- specifically _LEDGER_CONN_ for _Query_ and Operator Nodes  
    * [master node](https://github.com/EdgeLake/docker-compose/tree/main/docker_makefile/anylog_master.env)
    * [operator node](https://github.com/EdgeLake/docker-compose/tree/main/docker_makefile/anylog_operator.env)
