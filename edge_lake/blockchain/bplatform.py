@@ -1,6 +1,11 @@
-# import hashlib
+"""
+This Source Code Form is subject to the terms of the Mozilla Public
+License, v. 2.0. If a copy of the MPL was not distributed with this
+file, You can obtain one at http://mozilla.org/MPL/2.0/
+"""
+
 import edge_lake.blockchain.ethereum as ethereum
-import edge_lake.blockchain.hyperledger as hyperledger
+import anylog_enterprise.blockchain.hyperledger as hyperledger
 
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_json as utils_json
