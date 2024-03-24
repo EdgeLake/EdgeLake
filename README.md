@@ -9,6 +9,12 @@ Make your edge nodes members of a decentralized network of nodes, optimized to m
 * Query the distributed data from a single point (as if the data is hosted in a centralized database). 
 * Manage your edge resources from a single point (the network of nodes reflects a [Single System Image](https://en.wikipedia.org/wiki/Single_system_image))
 
+### Table of Content
+* [How it Works](#how-it-works)
+* [Download & Install](#download-and-install)
+* [Prerequisite & Setup Considerations](#prerequisite-and-setup-considerations)
+
+
 ## How it Works
 * By deploying EdgeLake on a node, the node joins a decentralized, P2P network of nodes.
 * Using a network protocol and a shared metadata layer, the nodes operate a single machine that is optimized to capture, host, manage and query data at the edge. 
@@ -17,7 +23,7 @@ The shared metadata is hosted in one of the following:
   * A member node designated as a Master Node.
   * A blockchain (making the network fully decentralized).
 * Each node in the network is configured to provide data services. Examples of services:
-  * Capture data via REST, MQTT, gRPC, JSON Files.
+  * Capture data via _REST_, _MQTT_, _gRPC_, _JSON Files_.
   * Host data in a local database (like _SQLite_ or _PostgreSQL_, _MongoDB_).
   * Satisfy Queries.
 
@@ -54,7 +60,7 @@ cd docker-compose
 
 **Deploy AnyLog**:
 
-3. Update `.env` configurations for the node(s) being deployed -- specifically _LEDGER_CONN_ for _Query_ and Operator Nodes  
+3. Update `.env` configurations for the node(s) being deployed -- specifically _LEDGER_CONN_ for _Query_ and _Operator_ Nodes  
    * [master node](https://github.com/EdgeLake/docker-compose/tree/main/docker_makefile/anylog_master.env)
    * [operator node](https://github.com/EdgeLake/docker-compose/tree/main/docker_makefile/anylog_operator.env)
    * [query node](https://github.com/EdgeLake/docker-compose/tree/main/docker_makefile/anylog_query.env)
@@ -97,3 +103,34 @@ make up operator
 make up query
 ```
 
+## Prerequisite & Setup considerations
+| Feature               | Requirement  |
+| --------------------- | ------------| 
+| Operating System      | Linux (Ubuntu, RedHat, Alpine, Suse), Windows, OSX |
+| Memory footprint      | 100 MB available for the AnyLog deployed without Docker |
+|                       | 300 MB available for AnyLog deployed with Docker |
+| Databases             | PostgreSQL installed (optional) |
+|                       | SQLite (default, no need to install) |
+|                       | MongoDB installed (Only if blob storage is needed) |
+| CPU                   | Intel, ARM and AMD are supported. |
+|                       | AnyLog can be deployed on a single CPU machine and up to the largest servers (can be deployed on gateways, Raspberry PI, and all the way to the largest multi-core machines).|
+| Storage               | AnyLog supports horizontal scaling - nodes (and storage) are added dynamically as needed, therefore less complexity in scaling considerations. Requirements are based on expected volume and duration of data on each node. AnyLog supports automated archival and transfer to larger nodes (if needed). |
+| Network               | Required: a TCP based network (local TCP based networks, over the internet and combinations are supported) |
+|                       | An overlay network is recommended. Most overlay networks can be used transparently. Nebula used as a default overlay network. |
+|                       | Static IP and 3 ports open and accessible on each node (either via an Overlay Network, or without an Overlay). |
+| Cloud Integration     | Build in integration using REST, Pub-Sub, and Kafka. |
+| Deployment options    | Executable (can be deployed as a background process), or Docker or Kubernetes. |
+
+
+**Comments**:
+* Databases: 
+  - SQLite recommended for smaller nodes and in-memory data.
+  - PostgreSQL recommended for larger nodes.
+  - MongoDB used for blob storage.
+  - Multiple databases can be deployed and used on the same node.
+    
+* Network:
+    An Overlay network is recommended for the following reasons:
+    - Isolate the network for security considerations.
+    - Manage IP and Ports availability. Without an overlay network, users needs to configure and manage availability 
+      of IP and Ports used.
