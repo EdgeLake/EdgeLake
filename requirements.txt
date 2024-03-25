@@ -19,7 +19,7 @@ psycopg2-binary>=0.0
 pymongo>=0.0
 
 # North/South Plugins
-paho-mqtt>=0.0
+paho-mqtt==1.5
 kafka-python>=0.0
 
 # Blockchain
