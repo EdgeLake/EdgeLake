@@ -1,7 +1,7 @@
 venv/
 .idea
 __pycache__/
-
+!edge_lake/blockchain
 Dockerfile
 update_code.sh
 setup.py

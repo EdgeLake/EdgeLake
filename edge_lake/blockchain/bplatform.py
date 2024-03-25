@@ -5,7 +5,7 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 """
 
 import edge_lake.blockchain.ethereum as ethereum
-import anylog_enterprise.blockchain.hyperledger as hyperledger
+import edge_lake.blockchain.hyperledger as hyperledger
 
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_json as utils_json
