@@ -28,4 +28,4 @@ RUN apk update && \
     git clone https://github.com/EdgeLake/deployment-scripts/
 
 FROM base AS deployment
-ENTRYPOINT python3 ${EDGELAKE_HOME}/edgelake.py process ${EDGELAKE_PATH}/deployment-scripts/node-deployment/main.al
+ENTRYPOINT python3 ${EDGELAKE_HOME}/edge_lake/edgelake.py process ${EDGELAKE_PATH}/deployment-scripts/node-deployment/main.al
