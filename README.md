@@ -59,9 +59,9 @@ cd docker-compose
 **Deploy AnyLog**:
 
 3. Update `.env` configurations for the node(s) being deployed -- specifically _LEDGER_CONN_ for _Query_ and _Operator_ Nodes  
-   * [master node](https://github.com/EdgeLake/docker-compose/tree/main/docker_makefile/anylog_master.env)
-   * [operator node](https://github.com/EdgeLake/docker-compose/tree/main/docker_makefile/anylog_operator.env)
-   * [query node](https://github.com/EdgeLake/docker-compose/tree/main/docker_makefile/anylog_query.env)
+   * [master node](https://github.com/EdgeLake/docker-compose/tree/main/docker_makefile/edgelake_master.env)
+   * [operator node](https://github.com/EdgeLake/docker-compose/tree/main/docker_makefile/edgelake_operator.env)
+   * [query node](https://github.com/EdgeLake/docker-compose/tree/main/docker_makefile/edgelake_query.env)
 
 ```dotenv
 #--- General ---
