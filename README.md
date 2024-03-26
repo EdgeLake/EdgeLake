@@ -36,7 +36,7 @@ Deploying an EdgeLake node and making the node a member of a network is done as 
 Services are enabled by one, or a combination of the following:
 * Issuing configuration commands using the Node's Command Line Interface (CLI).
 * Listing configuration commands in script files and associating the node with the files.
-* Listing configuration commands in policies that is hosted on the shared metadata and associating the node with the policies.
+* Listing configuration commands in policies that are hosted in the shared metadata and associating the node with the policies.
    
 The services configured determine the role of a node which can be one or multiple of the following:  
 * **Operator Node** - a node that captures data and hosts the data on a local DBMS. Data sources like devices, PLCs and applications deliver data to Operator Nodes for storage. 
@@ -44,10 +44,10 @@ The services configured determine the role of a node which can be one or multipl
 * **Master Node** - a node that replaces a blockchain platform for storage of metadata policies. The network metadata is organized in Policies and users can associate a blockchain or alternatively a Master Node for metadata storage.
 
 In a deployed network, devices, sensors, PLCs and applications send their data to Operator Nodes. Data management on 
-each Operator Node is automated. Queries are satisfied as if all the distributed data is managed in a centralized database. 
-The same setup monitors the edge resources - for example, users and applications can monitor CPU, Network, disk-space, 
+each Operator Node is automated.   
+Queries are satisfied by Query Nodes as if all the distributed data is managed in a centralized database.     
+The same setup monitors edge resources - for example, users and applications can monitor CPU, Network, disk-space, 
 of the distributed edge resources from a single point.
-
 
 ## Download and Install
 
