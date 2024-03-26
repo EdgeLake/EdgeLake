@@ -1,6 +1,6 @@
 # EdgeLake
 
-Make your edge nodes members of a decentralized network of nodes, optimized to manage and monitor data and resources at the edge.
+Transform your edge nodes into members of a permissioned decentralized network, optimized to manage and monitor data and resources at the edge.
 * Deploy EdgeLake instances on your nodes at the edge. 
 * Enable services on each node. 
 * Stream data from your PLCs, Sensors, and applications to the edge nodes. 
