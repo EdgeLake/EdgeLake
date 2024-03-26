@@ -29,6 +29,18 @@ When an application issues a query, it is delivered to one of the nodes in the n
 Using the shared metadata, the node determines which are the target nodes that host the relevant data. The query is transferred to the target nodes and the replies from all the target nodes are aggregated dynamically and returned as a unified reply to the application. 
 This process is similar to [MapReduce](https://en.wikipedia.org/wiki/MapReduce), whereas the target nodes are determined dynamically by the query and the shared metadata. Monitoring of resources operates in a similar way.
 
+Deploying an EdgeLake node and making the node a member of a network is done as follows:
+* [Download and install](#download-and-install) the EdgeLake software on the Edge Node.
+* Enable the services that determine the functionalities provided by the node. Services are enabled by one or a combination of the following:
+    * Issuing configuration commands using the Node's Command Line Interface (CLI).
+    * Listing configuration commands in a script file.
+    * Listing configuration commands in policy that is hosted on the shared metadata.
+    
+The services configured determine the role of a node which can be one or a multiple of the following:
+* **Operator Node** - a node that captures data and hosts the data on a local DBMS. Data sources like devices, PLCs and applications deliver data to Operator Nodes for storage. 
+* **Query Node** - a node that orchestrates a query process. Applications deliver their queries to Query Nodes, these nodes interact with Operator Nodes (that host the data) to return a unified and complete reply for each query. 
+* **Master Node** - a node that replaces a blockchain platform for storage of metadata policies. The network metadata is organized in Policies and users can associate a blockchain or alternatively a Master Node for metadata storage.
+
 ## Download and Install
 
 Detailed directions for Install EdgeLke can be found in [docker-compose repository](https://github.com/EdgeLake/docker-compose)
@@ -56,7 +68,7 @@ git clone https://github.com/EdgeLake/docker-compose
 cd docker-compose
 ```
 
-**Deploy AnyLog**:
+**Deploy EdgeLake**:
 
 3. Update `.env` configurations for the node(s) being deployed -- specifically _LEDGER_CONN_ for _Query_ and _Operator_ Nodes  
    * [master node](https://github.com/EdgeLake/docker-compose/tree/main/docker_makefile/edgelake_master.env)
@@ -65,17 +77,17 @@ cd docker-compose
 
 ```dotenv
 #--- General ---
-# Information regarding which AnyLog node configurations to enable. By default, even if everything is disabled, AnyLog starts TCP and REST connection protocols
+# Information regarding which EdgeLake node configurations to enable. By default, even if everything is disabled, EdgeLake starts TCP and REST connection services.
 NODE_TYPE=master
-# Name of the AnyLog instance
+# Name of the EdgeLake instance
 NODE_NAME=anylog-master
-# Owner of the AnyLog instance
+# Owner of the EdgeLake instance
 COMPANY_NAME=New Company
 
 #--- Networking ---
-# Port address used by AnyLog's TCP protocol to communicate with other nodes in the network
+# Port address used by EdgeLake's TCP protocol to communicate with other nodes in the network
 ANYLOG_SERVER_PORT=32048
-# Port address used by AnyLog's REST protocol
+# Port address used by EdgeLake's REST protocol
 ANYLOG_REST_PORT=32049
 # A bool value that determines if to bind to a specific IP and Port (a false value binds to all IPs)
 TCP_BIND=false
@@ -105,14 +117,14 @@ make up query
 | Feature               | Requirement  |
 | --------------------- | ------------| 
 | Operating System      | Linux (Ubuntu, RedHat, Alpine, Suse), Windows, OSX |
-| Memory footprint      | 100 MB available for the AnyLog deployed without Docker |
-|                       | 300 MB available for AnyLog deployed with Docker |
+| Memory footprint      | 100 MB available for EdgeLake deployed without Docker |
+|                       | 300 MB available for EdgeLake deployed with Docker |
 | Databases             | PostgreSQL installed (optional) |
 |                       | SQLite (default, no need to install) |
 |                       | MongoDB installed (Only if blob storage is needed) |
 | CPU                   | Intel, ARM and AMD are supported. |
-|                       | AnyLog can be deployed on a single CPU machine and up to the largest servers (can be deployed on gateways, Raspberry PI, and all the way to the largest multi-core machines).|
-| Storage               | AnyLog supports horizontal scaling - nodes (and storage) are added dynamically as needed, therefore less complexity in scaling considerations. Requirements are based on expected volume and duration of data on each node. AnyLog supports automated archival and transfer to larger nodes (if needed). |
+|                       | EdgeLake can be deployed on a single CPU machine and up to the largest servers (can be deployed on gateways, Raspberry PI, and all the way to the largest multi-core machines).|
+| Storage               | EdgeLake supports horizontal scaling - nodes (and storage) are added dynamically as needed, therefore less complexity in scaling considerations. Requirements are based on expected volume and duration of data on each node. EdgeLake supports automated archival and transfer to larger nodes (if needed). |
 | Network               | Required: a TCP based network (local TCP based networks, over the internet and combinations are supported) |
 |                       | An overlay network is recommended. Most overlay networks can be used transparently. Nebula used as a default overlay network. |
 |                       | Static IP and 3 ports open and accessible on each node (either via an Overlay Network, or without an Overlay). |
