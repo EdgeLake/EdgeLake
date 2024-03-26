@@ -31,15 +31,23 @@ This process is similar to [MapReduce](https://en.wikipedia.org/wiki/MapReduce),
 
 Deploying an EdgeLake node and making the node a member of a network is done as follows:
 * [Download and install](#download-and-install) the EdgeLake software on the Edge Node.
-* Enable the services that determine the functionalities provided by the node. Services are enabled by one or a combination of the following:
+* Enable the services that determine the functionalities provided by the node. 
+  
+Services are enabled by one, or a combination of the following:
     * Issuing configuration commands using the Node's Command Line Interface (CLI).
-    * Listing configuration commands in a script file.
-    * Listing configuration commands in policy that is hosted on the shared metadata.
+    * Listing configuration commands in script files and associating the node with the files.
+    * Listing configuration commands in policies that is hosted on the shared metadata and associating the node with the policies.
     
 The services configured determine the role of a node which can be one or a multiple of the following:
 * **Operator Node** - a node that captures data and hosts the data on a local DBMS. Data sources like devices, PLCs and applications deliver data to Operator Nodes for storage. 
 * **Query Node** - a node that orchestrates a query process. Applications deliver their queries to Query Nodes, these nodes interact with Operator Nodes (that host the data) to return a unified and complete reply for each query. 
 * **Master Node** - a node that replaces a blockchain platform for storage of metadata policies. The network metadata is organized in Policies and users can associate a blockchain or alternatively a Master Node for metadata storage.
+
+In a deployed network, devices, sensors, PLCs and applications send their data to Operator Nodes. Data management on 
+each Operator Node is automated. Queries are satisfied as if all the distributed data is managed in a centralized database. 
+The same setup monitors the edge resources - for example, users and applications can monitor CPU, Network, disk-space, 
+of the distributed edge resources from a single point.
+
 
 ## Download and Install
 
