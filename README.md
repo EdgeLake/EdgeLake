@@ -37,7 +37,8 @@ Services are enabled by one, or a combination of the following:
 * Issuing configuration commands using the Node's Command Line Interface (CLI).
 * Listing configuration commands in script files and associating the node with the files.
 * Listing configuration commands in policies that are hosted in the shared metadata and associating the node with the policies.
-   
+  
+### Node Types 
 The services configured determine the role of a node which can be one or multiple of the following:  
 * **Operator Node** - a node that captures data and hosts the data on a local DBMS. Data sources like devices, PLCs and applications deliver data to Operator Nodes for storage. 
 * **Query Node** - a node that orchestrates a query process. Applications deliver their queries to Query Nodes, these nodes interact with Operator Nodes (that host the data) to return a unified and complete reply for each query. 
