@@ -13,6 +13,24 @@ import edge_lake.generic.utils_print as utils_print
 import edge_lake.generic.interpreter as interpreter
 
 bconnect_ = {}      # Connection info to the blockchain platforms
+local_txn_counter_ = 0      # A counter for the number of updates done to the local ledger file
+
+# ==================================================================
+# Get the local transaction counter (number of updates to the local copy of the ledger)
+# ==================================================================
+def get_local_txn_counter():
+    global local_txn_counter_  # A counter for the number of updates done to the local ledger file
+
+    # It indicates how many updates were done to the local file
+    # It is used by the synchronizer to determine if blockchain read is needed (to sync local state with global state)
+    return local_txn_counter_
+
+# ==================================================================
+# Count updates to the local copy of the ledger
+# ==================================================================
+def count_local_txn():
+    global local_txn_counter_  # A counter for the number of updates done to the local ledger file
+    local_txn_counter_ += 1
 
 # =======================================================================================================================
 # Connect to a blockchain platform
@@ -113,9 +131,11 @@ def get_platforms(status, io_buff_in, cmd_words, trace):
     platforms_used = []
 
     for platform_name, platform in bconnect_.items():
+        chain_id = 0
         if platform:
             connect_status = platform.is_connected()
             balance = platform.get_balance()
+            chain_id = platform.get_chain_id()
 
             if platform_name == "ethereum":
 
@@ -132,10 +152,10 @@ def get_platforms(status, io_buff_in, cmd_words, trace):
             balance = "Not Available"
             public_key = "Not Available"
 
-        platforms_used.append((platform_name, str(connect_status), balance, connect_str, public_key))
+        platforms_used.append((platform_name, str(connect_status), balance, chain_id, connect_str, public_key))
         platforms_used.append(("","", "", "", contract))
     if len(platforms_used):
-        reply = utils_print.output_nested_lists(platforms_used, "Blockchains connected", ["Name", "Active", "Balance", "URL/Config", "Public Key/Contract"], True, "")
+        reply = utils_print.output_nested_lists(platforms_used, "Blockchains connected", ["Name", "Active", "Balance", "Chain ID", "URL/Config", "Public Key/Contract"], True, "")
     else:
         reply = "No connections to blockchain platforms"
 

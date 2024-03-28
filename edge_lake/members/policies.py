@@ -589,7 +589,7 @@ def new_cluster_policy(status, policy_type, policy_obj, blockchain_file):
                 # New Policy - need to have a unique name
                 if len(existing_policy):
                     status.add_keep_error("Non-unique 'name' for a new cluster policy: '%s'" % name)
-                    ret_val = process_status.Wrong_policy_structure
+                    ret_val = process_status.Non_unique_policy_values
 
     return ret_val
 

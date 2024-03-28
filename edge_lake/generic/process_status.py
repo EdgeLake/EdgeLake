@@ -319,6 +319,7 @@ Expired_license = 236
 NOT_SUPPORTED = 237
 ERR_msg_format = 238
 Wrong_address = 239
+ERR_json_search_key = 240
 
 # note that message is at location of error value + 1 (exit is set at 0)
 status_text = ["Terminating node processes",
@@ -562,6 +563,7 @@ status_text = ["Terminating node processes",
                "Not Supported in this Version",         # 237
                "Error in message format",               # 238
                "Wrong Address",                         # 239
+               "Error in JSON search key",              # 240
                ]
 
 

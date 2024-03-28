@@ -259,7 +259,8 @@ def synchronizer(dummy: str, conditions: dict):
     data_buffer = bytearray(buff_size)
 
     blockchain_stat = BlockchainStat(blockchain_file, 0)   # An object that monitors if the blockchain file was modified
-    trn_count = 0       # number of transactions on the blockchain - to determine if sync is needed
+    local_txn_count = 0 # Number of updates done to the local ledger
+    txn_count = 0       # number of transactions on the blockchain - to determine if sync is needed
     while 1:
 
 
@@ -310,7 +311,7 @@ def synchronizer(dummy: str, conditions: dict):
             utils_io.write_unlock("new")
 
         elif source_ == "blockchain":
-            ret_val = sync_by_blockchain(status, data_buffer, master_msg_array)
+            ret_val, local_txn_count, txn_count = sync_by_blockchain(status, data_buffer, master_msg_array, local_txn_count, txn_count)
 
         if is_dbms:
             is_modified = blockchain_stat.update_status(status)
@@ -392,33 +393,43 @@ def master_synchronizer(dummy: str, conditions: dict):
 # --------------------------------------------------------------
 # Sync the local metadata by the blockchain platform
 # --------------------------------------------------------------
-def sync_by_blockchain(status, data_buffer, master_msg_array):
+def sync_by_blockchain(status, data_buffer, master_msg_array, old_local_txn_count, old_txn_count):
 
     blockchain_file = params.get_value_if_available("!blockchain_file")  # The local file name
     if not blockchain_file:
         status.add_error("Param \"blockchain_file\" is not defined")
         ret_val = process_status.No_local_blockchain_file
+        txn_count = 0
+        local_txn_count = 0
     else:
-        # blockchain checkout from ethereum
-        master_msg_array[3] = connection_
-        ret_val, data = member_cmd.blockchain_checkout(status, data_buffer, master_msg_array, 0,
-                                                       [0, 0, 0])  # The hash value determines a file copy is needed
-        if ret_val:
-            status_queue_.set_index(1)  # Set status on message: "Failed to connect to master on: {2}"
-        else:
-            status_queue_.set_index(0)  # Set status on message: "Sync every {A1} seconds with {A2} on: {A3}"
 
-            # Write the data to a new file in the local blockchain dir, example name: 'D:\\Node\\EdgeLake\\blockchain\\blockchain.ethereum_id_2.new'
-            path, name, type = utils_io.extract_path_name_type(blockchain_file)
-            tmp_file_name = f"{path}{connection_}.bchain.id_{counter_process_ % 10 + 1}.new"     # Intermidiary file for the blockchain data
-            if not utils_io.write_str_to_file(status, data, tmp_file_name):
-                status.add_error(f"Failed to write ledger data to file {tmp_file_name}")
-                ret_val = process_status.File_write_failed
+        local_txn_count = bplatform.get_local_txn_counter()     # Changes to the local blockchain file - it will trigger a sync with the blockchain data
+
+        # Pull from blockchain only if transaction has changed
+        ret_val, txn_count = bplatform.get_txn_count(status, connection_, "contract")
+
+        if old_txn_count != txn_count or old_local_txn_count != local_txn_count:
+            # If blockchain data changed - checkout from ethereum
+            # Or local updates - test if populated to the blockchain platform
+            master_msg_array[3] = connection_
+            ret_val, data = member_cmd.blockchain_checkout(status, data_buffer, master_msg_array, 0,
+                                                           [0, 0, 0])  # The hash value determines a file copy is needed
+            if ret_val:
+                status_queue_.set_index(1)  # Set status on message: "Failed to connect to master on: {2}"
+                txn_count = 0       # This will force a read
             else:
-                info = [tmp_file_name]
-                ret_val = events.blockchain_use_new(status, data_buffer, info, 0)
+                status_queue_.set_index(0)  # Set status on message: "Sync every {A1} seconds with {A2} on: {A3}"
+                # Write the data to a new file in the local blockchain dir, example name: 'D:\\Node\\EdgeLake\\blockchain\\blockchain.ethereum_id_2.new'
+                path, name, type = utils_io.extract_path_name_type(blockchain_file)
+                tmp_file_name = f"{path}{connection_}.bchain.id_{counter_process_ % 10 + 1}.new"     # Intermidiary file for the blockchain data
+                if not utils_io.write_str_to_file(status, data, tmp_file_name):
+                    status.add_error(f"Failed to write ledger data to file {tmp_file_name}")
+                    ret_val = process_status.File_write_failed
+                else:
+                    info = [tmp_file_name]
+                    ret_val = events.blockchain_use_new(status, data_buffer, info, 0)
 
-    return ret_val
+    return [ret_val, local_txn_count, txn_count]
 # --------------------------------------------------------------
 # Is Master node
 # --------------------------------------------------------------

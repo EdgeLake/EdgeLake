@@ -748,13 +748,15 @@ def blockchain_retrieve(status, blockchain_file, operation, key, json_search, wh
         value_pairs = utils_json.str_to_json(json_data)  # map string to dictionary
         if value_pairs:
             if not utils_json.validate(value_pairs):  # test dictionary can be represented as JSON
-                ret_val = process_status.ERR_wrong_json_structure
+                status.add_error("Error in JSON search key: '%s'" % str(value_pairs))
+                ret_val = process_status.ERR_json_search_key
             else:
                 ret_val, blockchain_out = blockchain.blockchain_search(status, blockchain_file, operation, key, value_pairs, None)
                 if not ret_val and not blockchain_out:
                     status.set_warning_value(process_status.WARNING_empty_data_set)
         else:
-            ret_val = process_status.ERR_wrong_json_structure
+            status.add_error("Error in JSON search key: '%s'" % str(json_data))
+            ret_val = process_status.ERR_json_search_key
     else:  # No json_search object
         ret_val, blockchain_out = blockchain.blockchain_search(status, blockchain_file, operation, key, None, where_cond)
 
@@ -1108,6 +1110,28 @@ def _process_blockchain_cmd(status, io_buff_in, cmd_words, trace):
 
 
     return ret_val
+
+# =======================================================================================================================
+# Return a number value representing the state of the contract
+# blockchain state where platform = ethereum
+# =======================================================================================================================
+def blockchain_state(status, io_buff_in, cmd_words, trace, func_params):
+
+    offset = get_command_offset(cmd_words)
+
+    if not utils_data.test_words(cmd_words[offset:], 2, ["where", "platform", "="]):
+        ret_val = process_status.ERR_command_struct
+        counter = -1
+    else:
+        ret_val, counter = bplatform.get_txn_count(status, cmd_words[5 + offset], "contract")
+        if not ret_val and not func_params[1]:      # func_params[1] needs to be false to indicate not a message from a different node
+            if offset:
+                # Assign the value
+                params.add_param(cmd_words[0], str(counter))
+            else:
+                utils_print.output(f"\n{counter}", True)
+
+    return [ret_val, counter]
 # =======================================================================================================================
 # Query the local blockchain file
 # =======================================================================================================================
@@ -8486,7 +8510,7 @@ def _execute_from(status, io_buff_in, cmd_words, trace):
     return ret_val
 
 # =======================================================================================================================
-# COnnect to a blockchain platform
+# Connect to a blockchain platform
 # blockchain connect to ethereum where
 '''
 <blockchain connect ethereum where provider = "https://rinkeby.infura.io/v3/45e96d7ac85c4caab102b84e13e795a1" and
@@ -8557,7 +8581,8 @@ def blockchain_set_account_info(status, io_buff_in, cmd_words, trace, func_param
                 "contract": ("str", False, False, True),
                 "gas_read": ("int", False, False, False),
                 "gas_write": ("int", False, False, False),
-                }
+                "chain_id": ("int", False, False, True),
+    }
 
     if cmd_words[4] != "where":
         return [process_status.ERR_command_struct, None]
@@ -8963,6 +8988,8 @@ def blockchain_add(status, cmd_words, blockchain_file):
                 if not blockchain.blockchain_write(status, blockchain_file, json_dictionary, True):
                     ret_val = process_status.ERR_process_failure
                     break
+                else:
+                    bplatform.count_local_txn() # A counter for the number of updates done to the local ledger file
             else:
                 process_log.add("Error", "String is not  a representative of JSON: " + json_data)
                 ret_val = process_status.ERR_wrong_json_structure
@@ -9279,6 +9306,8 @@ def blockchain_insert_all(status, mem_view, policy, is_local, blockchain_file, m
                             ret_val = process_status.Duplicate_object_id
                         elif not blockchain.blockchain_write(status, b_file, policy, True):
                             ret_val = process_status.ERR_process_failure
+                        else:
+                            bplatform.count_local_txn() # A counter for the number of updates done to the local ledger file
                 else:
                     # Print the error in the policy
                     err_msg = process_status.get_status_text(ret_val)
@@ -10467,7 +10496,7 @@ def _run_operator(status, io_buff_in, cmd_words, trace):
                 "distr_dir": ("dir", False, False, True),       # A watch directory for the distributer process
                 "file_type": ("str", False, False, False),
                 "master_node": ("ip.port", False, False, True),
-                "blockchain": ("bool", False, False, True),
+                "blockchain": ("str", False, False, True),      # name of platform i.e. ethereum
                 "company": ("str", False, False, True),
                 "compress_json": ("bool", False, False, True),
                 "compress_sql": ("bool", False, False, True),
@@ -16187,6 +16216,17 @@ _blockchain_methods = {
                    'keywords' : ["blockchain"]
                     }
                },
+    "state": {'command': blockchain_state,
+            'words_count' : 6,
+             'help': {
+                 'usage': "blockchain state where platform = [platform name]",
+                 'example': "blockchain state where platform = ethereum",
+                 'text': "Returns an ID representing the state of the contract. If the ID changes, data was added or deleted.",
+                 'link': "blob/master/blockchain%20commands.md#query-policies",
+                 'keywords': ["blockchain"]
+             }
+             },
+
     "read": {'command': blockchain_get_local,
             'help': {
                 'usage': "blockchain read [policy type] [where] [attribute name value pairs] [bring] [bring command variables]",
@@ -16433,7 +16473,7 @@ _blockchain_methods = {
                        'words_min': 12,
                        'help': {
                            'usage': "blockchain set account info where platform = [platform name] and [platform parameters]",
-                           'example': "blockchain set account info where platform = ethereum and private_key = !private_key and public_key = !public_key",
+                           'example': "blockchain set account info where platform = ethereum and private_key = !private_key and public_key = !public_key and chain_id = 11155111",
                            'text': "Associate different parameters with the blockchain platform.",
                            'keywords' : ["blockchain"],
                        }

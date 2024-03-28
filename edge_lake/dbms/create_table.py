@@ -21,7 +21,7 @@ import edge_lake.tcpip.net_utils as net_utils
 
 
 operator_active_ = False
-platform_ = ""                  # BLOCKCHAIN OR Master
+platform_ = None                  # BLOCKCHAIN
 blockchain_file_ = ""
 master_node_ = None
 is_create_table_ = False        # Operator flag to determine if a new table is to be created automatically
@@ -233,7 +233,8 @@ def add_table_on_blockchain(status, io_buff, table_name, dbms_name, create_stmt,
     table_info["table"]["create"] = create_stmt
     table_info["table"]["source"] = source_info     # Info on the source that generated the schema
 
+    master_list = [master_node_] if master_node_ else None  # None if no master, or a list of one or more masters
 
-    ret_val = member_cmd.blockchain_insert_all(status, io_buff, table_info, True, blockchain_file_, [master_node_], platform_, False)
+    ret_val = member_cmd.blockchain_insert_all(status, io_buff, table_info, True, blockchain_file_, master_list, platform_, False)
 
     return ret_val
