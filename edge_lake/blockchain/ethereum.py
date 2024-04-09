@@ -10,9 +10,8 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import sys
 
-import web3.logs
-
 try:
+    import web3.logs
     from web3 import HTTPProvider, Web3
     from web3.middleware import geth_poa_middleware
 except:
