@@ -8,6 +8,7 @@ import datetime
 import ipaddress
 import uuid
 import hashlib
+import re
 
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.process_log as process_log
@@ -1478,3 +1479,12 @@ def get_equal_value(test_str, key):
             if len(subentry):
                 value = subentry
     return value
+
+
+# =====================================================================================Are you joni=================================
+# Replace space and dot in a string to underline
+# Make lower case
+# ======================================================================================================================
+def unify_name(input_string):
+    new_string = re.sub(r'[ .-:/\\]', '_', input_string).lower()
+    return new_string

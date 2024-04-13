@@ -592,9 +592,10 @@ def analyze_if(status, cmd_words, offset_start, conditions_list):
         if and_or_word:
             cond_x += 1
             conditions_list.append([])
-        elif word[0] == '(':
+        elif word and word[0] == '(':
             with_paren = True
-        if word[-1] == ')':
+
+        if word and word[-1] == ')':
             need_end_or = True      # next word (after parenthesis) needs to be ANd or OR
 
         conditions_list[cond_x].append(word)

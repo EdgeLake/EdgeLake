@@ -65,6 +65,7 @@ def get_column_types(status: process_status, data: list):
 #  Based on the data in a file, determine the data type
 # ==================================================================
 def set_column_name_type(status, columns, column_name, column_value):
+
     if column_name in columns.keys():
         existing_type = columns[column_name]
     else:
@@ -78,8 +79,7 @@ def set_column_name_type(status, columns, column_name, column_value):
             if existing_type != data_type:
                 resolved_type = resolve_data_type(existing_type, data_type)
                 if resolved_type != existing_type:
-                    columns[
-                        column_name] = resolved_type  # change data type (because of a value that does not fit the existing type)
+                    columns[column_name] = resolved_type  # change data type (because of a value that does not fit the existing type)
         else:
             columns[column_name] = data_type
 
@@ -229,7 +229,7 @@ def create_table_sql(table_name: str, columns: dict, with_tsd_info:bool):
         if name.isdigit():
             column_name = "_" + name
         else:
-            column_name = name.lower()
+            column_name = utils_data.unify_name(name)
         column_val = val.lower()
         create_table += column_string % (column_name, column_val)
         if "uuid" in column_val and uuid_id is False:

@@ -3664,6 +3664,53 @@ def job_state(status, cmd_words, trace):
         utils_print.output_nested_lists(job_status_info, "", title, False)
 
     return process_status.SUCCESS
+# =======================================================================================================================
+# Compare 2 policies
+# get policies diff !poiicy_1 !policy_2
+# =======================================================================================================================
+def diff_policies(status, io_buff_in, cmd_words, trace):
+
+    policy_1 = params.get_value_if_available(cmd_words[3])
+    policy_2 = params.get_value_if_available(cmd_words[4])
+    reply = ""
+    object_1 = utils_json.str_to_json(policy_1)
+    if not object_1:
+        status.add_error(f"Compared object is not organized in JSON format: {policy_1}")
+        ret_val = process_status.ERR_wrong_json_structure
+    else:
+        object_2 = utils_json.str_to_json(policy_2)
+        if not object_2:
+            status.add_error(f"Compared object is not in JSON format: {policy_2}")
+            ret_val = process_status.ERR_wrong_json_structure
+        else:
+            if type(object_1) == dict:
+                list1 = [object_1]
+            else:
+                list1 = object_1        # Object_1 is a list
+            if type(object_2) == dict:
+                list2 = [object_2]
+            else:
+                list2 = object_2
+
+            if len(list1) != len(list2):
+                status.add_error(f"Compared objects have different number of JSON entries: {len(list1)} and {len(list2)}")
+                ret_val = process_status.ERR_wrong_json_structure
+            else:
+                ret_val = process_status.SUCCESS
+                for index in range(len(list1)):
+                    policy_1 = list1[index]
+                    policy_2 = list2[index]
+                    if not isinstance(policy_1, dict) or not isinstance(policy_2, dict):
+                        status.add_error(f"Object #{index+1} is not in JSON format")
+                        ret_val = process_status.ERR_wrong_json_structure
+                        break
+
+                    reply += f"\r\nCompare #{index+1}\r\n"
+
+                    reply += utils_json.compare_policies(policy_1, policy_2)
+
+
+    return [ret_val, reply]
 
 # =======================================================================================================================
 # Get the last job instance
@@ -8302,7 +8349,7 @@ def _run_kafka_consumer(status, io_buff_in, cmd_words, trace):
                 "port": ("str", True, False, True),
                 "topic":    ("nested", True, False, False),
                 "threads": ("int", False, False, True),
-                "offset": ("str", False, False, True),       # Can have the value earliest or latest
+                "reset": ("str", False, False, True),       # Can have the value earliest or latest
                 }
 
     if not al_kafka.is_installed():
@@ -8316,7 +8363,7 @@ def _run_kafka_consumer(status, io_buff_in, cmd_words, trace):
 
     interpreter.set_nested_default(status, conditions, "topic", "qos", 0)       # Set 0 on QOS if missing
 
-    ret_val = interpreter.test_values(status, conditions, "offset", {"earliest" : 1, "latest" : 1})
+    ret_val = interpreter.test_values(status, conditions, "reset", {"earliest" : 1, "latest" : 1})
     if ret_val:
         return ret_val
 
@@ -9200,7 +9247,7 @@ def blockchain_delete_all(status, mem_view, policy_id, blockchain_file, is_local
                 commit_words = ["blockchain", "drop", "policy", "from", platform_name, "where", "id", "=", policy_id]
                 reply_val, reply = blockchain_commit(status, mem_view, commit_words, 0, None) # We ignore errors as the network may be down
 
-        # Sygnal the synchronizer
+        # Signal the synchronizer
         if bsync.get_sync_time() == -1 or not bsync.is_running():
             status.add_error( "Failed to trigger sync process after policy delete: synchronizer not active")
             ret_val = process_status.ERR_process_failure
@@ -13513,6 +13560,7 @@ def _words_to_command(cmd_words, cmd_dict, max_words):
 
 # =======================================================================================================================
 # print all commands usage
+# help *.url  - shows help URLs
 # =======================================================================================================================
 def _help_commands(status, cmd_txt, cmd_dict, max_key_words, help_msg):
 
@@ -16299,8 +16347,9 @@ _blockchain_methods = {
     "delete policy": {'command': blockchain_delete_policy,
                           'words_min': 7,
                           'help': {
-                              'usage': "blockchain delete policy where id = [policy id] and master = [IP:Port] and local =[true/false]",
-                              'example': "blockchain delete policy where id = 64283dba96a4c818074d564c6be20d5c and master = !master_node",
+                              'usage': "blockchain delete policy where id = [policy id] and master = [IP:Port] and local =[true/false] and blockchain = [platform]",
+                              'example': "blockchain delete policy where id = 64283dba96a4c818074d564c6be20d5c and master = !master_node\n"
+                                         "blockchain delete policy where id = 64283dba96a4c818074d564c6be20d5c and local = true and blockchain = ethereum",
                               'text': "Delete a policy from the ledger.",
                               'link' : "blob/master/blockchain%20commands.md#the-blockchain-delete-policy-command",
                               'keywords': ["blockchain"]
@@ -16370,7 +16419,7 @@ _blockchain_methods = {
                        'help': {
                            'usage': "blockchain test",
                            'example': "blockchain test",
-                           'text': "Validate the structure of the local copy of the blockchain.",
+                           'text': "Validate the structure of the local copy of the ledger.",
                            'link': "blob/master/blockchain%20commands.md#interacting-with-the-blockchain-data",
                            'keywords' : ["blockchain"],
                         }
@@ -17285,6 +17334,18 @@ _query_status_methods = {
 }
 
 _get_methods = {
+
+        'policies diff': {
+                    'command': diff_policies,
+                    'words_count': 5,
+                    'help': {'usage': 'get policies diff [policy 1] [policy 2]',
+                             'example': 'get policies diff !policy1 !policy2',
+                             'text': 'Output a report indicating the differences between the two policies, or between lists of policies',
+                             'link' : "blob/master/policies.md#compare-policies",
+                             'keywords': ["cli"],
+                             },
+                    'trace': 0,
+                },
 
         "port forward": {'command': port_forwarding.get_port_forward,
                   'words_count': 3,
@@ -18460,7 +18521,7 @@ commands = {
                             'drop partition where dbms = aiops and table = cx_482f2efic11_fb_factualvalue and keep = 5\n'
                             'drop partition where dbms = aiops and table = * and keep = 30',
                  'text': 'Drops a partition in the named database and table.\n'
-                         '[partition name] is optional. If partition name is ommited, the oldest partition of the table is dropped.\n'
+                         '[partition name] is optional. If partition name is omitted, the oldest partition of the table is dropped.\n'
                          'keep = [value] is optional. If a value is provided, the oldest partitions will be dropped to keep the number of partitions as the value provided.'
                          'If the table has only one partition, an error value is returned.\n'
                          'If table name is asterisk (*), a partition from every table from the specified database is dropped.\n'
@@ -18654,7 +18715,7 @@ commands = {
         'help': {'usage': 'run rest server where external_ip = [external_ip ip] and external_port = [external port] and internal_ip = [internal ip] and internal_port = [internal port]'
                           ' and timeout = [timeout] and ssl = [true/false] and bind = [true/false]',
                  'example': 'run rest server where internal_ip = !ip and internal_port = 7849 and timeout = 0 and threads = 6 and ssl = true and ca_org = AnyLog and server_org = "Node 128"',
-                 'text': 'Sets a rest server in a listening mode on the specified ip and port\n'
+                 'text': 'Enable a REST srvice in a listening mode on the specified ip and port\n'
                          '[timeout] - Max wait time in seconds. A 0 value means no wait limit and the default value is 20 seconds.\n'
                          'If ssl is set to True, connection is using HTTPS.',
                  'link': 'blob/master/background%20processes.md#rest-requests',
@@ -18690,9 +18751,9 @@ commands = {
 
     'run msg client': {
         'command': _run_msg_client,
-        'help': {'usage': 'run msg client where broker = [url] and dbms = [dbms name] and topic = [topic]',
+        'help': {'usage': 'run msg client where broker = [url] and port = [port] and user = [user] and password = [password] and topic = (name = [topic name] and dbms = [dbms name] and table = [table name] and [participating columns info])',
                  'example': 'run msg client where broker = "driver.cloudmqtt.com" and port = 18975 and user = mqwdtklv and password = uRimssLO4dIo and topic = (name = test and dbms = "bring [metadata][company]" and table = "bring [metadata][machine_name] _ [metadata][serial_number]" and column.timestamp.timestamp = "bring [ts]" and column.value.int = "bring [value]")',
-                 'text': 'Subscribe to a broker according to the url provided to receive data on the provided topic',
+                 'text': 'Subscribe to a broker according to the url provided to receive data on the provided topic.',
                  'link' : 'blob/master/message%20broker.md#subscribing-to-a-third-party-broker',
                  'keywords' : ["configuration", "background processes"],
                  },
@@ -18718,7 +18779,7 @@ commands = {
                 'example': 'run tcp server where external_ip = !ip and external_port = !port  and threads = 3\n'
                            'run tcp server where external_ip = !external_ip and external_port = 7850 and internal_ip = !ip and internal_port = 7850 and threads = 6',
                 'text': 'Set a TCP server in a listening mode on the specified IP and port.\n'
-                        'The first pair of IP and Port that are used by a listner process to receive messages from members of the network.\n'
+                        'The first pair of IP and Port that are used by a listener process to receive messages from members of the network.\n'
                         'The second pair of IP and Port are optional, to indicate the IP and Port that are accessible from a local network.\n'
                         'threads - an optional parameter for the number of workers threads that process requests which are send to the provided IP and Port. The default value is 6.',
                 'link' :  'blob/master/background%20processes.md#the-tcp-server-process',
@@ -18743,7 +18804,7 @@ commands = {
         'command': _run_kafka_consumer,
         'help': {'usage': 'run kafka consumer where ip = [ip] and port = [port]] and reset = [latest/earliest] and topic = [topic and mapping instructions]',
                  'example': 'run kafka consumer where ip = 198.74.50.131 and port = 9092 and reset = earliest and topic = (name = sensor and dbms = lsl_demo and table = ping_sensor and column.timestamp.timestamp = "bring [timestamp]" and column.value.int = "bring [value]")',
-                 'text': 'Initialize a Kafka consumer that subscribes to one or more topics of a kafka instance and continueosly polls data\n'
+                 'text': 'Initialize a Kafka consumer that subscribes to one or more topics of a kafka instance and continuously polls data\n'
                          'assigned to the subscribed topics using the provided IP and Port. The reset value determines the offset whereas the default is latest.\n',
                          'link': 'blob/master/using%20kafka.md#anylog-serves-as-a-data-consumer',
                         'keywords' : ["streaming", "api", "configuration", "background processes"],
@@ -18984,7 +19045,7 @@ commands = {
         'help': {'usage': 'run blockchain sync [options]',
                  'example': 'run blockchain sync where source = master and time = 3 seconds and dest = file and dest = dbms and connection = !ip_port\n'
                             'run blockchain sync where source = blockchain and time = !sync_time and dest = file and platform = ethereum',
-                 'text': 'Repeatadly update the local copy of the blockchain\n'
+                 'text': 'Repeatedly update the local copy of the blockchain\n'
                          'Options:\n'
                          'source - The source of the metadata (blockchain or a Master Node).\n'
                          'dest - The destination of the blockchain data such as a file (a local file) or a DBMS (a local DBMS).\n'
@@ -18999,7 +19060,8 @@ commands = {
     'run operator': {
         'command': _run_operator,
         'help': {'usage': 'run operator where [option] = [value] and [option] = [value] ...',
-                 'example': 'run operator where policy = !policy and create_table = true and compress_sql = true and compress_json = true',
+                 'example': 'run operator where create_table = true and update_tsd_info = true and archive_json = true and distributor = true and master_node = !master_node and policy = !operator_policy  and threads = 3\n'
+                            'run operator where create_table = true and update_tsd_info = true and archive_json = true and distributor = true and blockchain = ethereum and policy = !operator_policy  and threads = 3',
                  'text': 'Monitors new data added to the watch directory and load the new data to a local database\n'
                          'Options:\n'
                          'policy - The ID of the operator policy.\n'
@@ -19008,7 +19070,7 @@ commands = {
                          'archive_json - True moves the JSON file to the \'archive\' dir if processing is successful. The file deleted if archive_sql is false.\n'
                          'archive_sql -  True moves the SQL file to the \'archive\' dir if processing is successful. The file deleted if archive_sql is false.\n'
                          'limit_tables - A list of comma separated names within brackets listing the table names to process.\n'
-                         'craete_table - A True value creates a table if the table doesn\'t exists.\n'
+                         'craete_table - A True value creates a table if the table doesn\'t exist.\n'
                          'master_node - The IP and Port of a Master Node (if a master node is used).\n'
                          'update_tsd_info - True/False to update a summary table (tsd_info table in almgm dbms) with status of files ingested.',
                  'link': 'blob/master/background%20processes.md#operator-process',
@@ -19184,8 +19246,8 @@ commands = {
                             'exit workers\r\n'
                             'exit grpc all',
                  'text': 'exit node - terminate all process and shutdown\r\n'
-                         'exit tcp - terminate the TCP listner thread\r\n'
-                         'exit rest - terminate the REST listner thread\r\n'
+                         'exit tcp - terminate the TCP listener thread\r\n'
+                         'exit rest - terminate the REST listener thread\r\n'
                          'exit scripts - terminate the running scripts\r\n'
                          'exit scheduler - terminate the scheduler process\r\n'
                          'exit workers - terminate the query threads',

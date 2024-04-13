@@ -109,7 +109,38 @@ def to_string(json_obj):
         return ""
 
     return json_str
+# =======================================================================================================================
+# Compare 2 policies
+# =======================================================================================================================
+def compare_policies(policy_1, policy_2):
 
+    policy_type = get_policy_type(policy_1)
+    if len(policy_1) != 1 or len (policy_2) != 1:
+        reply = f"A compared policy is with incorrect format"
+    else:
+        if not policy_type in policy_2:
+            reply = f"Compared policies are not with the same type"
+        else:
+            inner_1 = policy_1[policy_type]
+            inner_2 = policy_2[policy_type]
+
+            set_keys_1 = set(inner_1.keys())
+            set_keys_2 = set(inner_2.keys())
+            keys_only_in_policy1 = set_keys_1 - set_keys_2
+            keys_only_in_policy2 = set_keys_2 - set_keys_1
+            common_keys = (set_keys_1 & set_keys_2)
+
+            different_values = [(key, inner_1[key], inner_2[key]) for key in common_keys if inner_1[key] != inner_2[key]]
+
+            report = {
+                "keys_only_in_policy1": list(keys_only_in_policy1),
+                "keys_only_in_policy2": list(keys_only_in_policy2),
+                "different_values": different_values
+            }
+
+            reply = to_formatted_string(json_obj=report, intent_bytes=4)
+
+    return reply
 # =======================================================================================================================
 # Map a JSON object to a string - formatted.
 # =======================================================================================================================

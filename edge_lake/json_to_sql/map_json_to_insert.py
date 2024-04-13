@@ -63,9 +63,9 @@ def map_columns(status: process_status, dbms_name, table_name, tsd_name, tsd_id,
     currentt_utc = "\'" + utils_columns.get_current_utc_time() + "\'"
 
     insert_list = []
+    attr_names_map = {}  # Map the keys in the JSON entry to lower
 
     for entry in json_data:
-        upper_lower_map = {}  # Map the keys in the JSON entry to lower
         column_array = []
         time_presence = False
         value_presence = False
@@ -87,9 +87,9 @@ def map_columns(status: process_status, dbms_name, table_name, tsd_name, tsd_id,
             else:
                 if isinstance(attribute_name, list):
                     column_value = get_value_by_function(attribute_name, entry,
-                                                         upper_lower_map)  # Apply the function in the attribute name to get the column value
+                                                         attr_names_map)  # Apply the function in the attribute name to get the column value
                 else:
-                    column_value = get_value_ignore_case(entry, attribute_name, upper_lower_map)
+                    column_value = get_value_ignore_case(entry, attribute_name, attr_names_map)
                     if column_type == "varchar" and len(column_value) > MAX_COL_LENGTH_:
                         # Put the blob in file ot a database and replace the column with the ID to the blob
                         if dbms_name and table_name:
@@ -154,7 +154,7 @@ def map_columns(status: process_status, dbms_name, table_name, tsd_name, tsd_id,
 # ==================================================================
 # Given a Key - Get value from JSON - ignore Upper Lower Case
 # ==================================================================
-def get_value_ignore_case(json_entry, key, upper_lower_map):
+def get_value_ignore_case(json_entry, key, attr_names_map):
     # First try without mapping to lowere case
     try:
         value = json_entry[key]
@@ -166,15 +166,16 @@ def get_value_ignore_case(json_entry, key, upper_lower_map):
         else:
             # Test if a mapping dictionary exists
             value = ""
-            if not len(upper_lower_map):
+            if not key in attr_names_map:   # The key can be in upper case or using a dot or a minus sign or a space
                 # create a mapping between a lower case to the way it is represented in the JSON entry
                 for json_key in json_entry.keys():
-                    upper_lower_map[
-                        json_key.lower()] = json_key  # Keep a mapping between lower to the format in the dictionary
+                    new_key = utils_data.unify_name(json_key)
+                    attr_names_map[new_key] = json_key  # Keep a mapping between lower to the format in the dictionary
+
             # If a dictionary exists or just created
-            if len(upper_lower_map):
-                if key in upper_lower_map.keys():
-                    json_key = upper_lower_map[key]
+            if len(attr_names_map):
+                if key in attr_names_map.keys():
+                    json_key = attr_names_map[key]
                     if json_key in json_entry.keys():  # try again with the upper case key
                         value = json_entry[json_key]
     return value
