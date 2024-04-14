@@ -896,8 +896,9 @@ class JobInstance:
             par_replied = 0
             for y in range(par_buffers):
                 member_info = self.members[x][y]
-                if not member_info.is_last_block() or member_info.returned_code:
-                    break
+                if member_info.returned_code != process_status.Empty_data_set:  # Empty data set is considered as node replied
+                    if not member_info.is_last_block() or member_info.returned_code:
+                        break
                 par_replied += 1
             if par_replied == par_buffers:
                 # Reply from all partitions

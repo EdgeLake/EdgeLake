@@ -8,7 +8,6 @@ import datetime
 import ipaddress
 import uuid
 import hashlib
-import re
 
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.process_log as process_log
@@ -20,8 +19,10 @@ for x in range (256):
     char_x = chr(x)
     if char_x == '_' or char_x == ' ' or char_x == '-' or char_x == '.' or char_x == '/' or char_x == '\\' or char_x == ':':
         char_y = '_'
+    elif (char_x >= 'A' and char_x <= 'Z'):
+        char_y = char_x.lower()
     else:
-        if (char_x >= 'A' and char_x <= 'Z') or  (char_x >= 'a' and char_x <= 'z') or (char_x >= '0' and char_x <= '9'):
+        if (char_x >= 'a' and char_x <= 'z') or (char_x >= '0' and char_x <= '9'):
            continue                 # No need to translate
 
         char_y = "0x%02x" % x    # The string showing x in hex
@@ -225,11 +226,16 @@ def reset_str_chars( source_str ):
 # ======================================================================================================================
 # Remove control chars (replace with space) - keep printable chars
 # Replace_chars is a dictionary to replace key with value
+# If fix_json is True, make bool value lower case and remove comma at the end of the string
 # ======================================================================================================================
-def replace_string_chars(remove_control_chars, src_str, replace_chars):
+def replace_string_chars(remove_control_chars, src_str, replace_chars, fix_json = False):
     offset = 0
     new_str = ""
+    is_string = False
     for index, ch in enumerate(src_str):
+
+        if ch == '"':
+            is_string = not is_string
 
         if replace_chars and ch in replace_chars.keys():
             # ch is a key in the dictionary
@@ -239,11 +245,19 @@ def replace_string_chars(remove_control_chars, src_str, replace_chars):
             # ch is a control char
             new_str += (src_str[offset:index] + ' ')  # replace char with space
             offset = index + 1
-
+        elif fix_json and not is_string:
+            if ch.isupper():
+                new_str += (src_str[offset:index] + ch.lower())  # replace char with space
+                offset = index + 1
     if offset:
         new_str += src_str[offset:]
     else:
         new_str = src_str
+
+    if fix_json:
+        new_str = new_str.strip()   # remove leading and trailing spaces
+        if new_str and new_str[-1] == ',':
+            new_str = new_str[:-1]  # Remove the comma at the end
 
     return new_str
 
@@ -1480,11 +1494,3 @@ def get_equal_value(test_str, key):
                 value = subentry
     return value
 
-
-# =====================================================================================Are you joni=================================
-# Replace space and dot in a string to underline
-# Make lower case
-# ======================================================================================================================
-def unify_name(input_string):
-    new_string = re.sub(r'[ .-:/\\]', '_', input_string).lower()
-    return new_string

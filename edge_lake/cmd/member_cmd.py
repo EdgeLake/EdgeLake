@@ -9702,7 +9702,7 @@ def _suggest_create(status, io_buff_in, cmd_words, trace):
 
     file_name = params.get_value_if_available(cmd_words[2 + index])
 
-    create_table_stmt = suggest_create_table(status, file_name, "", False, policy)
+    create_table_stmt = suggest_create_table(status, file_name, "", False, policy, None)
     if create_table_stmt == "":
         ret_val = process_status.ERR_process_failure  # failed to suggest a create statement
     else:
@@ -17334,6 +17334,18 @@ _query_status_methods = {
 }
 
 _get_methods = {
+        'stack trace': {
+            'command': process_status.get_stack_traces,
+            'words_min': 3,
+            'help': {'usage': 'get stack trace',
+                     'example': 'get stack trace\n'
+                                'get stack trace main\n'
+                                'get stack trace main tcp',
+                     'text': 'Output the stack trace of all threads',
+                     'keywords': ["debug"],
+                     },
+            'trace': 0,
+        },
 
         'policies diff': {
                     'command': diff_policies,

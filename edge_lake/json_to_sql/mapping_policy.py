@@ -237,7 +237,7 @@ def apply_policy_schema(status, source_dbms, source_table, policy_inner, policy_
                 if ret_val:
                     break
                 if value:
-                    dbms_name = utils_data.unify_name(value)
+                    dbms_name = utils_data.reset_str_chars(value)
 
             if not table_name:
                 # Get table name if specified in the policy or from the JSON data using bring command
@@ -245,7 +245,7 @@ def apply_policy_schema(status, source_dbms, source_table, policy_inner, policy_
                 if ret_val:
                     break
                 if value:
-                    table_name = utils_data.unify_name(value)
+                    table_name = utils_data.reset_str_chars(value)
 
             if not dbms_name or not table_name:
                 err_str = "DBMS" if not dbms_name else "Table"

@@ -192,7 +192,7 @@ def str_to_json(data: str):
 
     if fix_json:
         modified = change_json_data(data)
-        modified = utils_data.replace_string_chars(True, modified, None)
+        modified = utils_data.replace_string_chars(True, modified, None, True)
         try:
             json_object = json.loads(modified, strict=False)
         except ValueError as error:
