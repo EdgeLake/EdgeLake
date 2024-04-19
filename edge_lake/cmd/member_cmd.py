@@ -8104,6 +8104,7 @@ def _run_grpc_client(status, io_buff_in, cmd_words, trace):
                 "dbms": ("str", False, True, True),        # DBMS name (if not provided in the policy)
                 "table": ("str", False, True, True),       # Table name (if not provided in a policy)
                 "ingest": ("bool", False, False, True),    # False value means that AnyLog is not updated - default is True
+                "reconnect" : ("bool", False, False, True),    # True value - reconnect automatically if connection lost - default is False
                 "prep_dir": ("str", False, False, True),
                 "watch_dir":("str", False, False, True),
                 "err_dir":  ("str", False, False, True),
