@@ -1770,20 +1770,33 @@ def validate_date_string(date_string, format_string=TIME_FORMAT_STR):
 # https://en.wikipedia.org/wiki/UTC_offset
 # =======================================================================================================================
 def time_iso_format(date_string):
-    try:
-        local_time = datetime.fromisoformat(date_string)
-        utc_time = local_time.astimezone(utc_zone)
-        utc_str = utc_time.strftime('%Y-%m-%dT%H:%M:%S')
 
-        if len(date_string[:-6]) > 19:
-            utc_string = utc_str + date_string[19:-6] + 'Z'       # Add MS
+    in_utc = False
+    if date_string[-6] == '+':
+        try:
+            # Parse the input timestamp string using the original format
+            timestamp = datetime.strptime(date_string, '%m/%d/%Y %I:%M:%S %p %z')
+            utc_string = timestamp.strftime('%Y-%m-%dT%H:%M:%SZ')
+        except:
+            pass
         else:
-            utc_string = utc_str
-    except:
-        errno, value = sys.exc_info()[:2]
-        err_msg = "Failed to change date-time with utc-offset value to UTC: [date-time: '%s'] [error-no: '%s'] [error-val: '%s']" % (date_string, errno, value)
-        process_log.add("Error", err_msg)
-        utc_string = None
+            in_utc = True
+
+    if not in_utc:
+        try:
+            local_time = datetime.fromisoformat(date_string)
+            utc_time = local_time.astimezone(utc_zone)
+            utc_str = utc_time.strftime('%Y-%m-%dT%H:%M:%S')
+
+            if len(date_string[:-6]) > 19:
+                utc_string = utc_str + date_string[19:-6] + 'Z'       # Add MS
+            else:
+                utc_string = utc_str
+        except:
+            errno, value = sys.exc_info()[:2]
+            err_msg = "Failed to change date-time with utc-offset value to UTC: [date-time: '%s'] [error-no: '%s'] [error-val: '%s']" % (date_string, errno, value)
+            process_log.add("Error", err_msg)
+            utc_string = None
 
     return utc_string
 # =======================================================================================================================

@@ -53,6 +53,7 @@ bring_types_ = {
 
 pattern_bring = re.compile('[ []{}:"]')  # Find any of these occurrences - to void the bring
 
+
 # =======================================================================================================================
 # Validate Policy Structure
 # =======================================================================================================================
@@ -371,7 +372,7 @@ def get_bring_type(status, bring_word):
     if is_bring("table", bring_type):
         # Always add the JSON bit if the table bit is set - because data is pulled in JSON and converted to table
         bring_type |= bring_types_["json"]
-        bring_type |= bring_types_["null"]      # Add null keys to the json
+        bring_type |= bring_types_["null"]      # Add null keys  the json
 
     return [bring_type, sort_fields]
 
@@ -473,14 +474,27 @@ def pull_info(status, json_data, pull_instruct, conditions, bring_type):
         # Every obj is a new JSON instance
         new_json = {}
         new_string = ""
+        or_string = None
+        x = 0
+        while x < counter_fields:
 
-        for x in range(counter_fields):
-            separator_event = False
-            if not x and add_separator:  # before first field starting at the second instance
-                if dynamic_string:  # not the first instance
-                    separator_event = True
+            if not or_string:
+                separator_event = False
+                if not x and add_separator:  # before first field starting at the second instance
+                    if dynamic_string:  # not the first instance
+                        separator_event = True
 
-            word_str = pull_instruct[x]
+                word_str = pull_instruct[x]
+            else:
+                word_str = or_string        # Continue with the OR substring
+                or_string = None
+
+            x += 1
+
+            offset_or = word_str.find("]:[")  # Test if this is an OR string: i.e. "[tags][name]:[tags][host]"
+            if offset_or > 0:
+                or_string = word_str[offset_or + 2:]  # next or option
+                word_str = word_str[:offset_or + 1]  # The first or option
 
             if word_str == "[]":
                 # Pull the policy type
@@ -496,7 +510,10 @@ def pull_info(status, json_data, pull_instruct, conditions, bring_type):
                 if ret_val:
                     break
                 if not out_value:
+                    if or_string:
+                        x -= 1      # Repeat on the OR section of the same word
                     continue        # No such data
+                or_string = None    # Value was found - or is not needed
                 if not out_json and out_value:
                     if is_max or is_min:
                         if not dynamic_string or is_replace_result(dynamic_string, out_value, is_max):    # Replace by min or max
@@ -515,7 +532,7 @@ def pull_info(status, json_data, pull_instruct, conditions, bring_type):
                     if word_str in map_control_chars.keys():
                         word_str = map_control_chars[word_str]  # replace "\\n" with "\n"
                     new_string += word_str
-
+            or_string = None  # Value was found - or is not needed
         if not ret_val:
             if out_json:
                 if len(new_json):
@@ -956,6 +973,16 @@ def get_inner(json):
             json_oject = None
 
     return json_oject
+# ======================================================================================================================
+# Test if to consider mapping policy to create the schema
+# If the schema includes '*' as a key - than the schema provides instructions, but the columns are determined by the data
+# ======================================================================================================================
+def is_consider_policy_schema(policy):
+    if policy and "mapping" in policy and "schema" in policy["mapping"] and not '*' in  policy["mapping"]["schema"]:
+        ret_val = True
+    else:
+        ret_val = False
+    return ret_val
 # ======================================================================================================================
 # Get the entries within the object
 # ======================================================================================================================
