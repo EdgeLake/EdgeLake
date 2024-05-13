@@ -4,11 +4,10 @@ License, v. 2.0. If a copy of the MPL was not distributed with this
 file, You can obtain one at http://mozilla.org/MPL/2.0/
 """
 
-import datetime
+from datetime import datetime
 import ipaddress
 import uuid
 import hashlib
-import re
 
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.process_log as process_log
@@ -20,8 +19,10 @@ for x in range (256):
     char_x = chr(x)
     if char_x == '_' or char_x == ' ' or char_x == '-' or char_x == '.' or char_x == '/' or char_x == '\\' or char_x == ':':
         char_y = '_'
+    elif (char_x >= 'A' and char_x <= 'Z'):
+        char_y = char_x.lower()
     else:
-        if (char_x >= 'A' and char_x <= 'Z') or  (char_x >= 'a' and char_x <= 'z') or (char_x >= '0' and char_x <= '9'):
+        if (char_x >= 'a' and char_x <= 'z') or (char_x >= '0' and char_x <= '9'):
            continue                 # No need to translate
 
         char_y = "0x%02x" % x    # The string showing x in hex
@@ -56,7 +57,9 @@ data_types_unifier_ = {
 quotation_data_types_ = {
     "varchar"   : True,     # Default val requires quotations
     "char"      : True,     # Default val requires quotations
-    "string"      : True,     # Default val requires quotations
+    "character" : True,     # Default val requires quotations
+    "string"    : True,     # Default val requires quotations
+    "str"       : True,     # Default val requires quotations
     "date"      : False,    # default may be a time function like now() and not requiring quotation
     "time"      : False,    # default may be a time function like now() and not requiring quotation
     "timestamp" : False,    # default may be a time function like now() and not requiring quotation
@@ -102,6 +105,13 @@ url_chars_ = {  "20": ' ',
 
 hex_digits_ = "0123456789abcdef"
 
+skip_chars_ = {
+    ' ' :  1,
+    '\t' : 1,
+    '\r' : 1,
+    '\n' : 1,
+}
+
 # -------------------------------------------------------------------------
 #   Check if a string is hexadecimal
 # -------------------------------------------------------------------------
@@ -143,6 +153,14 @@ def is_quotation_required(data_type, str_val):
     else:
         ret_val = False        # Not needed
     return ret_val
+# -------------------------------------------------------------------------
+#   Test if quotation is required on data value
+#   The case of now() does not need to be tested
+# -------------------------------------------------------------------------
+def is_add_quotation(data_type, data_val):
+    if len(data_val) and data_val[0] == "\"":
+        return False        # Quotation is on the string. For example, blob file name appears with quotation
+    return  data_type in quotation_data_types_
 
 # -------------------------------------------------------------------------
 #   Transform time to seconds
@@ -225,11 +243,16 @@ def reset_str_chars( source_str ):
 # ======================================================================================================================
 # Remove control chars (replace with space) - keep printable chars
 # Replace_chars is a dictionary to replace key with value
+# If fix_json is True, make bool value lower case and remove comma at the end of the string
 # ======================================================================================================================
-def replace_string_chars(remove_control_chars, src_str, replace_chars):
+def replace_string_chars(remove_control_chars, src_str, replace_chars, fix_json = False):
     offset = 0
     new_str = ""
+    is_string = False
     for index, ch in enumerate(src_str):
+
+        if ch == '"':
+            is_string = not is_string
 
         if replace_chars and ch in replace_chars.keys():
             # ch is a key in the dictionary
@@ -239,11 +262,19 @@ def replace_string_chars(remove_control_chars, src_str, replace_chars):
             # ch is a control char
             new_str += (src_str[offset:index] + ' ')  # replace char with space
             offset = index + 1
-
+        elif fix_json and not is_string:
+            if ch.isupper():
+                new_str += (src_str[offset:index] + ch.lower())  # replace char with space
+                offset = index + 1
     if offset:
         new_str += src_str[offset:]
     else:
         new_str = src_str
+
+    if fix_json:
+        new_str = new_str.strip()   # remove leading and trailing spaces
+        if new_str and new_str[-1] == ',':
+            new_str = new_str[:-1]  # Remove the comma at the end
 
     return new_str
 
@@ -380,51 +411,54 @@ def check_timestamp(line: str):
     str_length = len(line)
 
     if str_length > 10:
-        if line[-3] == ':' and (line[-6] == '+' or line[-6] == '-') and line[-2:].isnumeric() and  line[-5:-3].isnumeric():
-            # UTC offset format like 2011-11-04T00:05:23+04:00
-            line = line[:-6]
-            str_length -= 6
-
-        if line[-1] == 'Z':
-            # remove the Z char
-            date_length = str_length - 1
+        if line[-6] == '+' and datetime.strptime(line, '%m/%d/%Y %I:%M:%S %p %z'):
+            ret_val = True
         else:
-            date_length = str_length
+            if line[-3] == ':' and (line[-6] == '+' or line[-6] == '-') and line[-2:].isnumeric() and  line[-5:-3].isnumeric():
+                # UTC offset format like 2011-11-04T00:05:23+04:00
+                line = line[:-6]
+                str_length -= 6
 
-        if line[4] == '-' and line[7] == '-' and line[date_length - 1].isdigit():
-            if date_length >= 27:
-                date_length = 26  # the function strptime doesn't take 27 chars
-            if line[10] == 'T':
-                # Remove the 'T' - Format like '2019-10-11T17:13:39.0430145Z'
-                date_str = line[:10] + " " + line[11:date_length]
+            if line[-1] == 'Z':
+                # remove the Z char
+                date_length = str_length - 1
             else:
+                date_length = str_length
+
+            if line[4] == '-' and line[7] == '-' and line[date_length - 1].isdigit():
+                if date_length >= 27:
+                    date_length = 26  # the function strptime doesn't take 27 chars
+                if line[10] == 'T':
+                    # Remove the 'T' - Format like '2019-10-11T17:13:39.0430145Z'
+                    date_str = line[:10] + " " + line[11:date_length]
+                else:
 
 
-                # test utc offset - example:  2021-11-04 00:05:23+04:00
-                if line[-6] == '+' and int(line[-2:]) >=0 and int(line[-5:-3]) >=0:
-                    date_length -= 6
+                    # test utc offset - example:  2021-11-04 00:05:23+04:00
+                    if line[-6] == '+' and int(line[-2:]) >=0 and int(line[-5:-3]) >=0:
+                        date_length -= 6
 
-                date_str = line[:date_length]
+                    date_str = line[:date_length]
 
-            if date_length == 19:
-                # no milliseconds
-                try:
-                    datetime.datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')  # returns this format if line is correct
-                    ret_val = True
-                except ValueError as err:
-                    pass
-                except:
-                    pass
-            elif date_length > 19 and date_str[19] == '.' and len(date_str) >= 21 and len(date_str) <= 27:
-                # if longer than 26 characters: '2019-10-11T18:02:48.0370025Z'
-                try:
-                    datetime.datetime.strptime(date_str,
-                                               '%Y-%m-%d %H:%M:%S.%f')  # returns this format if line is correct
-                    ret_val = True
-                except ValueError as err:
-                    pass
-                except:
-                    pass
+                if date_length == 19:
+                    # no milliseconds
+                    try:
+                        datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')  # returns this format if line is correct
+                        ret_val = True
+                    except ValueError as err:
+                        pass
+                    except:
+                        pass
+                elif date_length > 19 and date_str[19] == '.' and len(date_str) >= 21 and len(date_str) <= 27:
+                    # if longer than 26 characters: '2019-10-11T18:02:48.0370025Z'
+                    try:
+                        datetime.strptime(date_str,
+                                                   '%Y-%m-%d %H:%M:%S.%f')  # returns this format if line is correct
+                        ret_val = True
+                    except ValueError as err:
+                        pass
+                    except:
+                        pass
     return ret_val
 
 
@@ -442,7 +476,7 @@ def set_subsecond_six(timestamp: str):
 def check_date(line: str):
     if len(line) == 10 and line[4] == '-' and line[7] == '-':
         try:
-            datetime.datetime.strptime(line, '%Y-%m-%d')
+            datetime.strptime(line, '%Y-%m-%d')
         except ValueError as err:
             ret_val = False
         except:
@@ -465,7 +499,7 @@ def check_time(line: str):
        False if not
     """
     try:
-        datetime.datetime.strptime(line.split(".")[0], '%H:%M:%S')
+        datetime.strptime(line.split(".")[0], '%H:%M:%S')
     except:
         return False
     else:
@@ -564,7 +598,7 @@ def cmd_line_to_list_with_json(status: process_status, command: str, brackets_le
                 if ch == '{':
                     index, counter_left, counter_right = find_parentheses_offset(command, index, '{', '}', None, counter_left, counter_right)
                 else:
-                    index, counter_left, counter_right = find_parentheses_offset(command, index, '[', ']', '[', counter_left, counter_right)
+                    index, counter_left, counter_right = find_parentheses_offset(command, index, '[', ']', '[:', counter_left, counter_right)
 
                 if index == -1:
                     # no matching:
@@ -661,7 +695,7 @@ def cmd_line_to_list_with_json(status: process_status, command: str, brackets_le
 
         if ch == '(' and length > index + 1:
 
-            end_offset, count_left, count_right = find_parentheses_offset(command, index + 1, '(', ')', ignore_char = None, left_counter = 1, right_counter = 0)
+            end_offset, count_left, count_right = find_parentheses_offset(command, index + 1, '(', ')', ignore_chars = None, left_counter = 1, right_counter = 0)
             if count_left != count_right:
                 status.add_error("Missing closing parenthesis with statement: %s" % command[index:])
                 words_list = None
@@ -928,19 +962,26 @@ def make_single_space_string(source: str):
 # Get offset to substring based on matching parentheses
 # starting point is the first parenthesis
 # ======================================================================================================================
-def find_parentheses_offset(test_str, from_offset, open_char, close_char, ignore_char = None, left_counter = 0, right_counter = 0):
+def find_parentheses_offset(test_str, from_offset, open_char, close_char, ignore_chars = None, left_counter = 0, right_counter = 0):
     stop_offset = len(test_str)
 
     counter_left = left_counter
     counter_right = right_counter
     position = -1
+    skip_char = False
     for offset in range(from_offset, stop_offset):
+        if skip_char:
+            skip_char = False
+            continue
         if test_str[offset] == open_char:
             counter_left += 1
         elif test_str[offset] == close_char:
             counter_right += 1
-            if ignore_char and offset <  (stop_offset - 1) and test_str[offset + 1] == ignore_char:
+            if ignore_chars and offset <  (stop_offset - 1) and test_str[offset + 1] in ignore_chars:
                 # ignore_char is a char after the closing char - to allow [operator][id] to be a single string
+                if test_str[offset + 1] != open_char:
+                    # This is the case of an OR string: [tags][name]:[tags][host] returned as : "[tags][name]:[tags][host]"
+                    skip_char = True
                 continue
         if counter_left == counter_right:
             position = offset
@@ -974,6 +1015,42 @@ def is_sub_array(source_array, offset, sub_array):
         return False
     return source_array[offset:offset + test_length] == sub_array
 
+# ======================================================================================================================
+# For a given string, determine if enclosed in the specified parenthesis.
+# Used to determine the type of structure represented by the string: { } represents a dictionary and [ ] for a list.
+# Ignore trailing \r\n
+# Returns dict or list or none
+# ======================================================================================================================
+def get_str_obj(tested_str):
+
+    if tested_str:
+        str_len = len(tested_str)
+        if str_len > 1:
+            first_char = tested_str[0]
+            last_char = tested_str[-1]
+            if first_char == '{' or first_char == '[': # Dictionary or list
+                if first_char == '{' and last_char == '}':
+                    return "dict"
+                elif first_char == '[' and last_char == ']':
+                    return "list"
+
+            offset_first = 0
+            while first_char in skip_chars_:
+                offset_first += 1
+                if offset_first >= str_len:
+                    return "none"
+                first_char = tested_str[offset_first]
+            offset_last = 1     # -1 is the last char
+            while last_char in skip_chars_:
+                offset_last += 1
+                if (offset_last + offset_first + 1) >= str_len:
+                    return "none"
+                last_char = tested_str[-offset_last]
+            if first_char == '{' and last_char == '}':
+                return "dict"
+            elif first_char == '[' and last_char == ']':
+                return "list"
+    return "none"
 
 # ======================================================================================================================
 # Get word length - return length to space or end of line
@@ -1480,11 +1557,12 @@ def get_equal_value(test_str, key):
                 value = subentry
     return value
 
-
-# =====================================================================================Are you joni=================================
-# Replace space and dot in a string to underline
-# Make lower case
-# ======================================================================================================================
-def unify_name(input_string):
-    new_string = re.sub(r'[ .-:/\\]', '_', input_string).lower()
-    return new_string
+# =======================================================================================================================
+# Test Unix timestamp, representing the number of seconds that have elapsed since the Unix epoch (January 1, 1970, 00:00:00 UTC). T
+# =======================================================================================================================
+def is_valid_timestamp(timestamp):
+    try:
+        datetime.utcfromtimestamp(int(timestamp))
+        return True
+    except:
+        return False

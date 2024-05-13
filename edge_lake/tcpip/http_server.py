@@ -1332,7 +1332,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
             # Stream and delete the file
             ret_val = utils_io.stream_to_browser(status, stream_file, self.wfile, True)
         else:
-            status.add_error("Error with file that is streamed to the app: %s" % stream_file)
+            status.add_error(f"Error with file that is streamed to the app: {stream_file}")
             ret_val = process_status.File_open_failed
 
         return ret_val

@@ -130,6 +130,10 @@ def map_columns(status: process_status, dbms_name, table_name, tsd_name, tsd_id,
                                         column_value = utils_columns.local_to_utc(column_value)  # CHANGE to UTC
                             column_value = "\'" + utils_data.replace_string_chars(True, column_value,
                                                                                   {'\'': '`', '"': '`'}) + "\'"
+                        else:
+                            # Char and varchar
+                            column_value = "\'" + utils_data.replace_string_chars(True, column_value,
+                                                                                  {'\'': '`', '"': '`'}) + "\'"
                 elif isinstance(column_value, int):
                     time_presence = True  # This row has time value
                     if column_type.startswith("timestamp"):
@@ -174,7 +178,7 @@ def get_value_ignore_case(json_entry, key, attr_names_map):
             if not key in attr_names_map:   # The key can be in upper case or using a dot or a minus sign or a space
                 # create a mapping between a lower case to the way it is represented in the JSON entry
                 for json_key in json_entry.keys():
-                    new_key = utils_data.unify_name(json_key)
+                    new_key = utils_data.reset_str_chars(json_key)
                     attr_names_map[new_key] = json_key  # Keep a mapping between lower to the format in the dictionary
 
             # If a dictionary exists or just created

@@ -232,7 +232,7 @@ def create_table_sql(table_name: str, columns: dict, with_tsd_info:bool):
         if name.isdigit():
             column_name = "_" + name
         else:
-            column_name = utils_data.unify_name(name)
+            column_name = utils_data.reset_str_chars(name)
         column_val = val.lower()
         create_table += column_string % (column_name, column_val)
         if "uuid" in column_val and uuid_id is False:
