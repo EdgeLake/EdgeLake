@@ -12,6 +12,7 @@ import edge_lake.dbms.partitions as partitions
 import edge_lake.generic.utils_io as utils_io
 import edge_lake.generic.utils_columns as utils_columns
 import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.process_log as process_log
 import edge_lake.cmd.member_cmd as member_cmd
@@ -29,7 +30,7 @@ MAX_COL_LENGTH_ = 1000
 def get_columns_list(status: process_status, dbms_name: str, table_name: str, instruct):
     columns = []
 
-    if instruct and "schema" in instruct["mapping"].keys():
+    if utils_json.is_consider_policy_schema(instruct): # star means - use the data
         # Get the names of the participating columns from the schema in the instructions
         policy_to_columns_list(status, dbms_name, table_name, instruct, columns)
     else:
@@ -114,17 +115,21 @@ def map_columns(status: process_status, dbms_name, table_name, tsd_name, tsd_id,
                     else:
                         value_presence = True  # A value which is not set as default
                         if column_type.startswith("timestamp"):
-                            if len(column_value) > 10:
-                                if column_value[-6] == '+' or column_value[-6] == '-':
-                                    # Using utcoffset: for example: '2021-11-04T00:05:23+04:00'
-                                    # Details: https://en.wikipedia.org/wiki/UTC_offset
-                                    utcoffset = utils_columns.time_iso_format(column_value)
-                                    if utcoffset:
-                                        column_value = utcoffset
-                                elif column_value[10] != 'T':
-                                    column_value = utils_columns.local_to_utc(column_value)  # CHANGE to UTC
-                        column_value = "\'" + utils_data.replace_string_chars(True, column_value,
-                                                                              {'\'': '`', '"': '`'}) + "\'"
+                            if column_value.isdigit():
+                                # Unix timestamp, representing the number of seconds that have elapsed since the Unix epoch (January 1, 1970, 00:00:00 UTC).
+                                column_value = "\'" + utils_columns.seconds_to_date(int(column_value)) + "\'"
+                            else:
+                                if len(column_value) > 10:
+                                    if column_value[-6] == '+' or column_value[-6] == '-':
+                                        # Using utcoffset: for example: '2021-11-04T00:05:23+04:00'
+                                        # Details: https://en.wikipedia.org/wiki/UTC_offset
+                                        utcoffset = utils_columns.time_iso_format(column_value)
+                                        if utcoffset:
+                                            column_value = utcoffset
+                                    elif column_value[10] != 'T':
+                                        column_value = utils_columns.local_to_utc(column_value)  # CHANGE to UTC
+                            column_value = "\'" + utils_data.replace_string_chars(True, column_value,
+                                                                                  {'\'': '`', '"': '`'}) + "\'"
                 elif isinstance(column_value, int):
                     time_presence = True  # This row has time value
                     if column_type.startswith("timestamp"):
@@ -294,7 +299,7 @@ def map_json_list_to_sql(status: process_status, tsd_name, tsd_id, dbms_name, ta
         ret_val = True
 
     if ret_val:
-        if policy:
+        if utils_json.is_consider_policy_schema(policy):
             ret_code = mapping_policy.validate(status, policy)
             if ret_code:
                 err_msg = f"Error in mapping policy structure with dbms: '{dbms_name}' and table: '{table_name}'"

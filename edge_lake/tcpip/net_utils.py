@@ -299,6 +299,16 @@ def get_tcp_info(soc):
     buffsize = soc.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
     utils_print.output("Socket buff size: %u" % buffsize, True)
 
+# =======================================================================================================================
+# Get socket info of peer node and return as ip"port string
+# =======================================================================================================================
+def get_peer_name(clientSoc):
+    try:
+        peer_info = clientSoc.getpeername()
+        peer_name = f"{peer_info[0]}:{peer_info[1]}"
+    except:
+        peer_name = "Failed to determine peer name"
+    return peer_name
 
 # =======================================================================================================================
 # Get socket status using netstat
