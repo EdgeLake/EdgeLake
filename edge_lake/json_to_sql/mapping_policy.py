@@ -818,7 +818,7 @@ def add_column_to_list(status, insert_list, index, bring_attr_name, data_type, a
                 # Organize as a string
                 if attr_constant:
                     insert_list.append(attr_constant + "\"" + attr_name + "\":" + column_val_str + "}")
-                elif data_type == "timestamp":
+                elif utils_data.is_add_quotation(data_type, column_val_str):
                     insert_list.append("{\"" + attr_name + "\":\"" + column_val_str + "\"}")    # added because of now()
                 else:
                     insert_list.append( "{\"" + attr_name + "\":" + column_val_str + "}" )
@@ -827,7 +827,7 @@ def add_column_to_list(status, insert_list, index, bring_attr_name, data_type, a
                 insert_list.append( { attr_name : column_val_str })
         else:
             if is_dest_string:      # is_dest_string - if True, returns a list of JSON strings, if False, returns a list of JSON objects
-                if data_type == "timestamp":
+                if utils_data.is_add_quotation(data_type, column_val_str):
                     insert_list[index] = insert_list[index][:-1] + "," + "\"" + attr_name + "\":\"" + column_val_str + "\"}"
                 else:
                     insert_list[index] = insert_list[index][:-1] + "," + "\"" + attr_name + "\":" + column_val_str + "}"

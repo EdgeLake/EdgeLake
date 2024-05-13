@@ -57,7 +57,9 @@ data_types_unifier_ = {
 quotation_data_types_ = {
     "varchar"   : True,     # Default val requires quotations
     "char"      : True,     # Default val requires quotations
-    "string"      : True,     # Default val requires quotations
+    "character" : True,     # Default val requires quotations
+    "string"    : True,     # Default val requires quotations
+    "str"       : True,     # Default val requires quotations
     "date"      : False,    # default may be a time function like now() and not requiring quotation
     "time"      : False,    # default may be a time function like now() and not requiring quotation
     "timestamp" : False,    # default may be a time function like now() and not requiring quotation
@@ -151,6 +153,14 @@ def is_quotation_required(data_type, str_val):
     else:
         ret_val = False        # Not needed
     return ret_val
+# -------------------------------------------------------------------------
+#   Test if quotation is required on data value
+#   The case of now() does not need to be tested
+# -------------------------------------------------------------------------
+def is_add_quotation(data_type, data_val):
+    if len(data_val) and data_val[0] == "\"":
+        return False        # Quotation is on the string. For example, blob file name appears with quotation
+    return  data_type in quotation_data_types_
 
 # -------------------------------------------------------------------------
 #   Transform time to seconds

@@ -9591,7 +9591,7 @@ def get_statistics(status, io_buff_in, cmd_words, trace):
 # Transforms a function to a date-time string
 #'examples':
 #   get datetime utc '2021-03-10 22:10:01.0' + 5 minutes
-#   date_str = get datetime utc 'datetime now() + 3 days\n'
+#   date_str = get datetime utc 'now() + 3 days\n'
 #   get datetime local date(\'now\',\'start of month\',\'+1 month\',\'-1 day\', \'-2 hours\', \'+2 minuts\')',
 #   get datetime local date('now','start of month','+1 month','-1 day', '-2 hours', '+2 minutes')
 # =======================================================================================================================
@@ -9604,7 +9604,7 @@ def _to_datetime(status, io_buff_in, cmd_words, trace):
     timezone = cmd_words[offset + 2]
 
     time_words, time_string = utils_sql.process_date_time(cmd_words, 3, True)
-    if time_words + 3 == words_count:
+    if time_words and  time_string:
         ret_val = process_status.SUCCESS
         if timezone != "utc":
             if utils_columns.is_valid_timezone(timezone):
