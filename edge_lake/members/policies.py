@@ -77,8 +77,8 @@ table_attr = [
 
 mapping_schema_attr = [
     # attr name * attr type * child attributes * default value * must exists *  is Unique
-    ("script", list,      None,              None,           False,         False, None),
-    ("bring",     str,        None,              None,           False,         False, None),
+    ("script",    list,      None,              None,           False,         False, None),
+    ("bring",     [str, list],        None,              None,           False,         False, None),
     ("type",      str,        None,              None,           True,          False, None),
     ("root",      bool,       None,              None,           False,         False, None),
     ("blob",      bool,       None,              None,           False,         False, None),
@@ -332,7 +332,7 @@ def test_key_val(status, policy_type, policy_obj, root_key_val, blockchain_file)
                 break
 
             root_key = entry[0]
-            root_val_type = entry[1]      # The data type needed
+            root_val_types = entry[1]      # The data type needed
             child_key_val = entry[2]
             default_val = entry[3]
             must_exists = entry[4]
@@ -367,11 +367,19 @@ def test_key_val(status, policy_type, policy_obj, root_key_val, blockchain_file)
                 if ret_val:
                     break
 
-
-            if root_val_type and not isinstance(val, root_val_type):    # Null value skips the type validation
-                status.add_keep_error("Wrong data type for the attribute '%s:%s' in the policy '%s' (requires %s)" % (root_key, str(val), policy_type, str(root_val_type) ))
-                ret_val = process_status.Wrong_policy_structure
-                break
+            if root_val_types:
+                if not isinstance(root_val_types, list):
+                    root_val_types = [root_val_types]
+                # Test that one of the data types works
+                needed_type = False
+                for val_type in root_val_types:
+                    if isinstance(val, val_type):    # Null value skips the type validation
+                        needed_type = True
+                        break
+                if not needed_type:
+                    status.add_keep_error("Wrong data type for the attribute '%s:%s' in the policy '%s' (requires %s)" % (root_key, str(val), policy_type, str(val_type) ))
+                    ret_val = process_status.Wrong_policy_structure
+                    break
 
             if child_key_val:
                 # Test the child entries

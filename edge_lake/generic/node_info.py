@@ -45,6 +45,8 @@ no_assigned_cli_ = {        # Commands that are not send using the remote CLI
                             }
 }
 
+prompt_sign_ = "EL"
+
 # =======================================================================================================================
 # is with destination - commands are executed locally even with assigned CLI
 # =======================================================================================================================
@@ -157,19 +159,17 @@ def set_assigned_cli(target_nodes):
 # =======================================================================================================================
 def get_prompt():
 
-    name = node_name_
-
     if queue_msg_:
         # Changed to True with unread messages -> show the + sign
-        if name:
-            prompt = "\rAL " + name + " +> "
+        if node_name_:
+            prompt = f"\r{prompt_sign_} {node_name_} +> "
         else:
-            prompt = "\rAL +> "       # Add + sign for messages is queue
+            prompt = f"\r{prompt_sign_} +> "       # Add + sign for messages is queue
     else:
-        if name:
-            prompt = "\rAL " + name + " > "
+        if node_name_:
+            prompt = f"\r{prompt_sign_} {node_name_} > "
         else:
-            prompt = "\rEL > "
+            prompt = f"\r{prompt_sign_} > "
 
     if peer_nodes_:
         prompt += (peer_nodes_ + " >> ")

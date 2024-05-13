@@ -780,7 +780,7 @@ def process_bring(status, json_data, cmd_words, offset, bring_methods):
         if cmd_words[words_count - offset_condition - 1] == 'and':
             offset_condition += 1  # another condition
 
-    if not offset_condition and cmd_words[-3] == "separator":
+    if not offset_condition and len(cmd_words) > 2 and cmd_words[-3] == "separator":
         # No where conditions: Example: blockchain get table bring [dbms] separator = \n
         offset_condition = words_count - 3
 
