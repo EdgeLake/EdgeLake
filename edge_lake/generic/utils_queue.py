@@ -65,7 +65,7 @@ class MsgQueue():
         self.index = 0
         self.static_queue = queue
     # =======================================================================================================================
-    # Flag the user if there is data in the queue using the command prompt (switch between AL > to AL +>)
+    # Flag the user if there is data in the queue using the command prompt (switch between EL > to AL +>)
     # =======================================================================================================================
     def update_prompt(self, data_in_buff):
         if node_info.queue_msg_ != data_in_buff:

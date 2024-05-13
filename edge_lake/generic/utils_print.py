@@ -390,6 +390,17 @@ def print_prompt():
 
 def get_new_line_counter():
     return new_line_counter
+
+
+def print_list(the_list: list):
+    index = 1
+    for entry in the_list:
+        output(str(index).ljust(40) + " : " + entry, False)
+        output("\r\n", False)
+        index = index + 1
+    output('EL > ', False)
+
+
 # --------------------------------------------------------------------
 # Print the values in a dictionary
 # --------------------------------------------------------------------

@@ -780,7 +780,7 @@ def process_bring(status, json_data, cmd_words, offset, bring_methods):
         if cmd_words[words_count - offset_condition - 1] == 'and':
             offset_condition += 1  # another condition
 
-    if not offset_condition and len(cmd_words) > 2 and cmd_words[-3] == "separator":
+    if not offset_condition and cmd_words[-3] == "separator":
         # No where conditions: Example: blockchain get table bring [dbms] separator = \n
         offset_condition = words_count - 3
 
@@ -8104,7 +8104,6 @@ def _run_grpc_client(status, io_buff_in, cmd_words, trace):
                 "dbms": ("str", False, True, True),        # DBMS name (if not provided in the policy)
                 "table": ("str", False, True, True),       # Table name (if not provided in a policy)
                 "ingest": ("bool", False, False, True),    # False value means that AnyLog is not updated - default is True
-                "reconnect" : ("bool", False, False, True),    # True value - reconnect automatically if connection lost - default is False
                 "prep_dir": ("str", False, False, True),
                 "watch_dir":("str", False, False, True),
                 "err_dir":  ("str", False, False, True),
@@ -9591,7 +9590,7 @@ def get_statistics(status, io_buff_in, cmd_words, trace):
 # Transforms a function to a date-time string
 #'examples':
 #   get datetime utc '2021-03-10 22:10:01.0' + 5 minutes
-#   date_str = get datetime utc 'now() + 3 days\n'
+#   date_str = get datetime utc 'datetime now() + 3 days\n'
 #   get datetime local date(\'now\',\'start of month\',\'+1 month\',\'-1 day\', \'-2 hours\', \'+2 minuts\')',
 #   get datetime local date('now','start of month','+1 month','-1 day', '-2 hours', '+2 minutes')
 # =======================================================================================================================
@@ -9604,7 +9603,7 @@ def _to_datetime(status, io_buff_in, cmd_words, trace):
     timezone = cmd_words[offset + 2]
 
     time_words, time_string = utils_sql.process_date_time(cmd_words, 3, True)
-    if time_words and  time_string:
+    if time_words + 3 == words_count:
         ret_val = process_status.SUCCESS
         if timezone != "utc":
             if utils_columns.is_valid_timezone(timezone):
@@ -9703,7 +9702,7 @@ def _suggest_create(status, io_buff_in, cmd_words, trace):
 
     file_name = params.get_value_if_available(cmd_words[2 + index])
 
-    create_table_stmt = suggest_create_table(status, file_name, "", False, policy, None)
+    create_table_stmt = suggest_create_table(status, file_name, "", False, policy)
     if create_table_stmt == "":
         ret_val = process_status.ERR_process_failure  # failed to suggest a create statement
     else:

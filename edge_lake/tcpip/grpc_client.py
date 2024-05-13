@@ -200,29 +200,8 @@ service HandleCli {
         request_msg - the request Message                                   - CliRequest
         response_msg - the response Message                                 - ResponseStatus
 '''
-
 # ----------------------------------------------------------------------
 def subscribe(dummy: str, conditions: dict, conn:str, proto_dir:str, proto_name:str, connection_id:str, policy_id:str, mapping_policy:dict):
-    '''
-    conditions - the user provided data
-    conn - IP and Port of target
-    proto_dir - directory with .proto and the compiled files
-    proto_name - procto file name
-    connection_id - conn.proto_name
-    policy_id - the mapping policy id
-    mapping_policy - the json policy
-    '''
-
-    is_reconnect = conditions["reconnect"] if "reconnect" in conditions else False
-    while 1:
-        ret_val = process_grpc(conditions, conn, proto_dir, proto_name, connection_id, policy_id, mapping_policy)
-        if ret_val != process_status.ERR_process_failure or not is_reconnect:
-            break   # Exit or an error which is not connection error
-        # Wait and Try again
-        time.sleep(3)       #Wait for the gRPC server to restart
-
-# ----------------------------------------------------------------------
-def process_grpc(conditions: dict, conn:str, proto_dir:str, proto_name:str, connection_id:str, policy_id:str, mapping_policy:dict):
     '''
     conditions - the user provided data
     conn - IP and Port of target
@@ -331,7 +310,6 @@ def process_grpc(conditions: dict, conn:str, proto_dir:str, proto_name:str, conn
 
 
     process_log.add_and_print("event", exit_msg + f" [{process_status.get_status_text(ret_val)}]")
-    return ret_val
 
 # ----------------------------------------------------------------------
 # Create a gRPC channel against another machine.

@@ -740,23 +740,21 @@ def process_message( topic, user_id, user_msg):
                 if not user_msg:
                     process_log.add("Error", f"MQTT missing message data with topic '{topic}'")
                     ret_val = process_status.MQTT_not_in_json
-                else:
-                    struct_type = utils_data.get_str_obj(user_msg)  # Returns "dict" or "list" or "none"
-                    if struct_type == "dict":
-                        json_msg = utils_json.str_to_json(user_msg)
-                        if not json_msg:
-                            process_log.add("Error", f"MQTT message is not in JSON format (Failed to map string to JSON)")
-                            ret_val = process_status.MQTT_not_in_json
-                    elif struct_type == "list":
-                        json_list = utils_json.str_to_list(user_msg)
-                        if not json_list:
-                            process_log.add("Error", f"MQTT format error (Failed to map string to JSON List)")
-                            ret_val = process_status.MQTT_not_in_json
-                        else:
-                            json_msg = None
-                    else:
-                        process_log.add("Error", f"MQTT message format is not recognized (data assigned to topic '{topic}')")
+                elif user_msg[0] == '{' and  user_msg[-1] == '}':
+                    json_msg = utils_json.str_to_json(user_msg)
+                    if not json_msg:
+                        process_log.add("Error", f"MQTT message is not in JSON format (Failed to map string to JSON)")
                         ret_val = process_status.MQTT_not_in_json
+                elif user_msg[0] == '[' and user_msg[-1] == ']':
+                    json_list = utils_json.str_to_list(user_msg)
+                    if not json_list:
+                        process_log.add("Error", f"MQTT format error (Failed to map string to JSON List)")
+                        ret_val = process_status.MQTT_not_in_json
+                    else:
+                        json_msg = None
+                else:
+                    process_log.add("Error", f"MQTT message format is not recognized (data assigned to topic '{topic}')")
+                    ret_val = process_status.MQTT_not_in_json
 
 
                 if not ret_val:
@@ -1051,8 +1049,6 @@ def get_msg_data(status, topic, topic_info, message):
                     # A list of values
                     values_list = utils_json.str_to_list(attr_val)
                     if not values_list:
-                        if is_optional:
-                            continue  # ignore this value
                         status.add_error("Failed to map MQTT message list to AnyLog format- from topic: %s and message: %s" % (topic, message))
                         ret_val = process_status.MQTT_data_err
                         break

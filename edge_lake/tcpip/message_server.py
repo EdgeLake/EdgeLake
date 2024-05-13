@@ -1144,8 +1144,7 @@ def send_msg(server_type, clientSoc, message_data):
             clientSoc.sendall(message_data)
         except:
             errno, value = sys.exc_info()[:2]
-            peer_name = net_utils.get_peer_name(clientSoc)
-            err_msg = f"{server_type} at {peer_name} failed to receive a reply message from local broker: {str(errno)} : {str(value)}"
+            err_msg = "{0} Server failed to send a messgae: {1} : {2}".format(server_type, str(errno), str(value))
             process_log.add("Error", err_msg)
             ret_val = process_status.MQTT_server_error
             break
@@ -1262,7 +1261,7 @@ def count_event(msg_protocol, msg_ip, msg_event_name, ret_code, details):
         info_stat[1] = int(time.time())
 
 # ----------------------------------------------------------------
-# Get info to support AnyLog command - "get local broker"
+# Get info to support AnyLog command - "get messages"
 # ----------------------------------------------------------------
 def show_info():
 
@@ -1408,12 +1407,8 @@ def rceive_data(status, mem_view, params, clientSoc, ip_in, port_in, thread_buff
                     remote_ip = "Not Recognized"
                     remote_port = 0
                 msg_data = msg_get_bytes(mem_view, 0, 100)
-                if msg_data:
-                    data_prefix = " ..."       # A flag to indicate if all data is printed
-                    msg_data = msg_data.replace("\n","\\n").replace("\r", "\\r")    # Remove \n\r from the 100 bytes
-                else:
-                    msg_data = ""   # Replace None
-                    data_prefix = ""
+                data_prefix = " ..." if msg_data[-1] != "" else ""       # A flag to indicate if all data is printed
+                msg_data = msg_data.replace("\n","\\n").replace("\r", "\\r")    # Remove \n\r from the 100 bytes
                 utils_print.output(f"[Message Broker Received {length} Bytes] [Source: {remote_ip}:{remote_port}] [Data: {msg_data}{data_prefix}]", True)
 
             if not length:

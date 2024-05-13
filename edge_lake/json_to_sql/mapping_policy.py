@@ -237,17 +237,15 @@ def apply_policy_schema(status, source_dbms, source_table, policy_inner, policy_
                 if ret_val:
                     break
                 if value:
-                    dbms_name = utils_data.reset_str_chars(value)
+                    dbms_name = utils_data.unify_name(value)
 
             if not table_name:
                 # Get table name if specified in the policy or from the JSON data using bring command
-
-
                 ret_val, value = get_value_by_key(status, "table", policy_inner, json_data, policy_id)
                 if ret_val:
                     break
                 if value:
-                    table_name = utils_data.reset_str_chars(value)
+                    table_name = utils_data.unify_name(value)
 
             if not dbms_name or not table_name:
                 err_str = "DBMS" if not dbms_name else "Table"
@@ -288,58 +286,12 @@ def process_event(status, readings, policy_inner, policy_id, dbms_name, table_na
 
     working_policy = None
 
-    if not "schema" in policy_inner:
-        status.add_error(f"Missing 'schema' in policy {policy_id}")
-        return [process_status.Wrong_policy_structure, None]
-
     schema = policy_inner["schema"]
 
-    secondary_index = 0                # Counter if * is used to add all columns
     for index, data_entry in enumerate(readings):  # data_entry is one reading from a list of readings
 
         for attr_name, attr_data in schema.items():
             # Go over all the columns in the schema and extract the data
-
-            if attr_name == '*':
-                # bring all columns
-                if isinstance(attr_data, dict) and "bring" in attr_data:
-                    bring_list = attr_data["bring"]
-                    if isinstance(bring_list, list):
-                        # Bring all the columns
-                        for bring_key in bring_list:
-                            # Get all columns in the root level or in a subtree rooted by the values in the list.
-                            # Example:
-                            # "schema" : {
-                            #           "*": {
-                            #               "type": "*",
-                            #               "bring": ["*"]  # Bring can be #    "bring": ["fields", "tags"]
-                            #                }
-                            if bring_key == '*' or (isinstance(data_entry, dict) and bring_key in data_entry):
-                                if bring_key == '*':
-                                    input_columns = data_entry
-                                else:
-                                    input_columns = data_entry[bring_key]   # The attribute values to include
-                                if isinstance(input_columns, dict):
-                                    for attr_name, column_val in input_columns.items():
-                                        data_type = type(column_val).__name__
-                                        ret_val, unified_data_type = utils_data.unify_data_type(status, data_type)
-                                        if ret_val:
-                                            break
-
-                                        # add column to the relational table
-                                        col_str = attr_name if bring_key == '*' else  f"{bring_key}_{attr_name}"    # Extend the name if pulled from a sub key
-                                        column_name = utils_data.reset_str_chars(col_str)
-                                        ret_val = add_column_to_list(status, insert_list, index + secondary_index,column_name, unified_data_type, column_val, None, is_dest_string)
-                                        if ret_val:
-                                            break
-
-                            if ret_val:
-                                break
-                if ret_val:
-                    break
-                secondary_index += 1  # Count rows added by *
-                continue
-
 
             if isinstance(attr_data, dict):
                 attr_list = [attr_data]  # Make a list with one attribute
@@ -476,7 +428,7 @@ def process_event(status, readings, policy_inner, policy_id, dbms_name, table_na
                     break
 
                 # add column to the relational table
-                ret_val = add_column_to_list(status, insert_list, index + secondary_index, attr_name, unified_data_type, column_val, None, is_dest_string)
+                ret_val = add_column_to_list(status, insert_list, index, attr_name, unified_data_type, column_val, None, is_dest_string)
                 if ret_val:
                     break
 
@@ -496,12 +448,15 @@ def get_value_by_key(status, key, json_policy, json_data, policy_id):
 
     if key in json_policy:
         ret_str = json_policy[key]
-        if len(ret_str) >= 8 and ret_str[:5] == "bring" and (ret_str[5] == ' ' or ret_str[5] == '['):
-            cmd_words, left_brackets, right_brakets = utils_data.cmd_line_to_list_with_json(status, ret_str, 0, 0)  # a list with words in command line
-            ret_val, value = member_cmd.process_bring(status, [json_data], cmd_words, 1, 0)
+        ret_val, bring_key = get_bring_key(status, ret_str, policy_id)
+        if not ret_val:
+            if bring_key:
+                ret_val, ret_str = utils_json.get_policy_val(status, json_data, policy_id, bring_key, str, True, True)
+                value = ret_str if not ret_val else None
+            else:
+                value = ret_str     # Not a bring command
         else:
-            ret_val = process_status.SUCCESS  # No such attr
-            value = ret_str
+            value = None
     else:
         ret_val = process_status.SUCCESS        # No such attr
         value = None
@@ -637,12 +592,8 @@ def get_applied_val(status, applied_func, attr_val):
     if attr_val:
 
         if applied_func == "epoch_to_datetime":
-            # Convert Epoch to datetime
-            if attr_val and attr_val.isdigit():
-                value = utils_columns.epoch_to_date_time(attr_val)
-            else:
-                # Keep source value if not epoch
-                value = attr_val
+            # Convert Epoch to datetiime
+            value = utils_columns.epoch_to_date_time(attr_val)
         elif applied_func == "json_dump":
             # Convert into a JSON-formatted string
             try:
@@ -818,7 +769,7 @@ def add_column_to_list(status, insert_list, index, bring_attr_name, data_type, a
                 # Organize as a string
                 if attr_constant:
                     insert_list.append(attr_constant + "\"" + attr_name + "\":" + column_val_str + "}")
-                elif utils_data.is_add_quotation(data_type, column_val_str):
+                elif data_type == "timestamp":
                     insert_list.append("{\"" + attr_name + "\":\"" + column_val_str + "\"}")    # added because of now()
                 else:
                     insert_list.append( "{\"" + attr_name + "\":" + column_val_str + "}" )
@@ -827,7 +778,7 @@ def add_column_to_list(status, insert_list, index, bring_attr_name, data_type, a
                 insert_list.append( { attr_name : column_val_str })
         else:
             if is_dest_string:      # is_dest_string - if True, returns a list of JSON strings, if False, returns a list of JSON objects
-                if utils_data.is_add_quotation(data_type, column_val_str):
+                if data_type == "timestamp":
                     insert_list[index] = insert_list[index][:-1] + "," + "\"" + attr_name + "\":\"" + column_val_str + "\"}"
                 else:
                     insert_list[index] = insert_list[index][:-1] + "," + "\"" + attr_name + "\":" + column_val_str + "}"
