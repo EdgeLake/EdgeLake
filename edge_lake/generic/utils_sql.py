@@ -106,7 +106,7 @@ def rep_value_as_int( value ):
 # Represent a value as a bool
 # -----------------------------------------------------------
 def rep_value_as_bool( value ):
-    if value[0] == 'T' or value[0] == 't':
+    if value and (value[0] == 'T' or value[0] == 't'):
         rep_val = "true"
     else:
         rep_val = "false"

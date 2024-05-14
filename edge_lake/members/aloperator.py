@@ -148,9 +148,9 @@ def run_operator(dummy: str, conditions: dict):
     if config.master_node:
         config.platform = "master"
     else:
-        is_blockchain = interpreter.get_one_value(conditions, "blockchain")
-        if is_blockchain:
-            config.platform = "blockchain"
+        platform = interpreter.get_one_value(conditions, "blockchain")
+        if platform:
+            config.platform = platform
 
     config.company_name = interpreter.get_one_value(conditions, "company")
 
@@ -922,10 +922,13 @@ def add_table_owner(status, metadata_cluster_id, config, ip, port, company_name,
 
         if not ret_val:
             if config.platform == "master":
+                master = [config.master_node]
                 platform = None     # not using a blockchain
             else:
+                master = None
                 platform = [config.platform]
-            ret_val = member_cmd.blockchain_insert_all(status, mem_view, policy, True, config.blockchain_file, [config.master_node], platform, False)
+
+            ret_val = member_cmd.blockchain_insert_all(status, mem_view, policy, True, config.blockchain_file, master, platform, False)
 
     return ret_val
 

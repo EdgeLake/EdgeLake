@@ -1212,7 +1212,7 @@ def stream_to_browser(status, stream_file, rest_wfile, delete_flag):
             rest_wfile.write(video_file.read())
     except:
         errno, value = sys.exc_info()[:2]
-        err_msg = "Failed to stream to the REST Socket with error #%u: %s" % (errno, str(value))
+        err_msg = f"Failed to stream to the REST Socket with error #{str(errno)}: {str(value)}"
         status.add_error(err_msg)
         ret_val = process_status.ERR_write_stream
     else:
@@ -1235,7 +1235,7 @@ def read_from_stream(status, io_stream, content_length):
         data = io_stream.read(content_length)
     except:
         errno, value = sys.exc_info()[:2]
-        err_msg = "Failed to read from stream with error #%u: %s" % (errno, str(value))
+        err_msg = f"Failed to read from stream with error {str(errno)}: {value}"
         status.add_error(err_msg)
         ret_val = process_status.ERR_write_stream
 

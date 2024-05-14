@@ -12,6 +12,7 @@ import edge_lake.dbms.partitions as partitions
 import edge_lake.generic.utils_io as utils_io
 import edge_lake.generic.utils_columns as utils_columns
 import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.process_log as process_log
 import edge_lake.cmd.member_cmd as member_cmd
@@ -29,7 +30,7 @@ MAX_COL_LENGTH_ = 1000
 def get_columns_list(status: process_status, dbms_name: str, table_name: str, instruct):
     columns = []
 
-    if instruct and "schema" in instruct["mapping"].keys():
+    if utils_json.is_consider_policy_schema(instruct): # star means - use the data
         # Get the names of the participating columns from the schema in the instructions
         policy_to_columns_list(status, dbms_name, table_name, instruct, columns)
     else:
@@ -63,9 +64,9 @@ def map_columns(status: process_status, dbms_name, table_name, tsd_name, tsd_id,
     currentt_utc = "\'" + utils_columns.get_current_utc_time() + "\'"
 
     insert_list = []
+    attr_names_map = {}  # Map the keys in the JSON entry to lower
 
     for entry in json_data:
-        upper_lower_map = {}  # Map the keys in the JSON entry to lower
         column_array = []
         time_presence = False
         value_presence = False
@@ -87,9 +88,9 @@ def map_columns(status: process_status, dbms_name, table_name, tsd_name, tsd_id,
             else:
                 if isinstance(attribute_name, list):
                     column_value = get_value_by_function(attribute_name, entry,
-                                                         upper_lower_map)  # Apply the function in the attribute name to get the column value
+                                                         attr_names_map)  # Apply the function in the attribute name to get the column value
                 else:
-                    column_value = get_value_ignore_case(entry, attribute_name, upper_lower_map)
+                    column_value = get_value_ignore_case(entry, attribute_name, attr_names_map)
                     if column_type == "varchar" and len(column_value) > MAX_COL_LENGTH_:
                         # Put the blob in file ot a database and replace the column with the ID to the blob
                         if dbms_name and table_name:
@@ -114,17 +115,25 @@ def map_columns(status: process_status, dbms_name, table_name, tsd_name, tsd_id,
                     else:
                         value_presence = True  # A value which is not set as default
                         if column_type.startswith("timestamp"):
-                            if len(column_value) > 10:
-                                if column_value[-6] == '+' or column_value[-6] == '-':
-                                    # Using utcoffset: for example: '2021-11-04T00:05:23+04:00'
-                                    # Details: https://en.wikipedia.org/wiki/UTC_offset
-                                    utcoffset = utils_columns.time_iso_format(column_value)
-                                    if utcoffset:
-                                        column_value = utcoffset
-                                elif column_value[10] != 'T':
-                                    column_value = utils_columns.local_to_utc(column_value)  # CHANGE to UTC
-                        column_value = "\'" + utils_data.replace_string_chars(True, column_value,
-                                                                              {'\'': '`', '"': '`'}) + "\'"
+                            if column_value.isdigit():
+                                # Unix timestamp, representing the number of seconds that have elapsed since the Unix epoch (January 1, 1970, 00:00:00 UTC).
+                                column_value = "\'" + utils_columns.seconds_to_date(int(column_value)) + "\'"
+                            else:
+                                if len(column_value) > 10:
+                                    if column_value[-6] == '+' or column_value[-6] == '-':
+                                        # Using utcoffset: for example: '2021-11-04T00:05:23+04:00'
+                                        # Details: https://en.wikipedia.org/wiki/UTC_offset
+                                        utcoffset = utils_columns.time_iso_format(column_value)
+                                        if utcoffset:
+                                            column_value = utcoffset
+                                    elif column_value[10] != 'T':
+                                        column_value = utils_columns.local_to_utc(column_value)  # CHANGE to UTC
+                            column_value = "\'" + utils_data.replace_string_chars(True, column_value,
+                                                                                  {'\'': '`', '"': '`'}) + "\'"
+                        else:
+                            # Char and varchar
+                            column_value = "\'" + utils_data.replace_string_chars(True, column_value,
+                                                                                  {'\'': '`', '"': '`'}) + "\'"
                 elif isinstance(column_value, int):
                     time_presence = True  # This row has time value
                     if column_type.startswith("timestamp"):
@@ -154,7 +163,7 @@ def map_columns(status: process_status, dbms_name, table_name, tsd_name, tsd_id,
 # ==================================================================
 # Given a Key - Get value from JSON - ignore Upper Lower Case
 # ==================================================================
-def get_value_ignore_case(json_entry, key, upper_lower_map):
+def get_value_ignore_case(json_entry, key, attr_names_map):
     # First try without mapping to lowere case
     try:
         value = json_entry[key]
@@ -166,15 +175,16 @@ def get_value_ignore_case(json_entry, key, upper_lower_map):
         else:
             # Test if a mapping dictionary exists
             value = ""
-            if not len(upper_lower_map):
+            if not key in attr_names_map:   # The key can be in upper case or using a dot or a minus sign or a space
                 # create a mapping between a lower case to the way it is represented in the JSON entry
                 for json_key in json_entry.keys():
-                    upper_lower_map[
-                        json_key.lower()] = json_key  # Keep a mapping between lower to the format in the dictionary
+                    new_key = utils_data.reset_str_chars(json_key)
+                    attr_names_map[new_key] = json_key  # Keep a mapping between lower to the format in the dictionary
+
             # If a dictionary exists or just created
-            if len(upper_lower_map):
-                if key in upper_lower_map.keys():
-                    json_key = upper_lower_map[key]
+            if len(attr_names_map):
+                if key in attr_names_map.keys():
+                    json_key = attr_names_map[key]
                     if json_key in json_entry.keys():  # try again with the upper case key
                         value = json_entry[json_key]
     return value
@@ -293,7 +303,7 @@ def map_json_list_to_sql(status: process_status, tsd_name, tsd_id, dbms_name, ta
         ret_val = True
 
     if ret_val:
-        if policy:
+        if utils_json.is_consider_policy_schema(policy):
             ret_code = mapping_policy.validate(status, policy)
             if ret_code:
                 err_msg = f"Error in mapping policy structure with dbms: '{dbms_name}' and table: '{table_name}'"

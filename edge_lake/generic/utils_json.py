@@ -53,6 +53,7 @@ bring_types_ = {
 
 pattern_bring = re.compile('[ []{}:"]')  # Find any of these occurrences - to void the bring
 
+
 # =======================================================================================================================
 # Validate Policy Structure
 # =======================================================================================================================
@@ -109,7 +110,38 @@ def to_string(json_obj):
         return ""
 
     return json_str
+# =======================================================================================================================
+# Compare 2 policies
+# =======================================================================================================================
+def compare_policies(policy_1, policy_2):
 
+    policy_type = get_policy_type(policy_1)
+    if len(policy_1) != 1 or len (policy_2) != 1:
+        reply = f"A compared policy is with incorrect format"
+    else:
+        if not policy_type in policy_2:
+            reply = f"Compared policies are not with the same type"
+        else:
+            inner_1 = policy_1[policy_type]
+            inner_2 = policy_2[policy_type]
+
+            set_keys_1 = set(inner_1.keys())
+            set_keys_2 = set(inner_2.keys())
+            keys_only_in_policy1 = set_keys_1 - set_keys_2
+            keys_only_in_policy2 = set_keys_2 - set_keys_1
+            common_keys = (set_keys_1 & set_keys_2)
+
+            different_values = [(key, inner_1[key], inner_2[key]) for key in common_keys if inner_1[key] != inner_2[key]]
+
+            report = {
+                "keys_only_in_policy1": list(keys_only_in_policy1),
+                "keys_only_in_policy2": list(keys_only_in_policy2),
+                "different_values": different_values
+            }
+
+            reply = to_formatted_string(json_obj=report, intent_bytes=4)
+
+    return reply
 # =======================================================================================================================
 # Map a JSON object to a string - formatted.
 # =======================================================================================================================
@@ -161,7 +193,7 @@ def str_to_json(data: str):
 
     if fix_json:
         modified = change_json_data(data)
-        modified = utils_data.replace_string_chars(True, modified, None)
+        modified = utils_data.replace_string_chars(True, modified, None, True)
         try:
             json_object = json.loads(modified, strict=False)
         except ValueError as error:
@@ -340,7 +372,7 @@ def get_bring_type(status, bring_word):
     if is_bring("table", bring_type):
         # Always add the JSON bit if the table bit is set - because data is pulled in JSON and converted to table
         bring_type |= bring_types_["json"]
-        bring_type |= bring_types_["null"]      # Add null keys to the json
+        bring_type |= bring_types_["null"]      # Add null keys  the json
 
     return [bring_type, sort_fields]
 
@@ -442,14 +474,27 @@ def pull_info(status, json_data, pull_instruct, conditions, bring_type):
         # Every obj is a new JSON instance
         new_json = {}
         new_string = ""
+        or_string = None
+        x = 0
+        while x < counter_fields:
 
-        for x in range(counter_fields):
-            separator_event = False
-            if not x and add_separator:  # before first field starting at the second instance
-                if dynamic_string:  # not the first instance
-                    separator_event = True
+            if not or_string:
+                separator_event = False
+                if not x and add_separator:  # before first field starting at the second instance
+                    if dynamic_string:  # not the first instance
+                        separator_event = True
 
-            word_str = pull_instruct[x]
+                word_str = pull_instruct[x]
+            else:
+                word_str = or_string        # Continue with the OR substring
+                or_string = None
+
+            x += 1
+
+            offset_or = word_str.find("]:[")  # Test if this is an OR string: i.e. "[tags][name]:[tags][host]"
+            if offset_or > 0:
+                or_string = word_str[offset_or + 2:]  # next or option
+                word_str = word_str[:offset_or + 1]  # The first or option
 
             if word_str == "[]":
                 # Pull the policy type
@@ -465,7 +510,10 @@ def pull_info(status, json_data, pull_instruct, conditions, bring_type):
                 if ret_val:
                     break
                 if not out_value:
+                    if or_string:
+                        x -= 1      # Repeat on the OR section of the same word
                     continue        # No such data
+                or_string = None    # Value was found - or is not needed
                 if not out_json and out_value:
                     if is_max or is_min:
                         if not dynamic_string or is_replace_result(dynamic_string, out_value, is_max):    # Replace by min or max
@@ -484,7 +532,7 @@ def pull_info(status, json_data, pull_instruct, conditions, bring_type):
                     if word_str in map_control_chars.keys():
                         word_str = map_control_chars[word_str]  # replace "\\n" with "\n"
                     new_string += word_str
-
+            or_string = None  # Value was found - or is not needed
         if not ret_val:
             if out_json:
                 if len(new_json):
@@ -925,6 +973,16 @@ def get_inner(json):
             json_oject = None
 
     return json_oject
+# ======================================================================================================================
+# Test if to consider mapping policy to create the schema
+# If the schema includes '*' as a key - than the schema provides instructions, but the columns are determined by the data
+# ======================================================================================================================
+def is_consider_policy_schema(policy):
+    if policy and "mapping" in policy and "schema" in policy["mapping"] and not '*' in  policy["mapping"]["schema"]:
+        ret_val = True
+    else:
+        ret_val = False
+    return ret_val
 # ======================================================================================================================
 # Get the entries within the object
 # ======================================================================================================================

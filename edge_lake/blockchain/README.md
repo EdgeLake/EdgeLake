@@ -9,9 +9,9 @@
 
 3. Switch Rinkeby Test Network
 
-4.  In a new tab open [Etherium Remix](https://remix.ethereum.org/) & switch to classic view 
+4.  In a new tab open [Etherium Remix](https://remix.ethereum.org/) & switch to classic view
 
-5. Update [code](AnyLog.sol) to: 
+5. Update [code](alethereum/AnyLog2.sol) to: 
 ```
 pragma experimental ABIEncoderV2;
 pragma solidity>=0.6.0;

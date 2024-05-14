@@ -116,7 +116,6 @@ def blockchain_write(status: process_status, file_name: str, policy: dict, is_mu
 
     return ret_val
 
-
 # ==================================================================
 # Given an object, check if it's a dictionary or not. If not, 
 # try converting it into a dictionary.

@@ -79,7 +79,7 @@ def data_archiver(dummy: str, conditions: dict):
             #  Archiver terminated - or global termination
             break
 
-        trace_level = member_cmd.commands["run publisher"]['trace']
+        trace_level = member_cmd.commands["run blobs archiver"]['trace']
 
         ret_val = file_info.set_file_name_metadata(status, file_name)
 

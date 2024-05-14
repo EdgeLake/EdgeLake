@@ -30,6 +30,8 @@ class BlockchainNode(ABC):
         self.gas_read = 0            # Payment for a read process
         self.gas_write = 0          # payment for a write process
 
+        self.chain_id = 0
+
         self.connection = None
         self.senderAccount = None
         self.connected = False
@@ -63,6 +65,17 @@ class BlockchainNode(ABC):
         self.gas_read = gas_read
     def set_gas_write(self, gas_write):
         self.gas_write = gas_write
+    # -------------------------------------------------------------
+    # a unique identifier assigned to a specific network like Sepolia
+    # Goerli chain ID : 5,
+    # SEPOLIA chain ID : 11155111,
+    # -------------------------------------------------------------
+    def set_chain_id(self, chain_id):
+        self.chain_id = chain_id
+
+    def get_chain_id(self):
+        return self.chain_id
+
     # -------------------------------------------------------------
     # Return the connection URL
     # -------------------------------------------------------------
@@ -105,7 +118,7 @@ class BlockchainNode(ABC):
             contract = interpreter.get_one_value(conditions, "contract")
             gas_read = interpreter.get_one_value_or_default(conditions, "gas_read", 0)
             gas_write = interpreter.get_one_value_or_default(conditions, "gas_write", 0)
-
+            chain_id = interpreter.get_one_value_or_default(conditions, "chain_id", 0)
 
             if private_key:
                 self.set_private_key(private_key)
@@ -121,6 +134,9 @@ class BlockchainNode(ABC):
                     self.set_gas_read(gas_read)
                 if gas_write:
                     self.set_gas_write(gas_write)
+
+                if chain_id:
+                    self.set_chain_id(chain_id) # a unique identifier assigned to a specific blockchain network
 
         elif platform_name == "hyperledger":
             # Hyperledger params

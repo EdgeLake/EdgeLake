@@ -170,8 +170,9 @@ class SQLITE:
             if self.autocommit:
                 # Use autocommit
                 conn.isolation_level = None  # None for autocommit mode - https://docs.python.org/2/library/sqlite3.html
-        except Error as e:
-            status.add_error("Failed to connect to SQLITE to create database '%s'" % self.connect_name)
+        except:
+            errno, value = sys.exc_info()[:2]
+            status.add_error("Failed to connect to SQLITE to create database '%s': '%s'" % (self.connect_name, str(value)))
             conn = None
 
         return conn

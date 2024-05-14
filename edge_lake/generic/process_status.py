@@ -11,6 +11,7 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import traceback
 import threading
+import sys
 
 import edge_lake.cmd.member_cmd as member_cmd
 import edge_lake.generic.process_log as process_log
@@ -319,6 +320,7 @@ Expired_license = 236
 NOT_SUPPORTED = 237
 ERR_msg_format = 238
 Wrong_address = 239
+ERR_json_search_key = 240
 
 # note that message is at location of error value + 1 (exit is set at 0)
 status_text = ["Terminating node processes",
@@ -562,6 +564,7 @@ status_text = ["Terminating node processes",
                "Not Supported in this Version",         # 237
                "Error in message format",               # 238
                "Wrong Address",                         # 239
+               "Error in JSON search key",              # 240
                ]
 
 
@@ -1191,4 +1194,37 @@ def stack_to_location(stack_trace):
         code_location = None
     if code_location:
         utils_print.output_box(code_location)
+# =======================================================================================================================
+# get the trace stack of all threads
+# Examples:
+# get stack trace
+# get stack trace main
+# get stack trace main tcp
+# =======================================================================================================================
+def get_stack_traces(status, io_buff_in, cmd_words, trace):
 
+    reply = ""
+    if len(cmd_words) == 3:
+        bring_all = True # get stack trace - get all
+    else:
+        bring_all = False   # Only the maned threads
+        bring_names = cmd_words[3:]     # get thread names
+    try:
+        for thread in threading.enumerate():
+            if not bring_all:
+                thread_name = thread.name.lower()
+                get_stack = False
+                for entry in bring_names:
+                    if entry in thread_name:
+                        # Bring the stack of this thread
+                        get_stack = True
+                        break
+                if not get_stack:
+                    continue        # Ignore the stack of this thread
+
+            reply += f"\r\nStack trace of Thread {thread.name}:"
+            frame = sys._current_frames().get(thread.ident)
+            reply += ''.join(traceback.format_stack(frame))
+    except:
+        reply = "Failed to retrieve stack"
+    return [SUCCESS, reply]

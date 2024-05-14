@@ -163,7 +163,7 @@ def pull_data(user_id:int, conditions: dict):
 
     ip = interpreter.get_one_value(conditions, "ip")
     port = interpreter.get_one_value(conditions, "port")
-    auto_offset_reset = interpreter.get_one_value_or_default(conditions, "offset", "latest") # can be set to earliest
+    auto_offset_reset = interpreter.get_one_value_or_default(conditions, "reset", "latest") # can be set to earliest
 
     ret_val = process_status.SUCCESS
 

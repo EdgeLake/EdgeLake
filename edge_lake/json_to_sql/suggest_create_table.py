@@ -9,6 +9,7 @@ import os
 
 import edge_lake.generic.utils_io as utils_io
 import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.process_status as process_status
 import edge_lake.json_to_sql.mapping_policy as mapping_policy
 
@@ -65,6 +66,7 @@ def get_column_types(status: process_status, data: list):
 #  Based on the data in a file, determine the data type
 # ==================================================================
 def set_column_name_type(status, columns, column_name, column_value):
+
     if column_name in columns.keys():
         existing_type = columns[column_name]
     else:
@@ -72,14 +74,13 @@ def set_column_name_type(status, columns, column_name, column_value):
 
     if isinstance(column_name, str) and len(column_name):
 
-        data_type = get_column_type_by_value(column_value)  # send the columndata from the row to determine the data type
+        data_type = get_column_type_by_value(column_name, column_value)  # send the columndata from the row to determine the data type
 
         if existing_type:
             if existing_type != data_type:
                 resolved_type = resolve_data_type(existing_type, data_type)
                 if resolved_type != existing_type:
-                    columns[
-                        column_name] = resolved_type  # change data type (because of a value that does not fit the existing type)
+                    columns[column_name] = resolved_type  # change data type (because of a value that does not fit the existing type)
         else:
             columns[column_name] = data_type
 
@@ -135,7 +136,7 @@ def resolve_data_type(one_type, second_type):
 # ==================================================================
 # Determine the data type based on a string value
 # ==================================================================
-def get_column_type_by_value(value):
+def get_column_type_by_value(column_name, value):
 
     if isinstance(value, bool):
         # Needs to be before INT as bool is a subclass of INT
@@ -165,6 +166,8 @@ def get_column_type_by_value(value):
             data_type = 'TIME NOT NULL DEFAULT NOW()'
         elif utils_data.check_ip_address(value) is True:
             data_type = "CIDR"
+        elif "time" in column_name and value.isdigit() and utils_data.is_valid_timestamp(value):
+            data_type = 'TIMESTAMP NOT NULL DEFAULT NOW()'
         else:
             data_len = len(value)
             if data_len <= 19 and value.find('.') != -1 and utils_data.isfloat(value):
@@ -229,7 +232,7 @@ def create_table_sql(table_name: str, columns: dict, with_tsd_info:bool):
         if name.isdigit():
             column_name = "_" + name
         else:
-            column_name = name.lower()
+            column_name = utils_data.reset_str_chars(name)
         column_val = val.lower()
         create_table += column_string % (column_name, column_val)
         if "uuid" in column_val and uuid_id is False:
@@ -267,7 +270,7 @@ def suggest_create_table(status: process_status, file_name: str, dbms_name:str, 
         status.add_error("Failed to create table: File (`%s`) doesn't exist" % file_name)
         return ""
 
-    if instructions and "schema" in instructions["mapping"].keys():
+    if utils_json.is_consider_policy_schema(instructions): # star means - use the data
         # use the Schema for the create stmt
         schema = instructions["mapping"]["schema"]
         if "table" in instructions.keys():

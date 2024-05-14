@@ -592,9 +592,10 @@ def analyze_if(status, cmd_words, offset_start, conditions_list):
         if and_or_word:
             cond_x += 1
             conditions_list.append([])
-        elif word[0] == '(':
+        elif word and word[0] == '(':
             with_paren = True
-        if word[-1] == ')':
+
+        if word and word[-1] == ')':
             need_end_or = True      # next word (after parenthesis) needs to be ANd or OR
 
         conditions_list[cond_x].append(word)
@@ -728,7 +729,7 @@ def get_value_type(status, word, json_struct):
         data_type = "unknown"
         ret_val = process_status.Unrecognized_data_type
 
-    if not ret_val and data_type == "str" and len(value) and value[0] == '[':
+    if not ret_val and data_type == "str" and len(value) and value[0] == '[' and json_struct:
         is_key, key, is_list, next_key = utils_json.make_pull_keys(value)
         if is_key:
             ret_val, new_word = utils_json.get_object_data(status, json_struct, key, False, "", False, None, False, "", False, 1)
