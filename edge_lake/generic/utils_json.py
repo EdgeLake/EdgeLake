@@ -1185,9 +1185,12 @@ def get_policy_val(status, json_obj, policy_id, key, data_type, add_type_err, ad
         value = json_obj[key]
         if data_type:
             if not isinstance(value, data_type):
-                if add_type_err:
-                    status.add_error("The value for the key '%s' in JSON object (associated to policy '%s') is not of type %s" % (key, policy_id, str(data_type)))
-                    ret_val = process_status.ERR_wrong_json_structure
+                if not value:
+                    value = "null"    # Replace empty string with "null" for all data types
+                else:
+                    if add_type_err:
+                        status.add_error("The value for the key '%s' in JSON object (associated to policy '%s') is not of type %s" % (key, policy_id, str(data_type)))
+                        ret_val = process_status.ERR_wrong_json_structure
     elif add_value_err:
         value = None
         status.add_error("The key '%s' (derived from policy '%s') is missing in JSON object" % (key, policy_id))

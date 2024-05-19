@@ -16,6 +16,30 @@ import edge_lake.generic.process_log as process_log
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_data as utils_data
 
+name_to_instance_ = {
+    "str" : str,
+    "string" : str,
+    "int" : int,
+    "bigint": int,
+    "integer" : int,
+    "float" : float,
+    "timestamp" : str,
+    "date" : str,
+    "time" : str,
+    "varchar" : str,
+    "bool" : bool,
+}
+
+def get_instance_by_name(instance_name):
+    '''
+    If instance name in the dictionary, return instance
+    '''
+    if isinstance(instance_name, str):
+        instance = name_to_instance_[instance_name] if instance_name in name_to_instance_ else None
+    else:
+        instance = None
+    return instance
+
 
 cast_to_type_ = {        # Map casting name to data type
 

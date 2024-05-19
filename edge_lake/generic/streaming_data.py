@@ -535,8 +535,8 @@ def set_thresholds(status, io_buff_in, cmd_words, trace, publisher_active):
     #                          Must     Add      Is
     #                          exists   Counter  Unique
     keywords = {
-        "dbms_name": ("str", False, False, True),
-        "table_name": ("str", False, False, True),
+        "dbms": ("str", False, False, True),
+        "table": ("str", False, False, True),
         "time": ("int.time", False, True, True),
         "volume": ("int.storage", False, True, True),
         "write_immediate" : ("bool", False, True, True),         # If delay is False (default), the data is immidiately written to the tables

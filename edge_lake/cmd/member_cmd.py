@@ -14061,6 +14061,13 @@ def set_script(status, io_buff_in, cmd_words, trace):
 
     return ret_val
 
+# --------------------------------------------------------------
+# Set Buffer threshold - include a flag to signal if Publisher is running
+# Publisher node is not allowed with write_immediate set to True
+# --------------------------------------------------------------
+def set_buff_thresholds(status, io_buff_in, cmd_words, trace):
+
+    return streaming_data.set_thresholds(status, io_buff_in, cmd_words, trace, False)   # The False value is as Publisher is not supported in EdgeLake
 
 # ------------------------------------------
 # Create a list of ip and ports representing monitored nodes
@@ -16774,6 +16781,16 @@ _set_methods = {
                             'keywords': ["streaming"],
                         }
                         },
+
+        "buffer threshold": {'command': set_buff_thresholds,
+                         'help': {
+                             'usage': "set buffer threshold where [configuration key value pairs]",
+                             'example': "set buffer threshold where dbms = al_demo and table = ping_sensor and time = 2 minutes and volume = 1MB",
+                             'text': "Configure time and volume thresholds for buffered streaming data.",
+                             'link': "blob/master/adding%20data.md#setting-and-retrieving-thresholds-for-a-streaming-mode",
+                             'keywords': ["data", "configuration", "streaming", "enterprise"],
+                         }
+                         },
 
         "port forward": {'command': set_port_forward,
                         'words_count': 19,

@@ -690,16 +690,12 @@ def bring_and_default_to_data(status, column_info, policy_id, attr_name, data_en
         ret_val, attr_val = utils_json.pull_info(status, [data_entry], bring_list, None, 0)
         if not ret_val and attr_val == "":
             # Get the default
-            ret_val, attr_val = utils_json.get_policy_val(status, column_info, policy_id, "default", None, True,  False)
+            data_type_name = column_info["type"] if "type" in column_info else None
+            data_type = utils_columns.get_instance_by_name(data_type_name)
+            ret_val, attr_val = utils_json.get_policy_val(status, column_info, policy_id, "default", data_type, True,  True)
             if not ret_val:
-
-                if attr_val == None:
-                    status.add_error(
-                        "Failed to extract value from data and no default value in policy schema, policy id: '%s'" % policy_id)
-                    ret_val = process_status.ERR_wrong_json_structure
-                else:
-                    if isinstance(attr_val, str) and attr_val == "now()":
-                        attr_val = utils_columns.get_current_utc_time()
+                if isinstance(attr_val, str) and attr_val == "now()":
+                    attr_val = utils_columns.get_current_utc_time()
 
     return [ret_val, attr_val]
 # ----------------------------------------------------------------------
