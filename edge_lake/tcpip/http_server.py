@@ -45,7 +45,9 @@ import edge_lake.generic.streaming_data as streaming_data
 import edge_lake.tcpip.net_utils as net_utils
 import edge_lake.generic.utils_threads as utils_threads
 import edge_lake.tcpip.mqtt_client as mqtt_client
+import edge_lake.tcpip.html_reply as html_reply
 from edge_lake.generic.utils_columns import get_current_time
+
 
 # REST with server and client authentication requests - https://requests.readthedocs.io/en/master/user/advanced/
 # https://requests.readthedocs.io/en/master/user/quickstart/
@@ -143,6 +145,9 @@ class http_server_info():
     node_private_key = None     # The node private key file
     lib_open_ssl = with_open_ssl_   # Test if library is loaded
     streaming_log = False       # Sets to true to enable logging
+
+def get_workers_pool():
+    return http_server_info.workers_pool
 
 def is_ssl():
     global http_server_info
@@ -412,7 +417,32 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     def write_headers_and_msg(self, status, response_code, content_type, message ):
 
-        encoded_message = message.encode(encoding='UTF-8')
+        ret_val = process_status.SUCCESS
+        html_policy = None
+        into_output = get_value_from_headers(self.al_headers, "into")   # Push the output as HTML
+
+        if not into_output:
+            encoded_message = message.encode(encoding='UTF-8')
+        else:
+            # Return HTML
+            html_info = get_value_from_headers(self.al_headers, "html")
+            if html_info:
+                if html_info.startswith("blockchain "):
+                    ret_val, html_policy = native_api.get_from_blockchain(status, html_info)
+                    if ret_val or not html_policy:
+                        encoded_message = "Failed to retrieve Ploicy using '{html_info}'".encode(encoding='UTF-8')
+                        ret_val = process_status.ERR_process_failure
+                else:
+                    html_policy, err_msg = html_reply.url_to_json(status, html_info)  # Get the user info for the HTML page
+                    if err_msg or not html_policy:
+                        encoded_message = err_msg.encode(encoding='UTF-8')
+                        ret_val = process_status.Wrong_policy_structure
+
+            if not ret_val:
+                encoded_message = html_reply.to_html(status, message, content_type, into_output, html_policy).encode(encoding='UTF-8')
+                content_type =  "text/html"
+
+
         ret_val = self.send_reply_headers(status, response_code, None, False, content_type, len(encoded_message), False, None)
         if not ret_val:
             write_ret_value = utils_io.write_encoded_to_stream(status, self.wfile, encoded_message)
@@ -1031,19 +1061,23 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                 
                 # Update commands_list with a list of commands (main command and commands placed in the msg body)
                 commands_list = []
-                ret_val, with_wait, content_type, is_select, is_stream = self.prepare_commands(status, command, commands_list)
-                
+                into_output = get_value_from_headers(self.al_headers, "into")  # Push the output as HTML
+                ret_val, with_wait, content_type, is_select, is_stream = self.prepare_commands(status, command, commands_list, into_output)
+
                 if not ret_val:
                     if with_wait:
-                        # Send the headers first
-                        self.send_reply_headers(status, REST_OK, "", True, content_type, 0, True, None)
+                        if not into_output:     # If not as HTML - HTML is organized as a single write to the caller
+                            # Send the headers first
+                            self.send_reply_headers(status, REST_OK, "", True, content_type, 0, True, None)
 
                     buff_size = int(params.get_param("io_buff_size"))
                     io_buff = bytearray(buff_size)
 
-                    ret_val = self.execute_al_commands(status, io_buff, commands_list)
 
-                j_handle = status.get_active_job_handle()
+                    ret_val = self.execute_al_commands(status, io_buff, commands_list, into_output)
+
+
+                j_handle = status.get_active_job_handle()  # Need to be done after the execution of the commands
                 if ret_val != process_status.SUCCESS and ret_val < process_status.NON_ERROR_RET_VALUE:
                     # Operator returned an error
 
@@ -1071,13 +1105,17 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                         # job instance was used
                         j_instance = job_scheduler.get_job(job_id)
                         # Mutex such that the job instance is not reused by a different thread in the query process
-                        j_instance.data_mutex_aquire('W')
+                        j_instance.data_mutex_aquire(status, 'W')
                         if j_instance.is_job_active() and j_instance.get_unique_job_id() == status.get_unique_job_id():
                             if not j_instance.is_pass_through():
-                                # Othewise the data was written to the caller
+                                # Otherwise the data was written to the caller
                                 nodes_count = j_instance.get_nodes_participating()
                                 nodes_replied = j_instance.get_nodes_replied()
                                 write_ret_value = self.local_table_query(status, j_handle, with_wait, nodes_count, nodes_replied)
+                                if into_output and not write_ret_value:
+                                    # Write the HTML including header and data
+                                    ret_val = self.write_headers_and_msg(status, REST_OK, content_type, j_handle.get_output_buff())
+
                             if j_handle.is_subset():
                                 # Reply with partial nodes
 
@@ -1091,7 +1129,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                                     # Include: IP + Port + Partition + RetCode + Text
                                     reply = utils_print.output_nested_lists(error_list, "\r\nReply errors:", ["Node IP", "Port", "Par", "Ret-Code", "Error Message"], True)
                                     write_ret_value = utils_io.write_to_stream(status, self.wfile, reply, True, True)
-                        j_instance.data_mutex_release('W')
+                        j_instance.data_mutex_release(status, 'W')
                 elif with_wait and not is_select:
                     # This is a print message returned from multiple nodes
 
@@ -1100,14 +1138,14 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                         # job instance was used
                         j_instance = job_scheduler.get_job(job_id)
                         # Mutex such that the job instance is not reused by a different thread in the query process
-                        j_instance.data_mutex_aquire('W')
+                        j_instance.data_mutex_aquire(status, 'W')
                         if j_instance.is_job_active() and j_instance.get_unique_job_id() == status.get_unique_job_id():
                             result_set = j_instance.get_nodes_print_message()
                             # raw_requestline represents ? in command:
                             # http://10.0.0.78:7849/?User-Agent=AnyLog/1.23?destination=10.0.0.78:7848?subset=true?timeout=2?command=get status
                             transfer_encoding = False if "url" in self.al_headers else True    # self.al_headers["url"] is set in header_from_raw_requestline()
                             write_ret_value = utils_io.write_to_stream(status, self.wfile, result_set, transfer_encoding, True)
-                        j_instance.data_mutex_release('W')
+                        j_instance.data_mutex_release(status, 'W')
 
                 elif is_stream:
                     # stream data to an app or browser
@@ -1139,11 +1177,12 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # 1) the main command in the header
     # 2) Include secondary commands from the body
     # =======================================================================================================================
-    def prepare_commands(self, status, command, commands_list):
+    def prepare_commands(self, status, command, commands_list, into_output):
         '''
         status - status object
         command - the command from the header
         command_list - a list to be updated with all commands
+        into_output - for example into htm - it disables pass_through
         '''
         
         with_wait = False  # No wait for a reply from a different node
@@ -1190,6 +1229,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                 # For SQL command
                 if command[:5] != "file ":
                     # No wait for file copy
+                    # if data goes to HTML, it needs to go into a file to be pulled to one HTML doc.
                     with_wait = True  # Place thread on wait for reply
 
             # Execute the command (or commands in message body)
@@ -1270,7 +1310,10 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     # Execute the commands on the command_list and the commandon the header
     # =======================================================================================================================
-    def execute_al_commands(self, status, io_buff, commands_list):
+    def execute_al_commands(self, status, io_buff, commands_list, into_output):
+        '''
+        into_output - when output is organized as HTML
+        '''
 
         ret_val = process_status.SUCCESS
 
@@ -1278,7 +1321,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
             command = entry[0]
             with_reply = entry[1]       # Indicate if the thread needs to wait for a reply (i.e. SQL query)
             if with_reply:
-                ret_val = native_api.exec_al_cmd(status, command, self.wfile)
+                ret_val = native_api.exec_al_cmd(status, command, self.wfile, into_output, 20)   # Timeout for a list of commands is the default
             else:
                 ret_val = native_api.exec_no_wait(status, command, io_buff, self.wfile)
             if ret_val:
@@ -1379,8 +1422,6 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         headers_info = request_info()
 
         headers_info.rest_status = REST_API_OK
-
-        hash_val = '0'
 
         msg_body = self.get_msg_body(status)
         ret_val, msg_data, row_counter = utils_json.make_json_rows(status, msg_body)
@@ -1691,6 +1732,7 @@ def rest_server(params: params, host: str, port: int, is_bind:bool, conditions):
     http_server_info.workers_count = interpreter.get_one_value_or_default(conditions, "threads", 5)
 
     http_server_info.workers_pool = utils_threads.WorkersPool("REST", http_server_info.workers_count, False)
+    member_cmd.set_system_pool("rest", http_server_info.workers_pool)
 
     declared_ip_port = host + ":" + str(port)
 
@@ -1738,6 +1780,8 @@ def rest_server(params: params, host: str, port: int, is_bind:bool, conditions):
         pass
 
     net_utils.remove_connection(1)      # Remove the REST connection IP/Port
+
+    member_cmd.set_system_pool("rest", None)
 
     http_server_info.workers_pool.exit()
 

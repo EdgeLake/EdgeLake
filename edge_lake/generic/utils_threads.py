@@ -447,13 +447,20 @@ class Task:
 # --------------------------------------------------------------------------------
 def get_thread_name():
     try:
-        thread_name =  threading.currentThread().getName().lower()
+        thread_name =  threading.current_thread().name.lower()
     except:
         thread_name = "not_available"
     else:
         thread_name = thread_name.replace(" ", "_")
 
     return thread_name
+
+# --------------------------------------------------------------------------------
+# Print thread message
+# --------------------------------------------------------------------------------
+def print_thread_message(message):
+    t_name = get_thread_name()
+    utils_print.output(f"\r\nThread: {t_name} Message: {message}", False)
 
 # --------------------------------------------------------------------------------
 # Get the thread number from the thread name

@@ -13,7 +13,7 @@ import edge_lake.dbms.db_info as db_info
 import edge_lake.generic.utils_io as utils_io
 import edge_lake.generic.utils_print as utils_print
 from edge_lake.generic.interpreter import get_multiple_values
-from edge_lake.generic.utils_json import str_to_json, to_string
+from edge_lake.generic.utils_json import str_to_json, to_string, str_to_list
 from edge_lake.generic.utils_columns import change_columns_values
 
 # ------------------------------------------------------------------------
@@ -32,7 +32,7 @@ def exec_sql_stmt(status, servers, dbms_name, conditions, sql_stmt, timeout):
             al_command += ("and " + conditions + " ")
         al_command += "\"" + sql_stmt + "\""
 
-        ret_val = exec_al_cmd(status, al_command, None)
+        ret_val = exec_al_cmd(status, al_command, None, None, timeout)
 
     return ret_val
 # ------------------------------------------------------------------------
@@ -56,19 +56,20 @@ def exec_no_wait(status, command, io_buff, wfile):
 # ------------------------------------------------------------------------
 # AnyLog command which is not SQL
 # ------------------------------------------------------------------------
-def exec_native_cmd(status, servers, command):
-    ret_val = exec_al_cmd(status, command, None)
+def exec_native_cmd(status, servers, command, timeout):
+    ret_val = exec_al_cmd(status, command, None, None, timeout)
     return ret_val
 
 # ------------------------------------------------------------------------
 # Call anylog command statement
 # Thread will be on wait for execution and return data
 # ------------------------------------------------------------------------
-def exec_al_cmd(status, al_command, wfile):
+def exec_al_cmd(status, al_command, wfile, into_output, timeout_sec):
     '''
     status - status object
     al_command - command or sql to execute
     wfile - output file
+    into_output - could be into HTML report
     '''
     end_job(status)  # If multiple queries are executed in the same session/report
     public_key = status.get_public_key()
@@ -80,13 +81,14 @@ def exec_al_cmd(status, al_command, wfile):
     j_handle = status.get_job_handle()
     j_handle.set_rest_caller()
     j_handle.set_output_socket(wfile)  # socket set to null will keep data in a dbms
+    if into_output:
+        j_handle.set_output_into(into_output)   #   into_output can be html
 
     command_ret_val = member_cmd.process_cmd(status, command=al_command, print_cmd=False, source_ip=None,
                                              source_port=None, io_buffer_in=io_buff)
 
     if command_ret_val == process_status.SUCCESS:
         # Wait for the reply from all the Operators
-        timeout_sec = status.get_timeout()       # Get the max time in seconds to wait for a reply
         subset = status.is_subset()
         ret_val = wait_for_reply(status, al_command, subset, timeout_sec)
 
@@ -114,11 +116,11 @@ def end_job(status):
         # job instance was used
         # mutex to avoid a case that the REST thread timesout while thread in process_reply continue to push data
         # with an error - test JOB is not used by a different thread
-        j_instance.data_mutex_aquire('W')
+        j_instance.data_mutex_aquire(status, 'W')
         if j_instance.is_job_active() and j_instance.get_unique_job_id() == status.get_unique_job_id():
             if not j_instance.get_job_handle().is_subset(): # Do not disable process with subset
                 j_instance.set_not_active()
-        j_instance.data_mutex_release('W')
+        j_instance.data_mutex_release(status, 'W')
 
 
 # =======================================================================================================================
@@ -196,12 +198,12 @@ def wait_for_reply(status, al_command, subset, timeout):
                 break
 
         # mutex to avoid a case that the REST thread timesout while thread in process_reply continue to push data
-        j_instance.data_mutex_aquire('R')
+        j_instance.data_mutex_aquire(status, 'R')
         if not j_instance.is_job_active() or j_instance.get_unique_job_id() != status_unique_id:
             ret_val = j_handle.get_process_error()  # an error while processing the replies
             if not ret_val:
                 ret_val = process_status.JOB_not_active
-        j_instance.data_mutex_release('R')
+        j_instance.data_mutex_release(status, 'R')
 
         if ret_val:
             status.add_error("REST Server exits (process failure) with command: '%s'" % al_command)
@@ -318,3 +320,28 @@ def get_sql_reply_data(status: process_status, logical_dbms: str, io_stream):
     db_info.close_cursor(status, dbms_cursor)
 
     return [ret_val, out_data]
+
+
+# =======================================================================================================================
+# Execute a blockchain command
+# Example: "blockchain get html where id = "example_html"
+# =======================================================================================================================
+def get_from_blockchain(status, bchain_cmd):
+
+    ret_val, policy = member_cmd.blockchain_get(status, bchain_cmd.split(), None, True)
+    json_policy = None
+    if not ret_val:
+        if len(policy) != 1:
+            status.add_error(f"Failed to identify the HTML policy as {len(policy)} policies were retrieved: '{bchain_cmd}'")
+            ret_val = process_status.Wrong_policy_structure
+        else:
+            json_policy = policy[0]
+    else:
+        json_policy = None
+        status.add_error(f"Failed to retrieve HTML policy using: '{bchain_cmd}'")
+        ret_val = process_status.Policy_not_in_local_file
+    return [ret_val, json_policy]
+
+
+
+

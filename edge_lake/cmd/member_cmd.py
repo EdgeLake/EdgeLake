@@ -151,6 +151,12 @@ sql_commands = {
     "create" : 1,
 }
 
+profilers_dict_ = {
+                    #  Target     Status Link to profiler
+                    #             on/off
+        "operator" : [aloperator, False, None],
+}
+
 nodes_options_ = ['operator','publisher','query','master']
 nodes_pattern_ = '|'.join(map(re.escape, nodes_options_))   # This is to quickly find node type
 commands_options_ = ["subset", "timeout"]
@@ -256,6 +262,13 @@ workers_pool = None         # Pool of workers thread
 echo_queue = None  # A message queue for buffered messages
 
 
+system_threads_pools_ = {
+    # The lists of continues system threads using a pool
+}
+
+def set_system_pool(pool_name, pool_obj):
+    system_threads_pools_[pool_name] = pool_obj
+
 # =======================================================================================================================
 # Connect a logical database to a physical database
 # 'connect dbms [db name] where type = [db type] and user = [db user] and ip = [db ip] and port = [db port] and password = [db passwd]  and memory = [true/false] and connection = [db string]
@@ -289,6 +302,8 @@ def _connect_dbms(status, io_buff_in, cmd_words, trace):
                 "memory": ("bool", False, False, True),     # True for in memory dbms
                 "connection" : ("str", False, False, True), # special connection string for the database
                 "autocommit": ("bool", False, False, True),  # change autocommit config with the underlying database
+                "unlog" : ("bool", False, False, True),     # create unlogged tables
+                "fsync": ("bool", False, False, True),  # create unlogged tables
                 }
 
     ret_val, counter, conditions = interpreter.get_dict_from_words(status, words_array,
@@ -1427,6 +1442,10 @@ def blockchain_seed_file(status, io_buff_in, cmd_words, trace, func_params):
     else:
         ret_val = process_status.ERR_command_struct
 
+    if ret_val:
+        # Because multiple nested process_cmd calls, the reset wll cause the error to be leveraged on the root process_cmd
+        status.reset_considerd_err_val()
+
     return [ret_val, None]
     # =======================================================================================================================
 # Represent the metadata in a diagram
@@ -1607,7 +1626,9 @@ def blockchain_get(status, cmd_words, blockchain_file, return_data):
                 if not output_str:
                     output_str = "[]"       # Return empty list
                 status.get_active_job_handle().set_result_set(output_str)
-            status.get_active_job_handle().signal_wait_event()  # signal the REST thread that output is ready
+            if status.is_rest_wait():
+                # Single the rest thread (that data is available) if on wait
+                status.get_active_job_handle().signal_wait_event()  # signal the REST thread that output is ready
 
         data_object = None
     else:
@@ -2223,9 +2244,48 @@ def get_goto_line(status, name_to_line, goto_name):
 
 
 # =======================================================================================================================
+# List of system threads and their status
+# get system threads
+# get system threads where pool = tcp and with_details = true and with_reset = true
+# =======================================================================================================================
+def get_system_threads(status, io_buff_in, cmd_words, trace):
+
+    global system_threads_pools_
+
+    info = ""
+    #                             Must     Add      Is
+    #                             exists   Counter  Unique
+    keywords = {"pool": ("str", False, False, True),        # The name of the pool
+                "details": ("bool", False, False, True),    # Include details
+                "reset": ("bool", False, False, True),      # Reset statistics
+                }
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
+
+    if not ret_val:
+        pool = interpreter.get_one_value_or_default(conditions, "pool", None)
+        details = interpreter.get_one_value_or_default(conditions, "details", False)
+        reset = interpreter.get_one_value_or_default(conditions, "reset", False)
+
+        if pool:
+            if pool in system_threads_pools_:
+                # A single pool
+                if  system_threads_pools_[pool]:
+                    # If not Null
+                    info += ("\r\n" + system_threads_pools_[pool].get_info(details, reset))
+            else:
+                status.add_error(f"Command 'get system threads' - Error in pool name: '{pool}'")
+                ret_val = process_status.ERR_command_struct
+        else:
+            # all pools
+            for key, pool in system_threads_pools_.items():
+                if pool:
+                    info += ("\r\n" + pool.get_info(details, reset))
+
+    return [ret_val, info]
+# =======================================================================================================================
 # List of threads running scrips and their info
 # =======================================================================================================================
-def get_threads_info(status, io_buff_in, cmd_words, trace):
+def get_user_threads(status, io_buff_in, cmd_words, trace):
     info = "Thread ID       Script\r\n" \
            "--------------- -----------------------\r\n"
 
@@ -3818,7 +3878,7 @@ def job_stop(status, io_buff_in, cmd_words):
 
         # A running job is being stopped from processing
 
-        j_instance.data_mutex_aquire('W')  # take exclusive lock
+        j_instance.data_mutex_aquire(status, 'W')  # take exclusive lock
 
         if j_instance.is_job_active():
             j_instance.set_job_status("Stopped")
@@ -3839,7 +3899,7 @@ def job_stop(status, io_buff_in, cmd_words):
             ret_val = process_status.ERR_job_id
             job_status = j_instance.get_job_status()
 
-        j_instance.data_mutex_release('W')
+        j_instance.data_mutex_release(status, 'W')
 
     else:
         ret_val = process_status.ERR_job_id
@@ -3855,13 +3915,13 @@ def job_stop(status, io_buff_in, cmd_words):
 # =======================================================================================================================
 # Stop the running Job and Signal a thread waiting to completion of a job
 # =======================================================================================================================
-def stop_job_signal_rest(error_code, job_location, unique_job_id):
+def stop_job_signal_rest(status, error_code, job_location, unique_job_id):
     j_instance = job_scheduler.get_job(job_location)
     j_handle = j_instance.get_job_handle()
     error_msg = process_status.get_status_text(error_code)  # error on the second node
     error_text = "REST thread with job[%u] ID: %u was signaled with error <%s>" % (
     job_location, unique_job_id, error_msg)
-    j_instance.data_mutex_aquire('W')  # Write Mutex
+    j_instance.data_mutex_aquire(status, 'W')  # Write Mutex
     # test thread did not timeout - or a previous process terminated the task
     if j_instance.is_job_active() and j_instance.get_unique_job_id() == unique_job_id:
         # Flag that the job is completed
@@ -3873,20 +3933,20 @@ def stop_job_signal_rest(error_code, job_location, unique_job_id):
                 # Signal REST Thread
                 process_log.add("Error", error_text)
                 j_handle.signal_wait_event()  # signal the REST thread that output is ready
-    j_instance.data_mutex_release('W')  # release the mutex that prevents conflict with the rest thread
+    j_instance.data_mutex_release(status, 'W')  # release the mutex that prevents conflict with the rest thread
 
 # =======================================================================================================================
 # Return True if allowing to return results from some nodes
 # With subset flag is set to true
 # =======================================================================================================================
-def is_with_subset(job_location, unique_job_id):
+def is_with_subset(status, job_location, unique_job_id):
     is_subset = False
     if unique_job_id:
         j_instance = job_scheduler.get_job(job_location)
-        j_instance.data_mutex_aquire('R')  # Read Mutex
+        j_instance.data_mutex_aquire(status, 'R')  # Read Mutex
         if j_instance.is_job_active() and j_instance.get_unique_job_id() == unique_job_id:
             is_subset = job_scheduler.get_job(job_location).get_job_handle().is_subset()  # return True if error from node is ignored
-        j_instance.data_mutex_release('R')
+        j_instance.data_mutex_release(status, 'R')
     return is_subset
 
 # =======================================================================================================================
@@ -3939,7 +3999,8 @@ def deliver_rows(status, io_buff_in, j_instance, receiver_id, par_id, is_pass_th
     counter_local_fields = select_parsed.get_counter_local_fields()  # the number of fields on the create stmt (or 0 for select *)
     local_fields = select_parsed.get_local_fields()  # the column name and data type of the fields in system_query database
 
-    conditions = j_instance.get_job_handle().get_conditions()
+    j_handle = j_instance.get_job_handle()
+    conditions = j_handle.get_conditions()
 
 
     destination, format_type, timezone = interpreter.get_multiple_values(conditions,
@@ -3950,7 +4011,8 @@ def deliver_rows(status, io_buff_in, j_instance, receiver_id, par_id, is_pass_th
     if is_pass_through:
         # Get the print format
         nodes_count = j_instance.get_nodes_participating()
-        output_manager = output_data.OutputManager(conditions, io_stream, False, nodes_count)
+        output_into = j_handle.get_output_into()    # If output generates HTML file
+        output_manager = output_data.OutputManager(conditions, io_stream, output_into, False, nodes_count)
         if len(casting_columns):
             # Data types changed - create a new data type list representing the output
             types_list = copy.copy(data_types_list)
@@ -4091,11 +4153,12 @@ def query_summary(status, io_buff_in, j_instance, io_stream):
     j_handle.set_query_completed()      # Flag that the query is completed such that the REST thread will not re-print the summary
 
     j_handle.stop_timer()
+    output_into = j_handle.get_output_into()  # If output generates HTML file
 
     show_stat = interpreter.get_one_value_or_default(conditions, "stat", True)
     nodes_count = j_instance.get_nodes_participating()
 
-    output_manager = output_data.OutputManager(conditions, io_stream, show_stat, nodes_count)
+    output_manager = output_data.OutputManager(conditions, io_stream, output_into, show_stat, nodes_count)
 
     ret_val = output_manager.init(status, None, None, None, None)
 
@@ -4214,7 +4277,7 @@ def query_row_by_row(status, dbms_cursor, io_buff_in, conditions, sql_time, sql_
         casting_list = select_parsed.get_casting_list()  # The list of casting functions
         casting_columns = select_parsed.get_casting_columns()
 
-        output_manager = output_data.OutputManager(conditions, j_handle.get_output_socket(), add_stat, nodes_count)
+        output_manager = output_data.OutputManager(conditions, j_handle.get_output_socket(), j_handle.get_output_into(), add_stat, nodes_count)
 
         ret_val = output_manager.init(status, select_parsed.get_source_query(), title_list, data_types_list, select_parsed.get_dbms_name())
         if ret_val:
@@ -4449,6 +4512,9 @@ def query_row_by_row(status, dbms_cursor, io_buff_in, conditions, sql_time, sql_
         j_handle.set_query_completed()  # Flag that the query is completed such that the REST thread will not re-print the summary
         if not ret_val or ret_val > process_status.NON_ERROR_RET_VALUE:
             ret_val = output_manager.finalize(status, io_buff_in, fetch_counter, dbms_time, False, True, nodes_replied)
+
+        if output_manager.is_with_result_set():
+            j_handle.set_outpu_buff(output_manager.get_result_set())
 
 
     return ret_val
@@ -6450,6 +6516,7 @@ def _exit(status, io_buff_in, cmd_words, trace):
         # wake the Rest server
         http_server.signal_rest_server()
         if workers_pool:
+            set_system_pool("query", None)
             workers_pool.exit()  # exit query threads
 
         mqtt_client.exit(0)
@@ -6624,7 +6691,7 @@ def _python(status, io_buff_in, cmd_words, trace):
 # Get policy of type 'instructions' by an ID
 # ==================================================================
 def get_instructions(status, instruct_id):
-    cmd_get_instruct = ["blockchain", "get", "mapping", "where", "id", "="]
+    cmd_get_instruct = ["blockchain", "get", "(mapping, transform)", "where", "id", "="]
     cmd_get_instruct.append(instruct_id)
     ret_val, mapping = blockchain_get(status, cmd_get_instruct, "", True)  # Get info from the blockchain
     if not ret_val:
@@ -6636,7 +6703,7 @@ def get_instructions(status, instruct_id):
         instruct = None
 
     if not instruct:
-        status.add_error("Failed to retrieve mapping instructions with id: '%s'" % instruct_id)
+        status.add_error("Failed to retrieve Mapping or Transform instructions with id: '%s'" % instruct_id)
 
     return instruct
 
@@ -6807,7 +6874,8 @@ def post_process_command(status, io_buff_in, ret_val, is_msg, is_policy, reply, 
         else:
             if status.get_active_job_handle().is_rest_caller():
                 status.get_active_job_handle().set_result_set(reply)
-                status.get_active_job_handle().signal_wait_event()  # signal the REST thread that output is ready
+                if status.is_rest_wait():   # if a REST caller is on wait for a reply from the destinations nodes
+                    status.get_active_job_handle().signal_wait_event()  # signal the REST thread that output is ready
             else:
                 if reply:
                     if is_policy:
@@ -7049,7 +7117,7 @@ def integrate_print_reply(status, is_async_io, is_subset, is_reply_msg, io_buff_
         cmd_text = message
         is_last = False if is_async_io else True        # If is_async_io then failure of message send doesnt't terminate the object
 
-    j_instance.data_mutex_aquire('R')  # Read Mutex - to test that the job is active
+    j_instance.data_mutex_aquire(status, 'R')  # Read Mutex - to test that the job is active
 
     if j_instance.is_job_active() and j_instance.get_unique_job_id() == unique_job_id:
 
@@ -7057,27 +7125,27 @@ def integrate_print_reply(status, is_async_io, is_subset, is_reply_msg, io_buff_
 
         j_instance.set_par_ret_code(receiver_id, 0, node_ret_val)
 
-    j_instance.data_mutex_release('R')
+    j_instance.data_mutex_release(status, 'R')
 
     if is_last:
         # Last block from the node received
-        j_instance.end_job_instance(unique_job_id, is_reply_msg, is_subset)
+        j_instance.end_job_instance(status, unique_job_id, is_reply_msg, is_subset)
 
 
 # =======================================================================================================================
 # Get data from Job instance which is updated by peer nodes on the peer nodes
 # The data is returned as a list or a dictionary
 # =======================================================================================================================
-def get_data_struct_from_job(job_id, unique_job_id):
+def get_data_struct_from_job(status, job_id, unique_job_id):
     j_instance = job_scheduler.get_job(job_id)
-    j_instance.data_mutex_aquire('W')  # Write Mutex
+    j_instance.data_mutex_aquire(None, 'W')  # Write Mutex
     # test thread did not timeout - or a previous process terminated the task
     if j_instance.is_job_active() and j_instance.get_unique_job_id() == unique_job_id:
         j_handle = j_instance.get_job_handle()
         assignment = j_handle.get_assignment()  # If with value - results are assigned to the assignment key
         is_dict = assignment[-2] == '{'  # Flag if output is set in a dictionary or as a list
         out_obj = j_instance.get_nodes_reply_object(is_dict)
-    j_instance.data_mutex_release('W')  # release the mutex that prevents conflict with the rest thread
+    j_instance.data_mutex_release(None, 'W')  # release the mutex that prevents conflict with the rest thread
     return utils_json.to_string(out_obj)
 # =======================================================================================================================
 # Assign values to variables - when a script is processe, assign the values provided with the scripts
@@ -7692,6 +7760,130 @@ def _map_json_to_insert(status, io_buff_in, cmd_words, trace):
 
     return ret_val
 
+
+# =======================================================================================================================
+# Get the profiler output
+# get profiler output where target = operator
+# =======================================================================================================================
+def get_profiler_output(status, io_buff_in, cmd_words, trace):
+
+    reply = None
+
+    if cmd_words[3] != "where":
+        return [process_status.ERR_command_struct, None]
+
+    operation = cmd_words[2]
+
+    if operation != "output":
+        return [process_status.ERR_command_struct, None]
+
+    #                                Must     Add      Is
+    #                                exists   Counter  Unique
+
+    keywords = {"target": ("str", True, False, True),  # i.e. target = "operator"
+
+                }
+
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
+    if ret_val:
+        # conditions not satisfied by keywords or command structure
+        return [ret_val, None]
+
+    target = interpreter.get_one_value(conditions, "target")
+
+    if not target in profilers_dict_:
+        status.add_error("Not recognized profile target: %s" % target)
+        return [process_status.ERR_command_struct, None]
+
+    process = profilers_dict_[target][0]        # Ptr to the process
+    if not process:
+        # not yet declared
+        status.add_error("Profiler not running for target: %s" % target)
+        ret_val = process_status.ERR_command_struct
+    else:
+
+        is_declared =   getattr(process, "enable_profile_")
+
+        if not is_declared:
+            ret_val = process_status.Profiler_lib_not_loaded
+        else:
+
+            if profilers_dict_[target][1]:
+                # profiler was not set to off
+                status.add_error("profiler for target: %s is at 'on' mode (switch to 'off')" % target)
+                ret_val = process_status.Profiler_call_not_in_sequence
+            else:
+
+                profiler = profilers_dict_[target][2]
+                method_to_call = getattr(process, "profiler_")
+
+                reply = method_to_call.get_profiler_results(f"{target[0].upper()}{target[1:]} Profile", profiler)
+
+    return [ret_val, reply]
+# =======================================================================================================================
+# Enable and disable the profiler
+# set profiler on where target = operator
+# =======================================================================================================================
+def set_profiler(status, io_buff_in, cmd_words, trace):
+
+    if cmd_words[3] != "where":
+        return process_status.ERR_command_struct
+
+    operation = cmd_words[2]
+
+    if operation != "on" and operation != "off":
+        return process_status.ERR_command_struct
+
+    #                                Must     Add      Is
+    #                                exists   Counter  Unique
+
+    keywords = {"target": ("str", True, False, True),   # i.e. target = "operator"
+
+                }
+
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
+    if ret_val:
+        # conditions not satisfied by keywords or command structure
+        return ret_val
+
+    target = interpreter.get_one_value(conditions, "target")
+
+    if not target in profilers_dict_:
+        status.add_error("Not recognized profile target: %s" % target)
+        return process_status.ERR_command_struct
+
+    process = profilers_dict_[target][0]        # Ptr to the process
+
+    is_declared =   getattr(process, "enable_profile_")
+
+    if not is_declared:
+        return process_status.Profiler_lib_not_loaded
+
+    if is_declared:
+        opr_name = "Start" if operation == "on" else "Stop"
+        utils_print.output_box("%s %s profiling ..." % (opr_name, target))
+
+        if operation == "on":
+            if profilers_dict_[target][1]:
+                # is already on
+                status.add_error("Repeatable calls to set profiler to 'on' for target: %s" % target)
+                return process_status.Profiler_call_not_in_sequence
+            profilers_dict_[target][1] = True   # Flag to ON
+            method_to_call = getattr(process, "profiler_")
+            profiler = method_to_call.profiler_start()
+            profilers_dict_[target][2] = profiler       # Save the active profiler
+        else:
+            # Turn off
+            if not profilers_dict_[target][1]:
+                # profiler was not turned on
+                status.add_error("profiler for target: %s is at 'off' mode" % target)
+                return process_status.Profiler_call_not_in_sequence
+            profiler = profilers_dict_[target][2]
+            method_to_call = getattr(process, "profiler_")
+            method_to_call.profiler_end(profiler)
+            profilers_dict_[target][1] = False
+
+    return ret_val
 # =======================================================================================================================
 # Identify arbitrary messages and associate streaming data with a logical database, table and a topic
 # Example: set msg rule my_rule if ip = 139.162.126.241 and header = al.sl.header.new_company.syslog then dbms = test and table = syslog and syslog = true
@@ -9549,6 +9741,37 @@ def drop_policy_from_metadata(status, io_buff_in, master_node, get_command):
 
 
 # =======================================================================================================================
+# reset statistics on one or more services
+# Example: reset stats where service = operator and topic = summary
+# =======================================================================================================================
+def reset_statistics(status, io_buff_in, cmd_words, trace):
+
+    #                                       Must    Add     Is
+    #                                       exists  Counter Unique
+    keywords = {"service":      ("str",     True,   False,  True),
+                "topic":        ("str",     True,  False,   True)
+                }
+
+    offset = get_command_offset(cmd_words)
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 3 + offset, 0, keywords, False)
+    if ret_val:
+        # conditions not satisfied by keywords or command structure
+        return ret_val
+
+    service = conditions["service"][0]
+    topic = conditions["topic"][0]
+
+    if service == "operator" and topic == "summary":
+        # Rest summary values
+        stats.reset_operator_summary()
+
+    else:
+        status.add_error(f"Wrong service and topic names: '{service}' and '{topic}'")
+        ret_val = process_status.ERR_process_failure
+
+    return ret_val
+
+# =======================================================================================================================
 # Get statistics on one or more services
 # Example: get stats where service = operator
 # Example: get stats where service = operator and topic = table
@@ -11156,7 +11379,7 @@ def next_query(status, io_buff_in, j_instance):
     # Apply the results of the leading query
     select_parsed = j_instance.get_job_info().get_select_parsed()
 
-    ret_val = select_parsed.process_leading_results()  # apply the results on the next query
+    ret_val = select_parsed.process_leading_results(status)  # apply the results on the next query
     if ret_val:
         error_msg = "Failed to process leading query for: " + select_parsed.get_generic_query()
         status.add_error(error_msg)
@@ -11287,7 +11510,7 @@ def process_all_nodes_replied(status, peer_error, node_error, code_status, j_ins
             # Wait that all messages are send, before testing j_instance.all_replied()
             time.sleep(1)
 
-    j_instance.data_mutex_aquire('W')  # take exclusive lock
+    j_instance.data_mutex_aquire(status, 'W')  # take exclusive lock
 
     if j_instance.all_replied() or (peer_error and peer_error != process_status.Empty_data_set and not j_handle.is_subset()) or node_error:
 
@@ -11300,7 +11523,7 @@ def process_all_nodes_replied(status, peer_error, node_error, code_status, j_ins
 
         if not j_instance.is_job_active() or j_instance.get_unique_job_id() != unique_job_id or (is_rest_caller and j_handle.is_signaled()):
             # Process ended by a different thread
-            j_instance.data_mutex_release('W')
+            j_instance.data_mutex_release(status, 'W')
             if peer_error:
                 ret_val = peer_error
             else:
@@ -11342,7 +11565,7 @@ def process_all_nodes_replied(status, peer_error, node_error, code_status, j_ins
                         # At least one node replied with data, otherwise, query ends
                         ret_val = next_query(status, io_buff_in, j_instance)
                         if ret_val:
-                            j_instance.data_mutex_release('W')
+                            j_instance.data_mutex_release(status, 'W')
                             return ret_val
                         completed = False
 
@@ -11380,7 +11603,7 @@ def process_all_nodes_replied(status, peer_error, node_error, code_status, j_ins
                     ret_val = process_status.Empty_data_set
 
 
-    j_instance.data_mutex_release('W')
+    j_instance.data_mutex_release(status, 'W')
 
     if name_key:
         # Execute the target query - using current query as an input to the target
@@ -11544,7 +11767,7 @@ def process_cmd(status, command, print_cmd, source_ip, source_port, io_buffer_in
 
         process_log.add("Error", header_txt + error_msg + ") " + cmd_text)  # update event log
 
-        if status.get_err_value() != error_code:
+        if status.get_considered_err_value() != error_code:
             # if equal - the error_code was set on the status objected and the error message was printed (this is a recursive call to process_cmd)
             if user_input:
                 if not first_word:  # if not assignment
@@ -11557,7 +11780,7 @@ def process_cmd(status, command, print_cmd, source_ip, source_port, io_buffer_in
                 echo_queue.add_msg("Error executing: [%s] Message: [%s]" % (' '.join(sub_str), error_msg))
             else:
                 utils_print.output(error_msg, True)  # print error message
-            status.set_err_value(error_code)
+            status.set_considerd_err_value(error_code)
 
     return error_code
 # =======================================================================================================================
@@ -11774,7 +11997,7 @@ def process_reply(status, io_buff_in):
     select_parsed = j_instance.get_job_info().get_select_parsed()
 
     # Use a read lock as a) multiple threads may update the job data and b) avoid conflict with the rest thread
-    j_instance.data_mutex_aquire('R')
+    j_instance.data_mutex_aquire(status, 'R')
 
     # test that JOB was not terminated
     if not j_instance.is_job_active() or j_instance.get_unique_job_id() != unique_job_id:
@@ -11790,7 +12013,7 @@ def process_reply(status, io_buff_in):
 
         opetrator_err = j_handle.get_operator_error_txt()
 
-        j_instance.data_mutex_release('R')  # release the mutex that prevents conflict with the rest thread
+        j_instance.data_mutex_release(status, 'R')  # release the mutex that prevents conflict with the rest thread
 
         if error_code != process_status.JOB_terminated_by_caller:
             # Not an error to be logged if the query was called to stop
@@ -11889,7 +12112,7 @@ def process_reply(status, io_buff_in):
                                              par_id)  # This call needs to be done after setting the reply data
 
     # release the read mutex
-    j_instance.data_mutex_release('R')
+    j_instance.data_mutex_release(status, 'R')
 
     if error_code or ret_val or j_instance.is_last_block(receiver_id, par_id) or code_status == 6:
         # In the case of an error, no data (code 6), or in the case of last message -> test if the JOB is completed
@@ -15434,7 +15657,7 @@ def get_databases(status, io_buff_in, cmd_words, trace):
             db_dict = db_info.get_dbms_dict()
             reply = utils_json.to_string(db_dict)
         else:
-            reply = db_info.get_dbms_list()
+            reply = db_info.get_dbms_list(status)
 
 
     return [process_status.SUCCESS, reply, out_format]
@@ -16196,6 +16419,7 @@ def set_query_pool(status, io_buff_in, cmd_words, trace):
                 ret_val = process_status.ERR_process_failure
             else:
                 workers_pool = utils_threads.WorkersPool("Query", int(workers_count))
+                set_system_pool("query", workers_pool)
                 ret_val = process_status.SUCCESS
     else:
         ret_val = process_status.ERR_command_struct
@@ -16640,6 +16864,15 @@ _reset_methods = {
                      'keywords': ["streaming"],
                  }
                  },
+        "stats": {'command': reset_statistics,
+                     'words_count': 10,
+                     'help': {
+                         'usage': "reset stats where service = [service name] and topic = [topic]",
+                         'example': "reset stats where service = operator and topic = summary",
+                         'text': "reset the statistics on the service and topic provided",
+                         'keywords': ["streaming"],
+                     }
+                     },
 
         "msg rule": {'command': message_server.reset_msg_rules,
                   'words_count': 4,
@@ -16771,11 +17004,23 @@ _reset_methods = {
 
 }
 _set_methods = {
+
+        "profiler": {'command': set_profiler,
+                     'words_min': 7,
+                     'help': {
+                         'usage': "set profiler [on/off] where target = [process name]",
+                         'example': "set profiler on where target = operator",
+                         'text': "Enable and disable profiling. Note: Profile libraries needs to be loaded per moudle using sys variables."\
+                                 "i.e.: PROFILE_OPERATOR=true",
+                         'keywords': ["debug", "profile"],
+                     }
+                     },
+
         "msg rule": {'command': set_msg_rule,
                         'words_min': 12,
                         'help': {
                             'usage': "set msg rule [rule name] if ip = [IP address] and port = [port] and header = [header text] then dbms = [dbms name] and table = [table name] and syslog = [true/false] and format = [data format] and topic = [topic name]",
-                            'example': " set msg rule my_rule if ip = 10.0.0.78 and port = 1468 then dbms = test and table = syslog and syslog = true",
+                            'example': "set msg rule my_rule if ip = 10.0.0.78 and port = 1468 then dbms = test and table = syslog and syslog = true",
                             'text': "Identify arbitrary messages and associate streaming data with a logical database, table and a topic",
                             'link' : 'blob/master/using%20syslog.md#setting-a-rule-to-accept-syslog-data',
                             'keywords': ["streaming"],
@@ -17352,6 +17597,18 @@ _query_status_methods = {
 }
 
 _get_methods = {
+
+        'profiler': {
+            'command': get_profiler_output,
+            'words_min': 7,
+            'help': {'usage': 'get profiler output where target = [target name]',
+                     'example': 'get profiler output where target = operator',
+                     'text': 'Output the profiler info',
+                     'keywords': ["debug", "profile"],
+                     },
+            'trace': 0,
+    },
+
         'stack trace': {
             'command': process_status.get_stack_traces,
             'words_min': 3,
@@ -17892,17 +18149,26 @@ _get_methods = {
                        }
                    },
 
-        "threads": {'command': get_threads_info,
+        "user threads": {'command': get_user_threads,
                   'key_only': True,
                   'help': {
-                      'usage': "get threads",
-                      'example': "get threads",
-                      'text': "Get the list of processes activated by the thread command.",
+                      'usage': "get user threads",
+                      'example': "get user threads",
+                      'text': "Get the list of processes activated by the 'thread' command.",
                       'keywords' : ["node info", "configuration"],
                     }
                   },
+        "system threads": {'command': get_system_threads,
+                     'min_words': 3,
+                     'help': {
+                         'usage': "get system threads [thread type]",
+                         'example': "get system threads\n""get system threads query",
+                         'text': "Get the list of system threads and their status.",
+                         'keywords': ["node info", "configuration", "monitor"],
+                     }
+                     },
 
-        "query mode": {'command': get_query_params,
+    "query mode": {'command': get_query_params,
                 'key_only': True,
                 'help': {
                     'usage': "get query mode",
@@ -18358,7 +18624,7 @@ _id_methods = {
 commands = {
     'connect dbms': {
         'command': _connect_dbms,
-        'help': {'usage': 'connect dbms [db name] where type = [db type] and user = [db user] and password = [db passwd] and ip = [db ip] and port = [db port] and memory = [true/false] and connection = [db string]',
+        'help': {'usage': 'connect dbms [db name] where type = [db type] and user = [db user] and password = [db passwd] and ip = [db ip] and port = [db port] and memory = [true/false] and connection = [db string] and autocommit = [true/false] and unlog = [true/false]',
                  'example': 'connect dbms test where type = sqlite\n'
                             'connect dbms sensor_data where type = psql and user = anylog and password = demo and ip = 127.0.0.1 and port = 5432',
                  'text': 'Connect to the specified dbms.\n'
@@ -18368,7 +18634,9 @@ commands = {
                          '[db passwd] - The user dbms password\n'
                          '[db port] - The database port\n'
                          '[memory] - a bool value to determine memory resident data (if supported by the database)\n'
-                         '[connection] - Database connection string\n',
+                         '[connection] - Database connection string\n'
+                         '[autocommit] - A false value groups multiple statements into a single transaction\n'
+                         '[unlog] - A true value unlogs tables to not write their changes to the WAL.',
                  'link' : 'blob/master/sql%20setup.md#connecting-to-a-local-database',
                  'keywords' : ["dbms", "configuration"],
         },

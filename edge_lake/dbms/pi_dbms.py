@@ -2159,6 +2159,13 @@ class PIDB:
 
         self.elements = None  # the root elements
 
+    # =======================================================================================================================
+    #  Return the special configuration for "get databases" command
+    # =======================================================================================================================
+    def get_config(self, status):
+
+        return ""
+
     def get_dbms_name(self):
         return self.dbms_name
 

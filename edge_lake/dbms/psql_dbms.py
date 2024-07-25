@@ -27,7 +27,39 @@ class PSQL:
         self.ip_port = ""
         self.engine_name = "psql"
         self.autocommit = True
+        self.unlogged = False       # Can set to True to avoid logging
 
+
+    # =======================================================================================================================
+    #  Return the special configuration for "get databases" command
+    # =======================================================================================================================
+    def get_config(self, status):
+
+        if self.autocommit:
+            config_str = "Autocommit On"
+        else:
+            config_str = "Autocommit Off"
+
+        if self.unlogged:
+            config_str += ", Unflagged"
+
+        db_cursor = self.get_cursor(status)
+        if db_cursor:
+            try:
+                db_cursor[1].execute("SHOW fsync;")
+                new_fsync = db_cursor[1].fetchone()
+                self.close_cursor(status, db_cursor)
+                config_str += f", Fsync {new_fsync[0]}"
+            except:
+                config_str += ", Failed to pull Fsync"
+        else:
+            config_str += ", Failed to pull Fsync"
+
+        return config_str
+
+    # =======================================================================================================================
+    #  Return the DBMS Engine Name
+    # =======================================================================================================================
     def get_engine_name(self):
         return self.engine_name
 
@@ -75,6 +107,7 @@ class PSQL:
     def get_storage_type(self):
         return "Persistent"
 
+
     # =======================================================================================================================
     #  SETUP Calls - These are issued when the database is created
     # =======================================================================================================================
@@ -99,12 +132,17 @@ class PSQL:
 
         sql_create = sql_command.replace(" double,", " double precision,")  # add "precision" if needed
 
+        if self.unlogged:
+            # replace "create table" --> "create unlogged table"
+            if sql_command[:13].upper() == "CREATE TABLE ":
+                sql_create = "CREATE UNLOGGED TABLE " + sql_command[13:]
+
         sql_create = sql_create.replace(" double)", " double precision)")  # double is last on the create stmt
 
 
         commands_array = [len(sql_create) - 1]  # No changes are needed
 
-        reply_list = [commands_array, sql_create]  # return all offset to commamds
+        reply_list = [commands_array, sql_create]  # return all offset to commands
         return reply_list
 
     # =======================================================================================================================
@@ -220,7 +258,11 @@ class PSQL:
         self.error_message = False
 
         if conditions:
+            # When autocommit is True, each individual SQL statement is treated as a separate transaction
+            # Explicit commit call is needed
             self.autocommit = interpreter.get_one_value_or_default(conditions, "autocommit", True)
+            # True menas - do not write their changes to the WAL. This reduces the I/O operations and overall system load during write operations, resulting in faster insert
+            self.unlogged = interpreter.get_one_value_or_default(conditions, "unlog", False)
 
         if not self.conn_pool:
             self.conn_pool = self.get_connection_pool(status, user, passwd, host, port, dbn)
@@ -782,7 +824,7 @@ class PSQL:
         return command
 
     # ==================================================================
-    # Given a table name, gemerate a list of column corresponding to table
+    # Given a table name, get a list of column corresponding to table
     # ==================================================================
     def get_columns_with_types(self, status: process_status, logical_dbms: str, table_name: str):
         """
@@ -952,11 +994,17 @@ class PSQL:
     # ======================================
     def get_insert_rows(self, status: process_status, dbms_name: str, table_name: str, insert_size: int,
                         column_names: list, insert_rows: list):
-        insert_statements = ""
+        insert_statements = f"INSERT INTO {table_name} VALUES"
+
+        rows_added = False
         for row in insert_rows:
             # transform from an array of columns to a comma seperated string
             if not row:
                 continue
-            insert_stmt = "INSERT INTO %s VALUES (%s);\n" % (table_name, ','.join(row))
-            insert_statements += insert_stmt
-        return insert_statements
+            if not rows_added:
+                insert_statements += f"\n({','.join(row)})"     # No Comma  before row
+                rows_added = True
+            else:
+                insert_statements += f",\n({','.join(row)})"
+
+        return insert_statements + ';'

@@ -91,7 +91,7 @@ def map_columns(status: process_status, dbms_name, table_name, tsd_name, tsd_id,
                                                          attr_names_map)  # Apply the function in the attribute name to get the column value
                 else:
                     column_value = get_value_ignore_case(entry, attribute_name, attr_names_map)
-                    if column_type == "varchar" and len(column_value) > MAX_COL_LENGTH_:
+                    if column_type == "varchar" and len(str(column_value)) > MAX_COL_LENGTH_:
                         # Put the blob in file ot a database and replace the column with the ID to the blob
                         if dbms_name and table_name:
                             ret_val, blob_file_name = mapping_policy.archive_blob_file(status, dbms_name, table_name, column_value)
@@ -134,6 +134,8 @@ def map_columns(status: process_status, dbms_name, table_name, tsd_name, tsd_id,
                             # Char and varchar
                             column_value = "\'" + utils_data.replace_string_chars(True, column_value,
                                                                                   {'\'': '`', '"': '`'}) + "\'"
+                elif isinstance(column_value, bool):
+                    pass
                 elif isinstance(column_value, int):
                     time_presence = True  # This row has time value
                     if column_type.startswith("timestamp"):

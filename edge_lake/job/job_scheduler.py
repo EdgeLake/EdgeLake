@@ -98,6 +98,7 @@ def start_new_job():
 # =======================================================================================================================
 def copy_job_handle_info(dest_handle: job_handle, src_handle: job_handle):
     dest_handle.set_output_socket(src_handle.get_output_socket())
+    dest_handle.set_output_into(src_handle.get_output_into())           # If output generates HTML file
     if src_handle.is_rest_caller():
         dest_handle.set_rest_caller()
     dest_handle.copy_cmd_conditions(src_handle.get_conditions())  # needs to be a deep copy

@@ -249,7 +249,7 @@ def get_param(key):
     except:
         if key in job_process_:
             # Get the data from the Job Handle
-            value = member_cmd.get_data_struct_from_job(job_process_[key][0],job_process_[key][1] )
+            value = member_cmd.get_data_struct_from_job(None, job_process_[key][0],job_process_[key][1] )
         else:
             value = ""
 

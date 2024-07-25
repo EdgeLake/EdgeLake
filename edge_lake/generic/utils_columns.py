@@ -8,6 +8,7 @@ import sys
 import time
 import pytz
 import operator
+import re
 
 from datetime import date, datetime, timedelta, timezone
 from dateutil import parser, tz
@@ -50,6 +51,24 @@ cast_to_type_ = {        # Map casting name to data type
 }
 
 tz_list = {}
+
+#datetime_pattern_ = r"'([\d-]+\s[\d:.]+)'" # using re - captures the datetime string in the format 'YYYY-MM-DD HH:MM:SS.ffffff'.
+# captures fixed datetimes with optional hours, minutes, and seconds. Support - '2024-07-10T12:34:56.789Z'", and "'2024-07-10T12:34:56'",
+datetime_pattern_ = r"'(\d{4}-\d{2}-\d{2})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?)?(?:Z)?'"
+
+interval_pattern_ = r'(\d+)\s*(minute|hour|day|week|month|year)s?' # captures the interval value and the unit, allowing for plural forms.
+
+# Map units to timedelta arguments
+unit_to_timedelta_ = {
+    'minute': 'minutes',
+    'hour': 'hours',
+    'day': 'days',
+    'week': 'weeks',
+    'month': 'days',  # approximate month as 30 days
+    'year': 'days'  # approximate year as 365 days
+}
+
+
 # =======================================================================================================================
 # Get a timezone object, if not exists - create a new timezone instance
 # =======================================================================================================================
@@ -1696,6 +1715,34 @@ def cast_with_format(status, casting_str, value):
         casted_value = None
     return casted_value
 
+# =======================================================================================================================
+# cast to date_time
+# Return second or minute or hour or day or month or year
+# =======================================================================================================================
+def cast_to_date_time(status, casting_str, value):
+
+    try:
+        # Step 1: Parse the datetime string
+        dt = datetime.strptime(value[:26], '%Y-%m-%d %H:%M:%S.%f')  # the microseconds can be with an extra char which leads to an error
+    except:
+        status.add_error(f"Casting failed to apply: datetime.strptime({value}, '%Y-%m-%d %H:%M:%S.%f') ")
+        casted_value = None
+    else:
+       if casting_str[:9] != "datetime(" or  casting_str[-1] != ')':
+           casted_value = None
+           status.add_error(f"Casting of datetime is not well defined: {casting_str}")
+       else:
+            info_type = casting_str[9:-1]
+            if len(info_type) > 2 and info_type[0] == "'" and info_type[-1] == "'":
+                info_type = info_type[1:-1]     # The quotations were used to maintain capital letters -
+
+            try:
+                casted_value =  dt.strftime(info_type)      # for example info_type = %m-%Y' will return month and year
+            except:
+                casted_value = None
+                status.add_error(f"Casting failed in extracting value using the string: {info_type}")
+
+    return casted_value
 
 casting_methods_ = {
     'in': cast_to_int,
@@ -1704,6 +1751,7 @@ casting_methods_ = {
     'lj' : cast_to_just,
     'rj' : cast_to_just,
     'fo' : cast_with_format,
+    'da' : cast_to_date_time,
 }
 # =======================================================================================================================
 # Apply casting on a column
@@ -2146,3 +2194,147 @@ def format_syslog_date(syslog_format, dest_format = UTC_TIME_FORMAT_STR):
         formatted_date = None
 
     return formatted_date
+
+# -----------------------------------------------------------------------------------------------
+# String to timediff - Convert a string to a time diff
+# Example: 'timestamp >= now() - 10 hours and timestamp < now() - 5 hours and id = 2'
+# Example: 'timestamp >= '2024-07-09 01:59:55.856588' - 10 hours and timestamp < now() - 5 hours and id = 2'
+'''
+Use cases to test
+
+where timestamp >= NOW() - 10 hours and timestamp < now()
+where timestamp >= '2024-05-09'
+
+timestamp >= '2024-05-09'
+timestamp >= '2024-05-09 01:59:55.856588' - 10 hours
+timestamp <= now()  and timestamp > now() - 5 hours
+timestamp >= '2024-07-09 01:59:55.856588' - 10 hours and timestamp < '2024-07-09'
+'''
+# -----------------------------------------------------------------------------------------------
+def str_to_timediff(query):
+    '''
+    query - the string to parse Given string
+    '''
+
+    global datetime_pattern_
+    global interval_pattern_
+
+    query_segments = query.split("and")
+
+    datetime_matches = []       # Fixed dates - like 2024-07-06 01:59:55.856588
+    interval_matches = []       # like - now() - 5 days
+    for entry in query_segments:
+        # Consider each part of the query to get the relevant date:
+
+        # Extract the specific datetime - captures the datetime string in the format 'YYYY-MM-DD HH:MM:SS.ffffff'.
+        datetime_match = re.search(datetime_pattern_, entry)
+
+        # Extract intervals using regular expressions
+        interval_match = re.findall(interval_pattern_, entry) # captures the interval value and the unit, allowing for plural forms.
+
+        # Add in pairs:
+        if datetime_match or interval_match:
+            datetime_matches.append(datetime_match)
+            interval_matches.append(interval_match[0] if interval_match else None)
+
+
+    counter_date_values = len(datetime_matches)
+
+    # Ensure intervals are extracted correctly
+    if not counter_date_values:
+        process_log.add("Error", "Failed to calculate time diff from: '%s'" % query)
+        return None         # return an error - time was not identified
+
+    if counter_date_values > 2:
+        process_log.add("Error", "Failed to calculate time diff using more than 2 date/time references: '%s'" % query)
+        return None
+
+    if datetime_matches[0]:
+        specific_datetime = get_unified_date_time(datetime_matches[0])
+        if not specific_datetime:
+            return None
+    else:
+        specific_datetime = datetime.now()
+
+    if interval_matches[0]:
+        time1 = specific_datetime - calculate_timedelta(*interval_matches[0])
+    else:
+        time1 = specific_datetime
+
+    if counter_date_values >= 2:
+        if datetime_matches[1]:
+            specific_datetime = get_unified_date_time(datetime_matches[1])
+            if not specific_datetime:
+                return None
+        else:
+            specific_datetime = datetime.now()
+
+        if interval_matches[1]:
+            time2 = specific_datetime - calculate_timedelta(*interval_matches[1])
+        else:
+            time2 = specific_datetime
+    else:
+        time2 = datetime.now()
+
+    time_difference = abs(time1 - time2)
+
+    return time_difference
+
+
+# -----------------------------------------------------------------------------------------------
+# Calculate the time delta
+# -----------------------------------------------------------------------------------------------
+def calculate_timedelta(value_str, unit):
+    """Helper function to calculate timedelta based on value and unit."""
+    try:
+        value = int(value_str)
+
+        if unit in ['month', 'year']:
+            days = value * (30 if unit == 'month' else 365)
+            delta_time = timedelta(days=days)
+        else:
+            delta_time = timedelta(**{unit_to_timedelta_[unit]: value})
+    except:
+        process_log.add("Error", f"Failed to calculate time diff using '{value_str} and {unit}")
+        delta_time = None
+
+    return delta_time
+
+# -----------------------------------------------------------------------------------------------
+# Unify the date time to '%Y-%m-%d %H:%M:%S.%f'
+# -----------------------------------------------------------------------------------------------
+def get_unified_date_time(datetime_matches):
+
+    try:
+        date_str, hour_str, minute_str, seconds_str = datetime_matches.groups()
+        if seconds_str:
+            # all Info is available
+            updated_datetime = f"{date_str} {hour_str}:{minute_str}:{seconds_str}"
+            specific_datetime = datetime.strptime(updated_datetime, '%Y-%m-%d %H:%M:%S.%f')
+        else:
+
+            updated_datetime = date_str + " 00:00:00"
+
+            specific_datetime = datetime.strptime(updated_datetime, '%Y-%m-%d %H:%M:%S')
+    except:
+        errno, value = sys.exc_info()[:2]
+        process_log.add("Error", f"Failed to extract date: '{errno}' : '{value}'")
+        specific_datetime = None
+
+    return specific_datetime
+
+# -----------------------------------------------------------------------------------------------
+# seconds since the epoch for the provided date string.
+# -----------------------------------------------------------------------------------------------
+def string_to_seconds(date_string, date_format):
+
+    try:
+        # Parse the date string into a datetime object
+        dt_object = datetime.strptime(date_string, date_format)
+
+        # Convert the datetime object to seconds since the epoch
+        seconds_since_epoch = dt_object.timestamp()
+    except:
+        seconds_since_epoch = 0
+
+    return seconds_since_epoch

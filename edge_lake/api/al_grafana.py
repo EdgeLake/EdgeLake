@@ -211,6 +211,16 @@ class AlQueryParams:
                     else:
                         table_provided = False
 
+                    if "type" in al_data.keys():
+                        self.request_type = str(al_data["type"])
+                        if self.request_type == "increments" or self.request_type == "period":
+                            self.default_query = True
+                            self.sql_query = True
+                            if self.request_type == "increments":
+                                # Engine will set intervals
+                                self.interval_unit = None
+                                self.interval_time = None
+
                     if "interval" in al_data:
                         # Overwrite Grafana interval
                         interval = al_data["interval"].strip()
@@ -259,11 +269,6 @@ class AlQueryParams:
                             self.offset_for_where = utils_sql.get_offset_after_table_name(sql_lower)
                         if self.interval_time > 0:
                             self.increment_offset = sql_lower.find("increments(),")  # increment without data
-                    elif "type" in al_data.keys():
-                        self.request_type = str(al_data["type"])
-                        if self.request_type == "increments" or self.request_type == "period":
-                            self.default_query = True
-                            self.sql_query = True
                     if "member" in al_data.keys():
                         # A list, each entry is a member
                         self.members = al_data["member"]
@@ -297,11 +302,14 @@ class AlQueryParams:
                     if "trace_level" in al_data.keys():
                         if isinstance(al_data["trace_level"], int):
                             self.trace_level = al_data["trace_level"]
+
+                    self.timezone = "utc"  # default is utc
                     if "timezone" in al_data.keys():
                         if isinstance(al_data["timezone"], str):
                             timezone = al_data["timezone"]
-                            if timezone == "local":
-                                self.timezone = "local"     # default is utc
+                            if timezone:
+                                self.timezone = timezone     # default is utc
+
 
                     if self.request_type == "info" and "details" in al_data.keys():
                         self.details = str(al_data["details"])
@@ -704,6 +712,7 @@ def set_timeseries_struct(status, dbms_name, table_name, query_params, reply_dat
         grafana_data_types.append(get_grafana_data_type(entry))
 
     base_column_id = -1  # The ID of the time column, or ID of a column used for the X Axies
+    is_time = False
 
     # Identify the base column - time column, or without the time column, the x column
 
@@ -717,6 +726,7 @@ def set_timeseries_struct(status, dbms_name, table_name, query_params, reply_dat
                 # with time column that can be graphed
                 base_column_name = column_name
                 base_column_id = index
+                is_time = True  # X axis is time value
                 break
 
 
@@ -754,11 +764,15 @@ def set_timeseries_struct(status, dbms_name, table_name, query_params, reply_dat
                 for index, column_name in enumerate(title_list):
                     if index == base_column_id:
                         # Ignore this colummn as it is the X axis (time, or base)
-                        if first:
-                            targets.append(None)       # This entry is the base (time or X axis) - not in use
+                        #if first:
+                        targets.append(None)       # This entry is the base (time or X axis) - not in use
                         continue
 
                     column_value = row[column_name]
+                    if isinstance(column_value,bool):
+                        column_value = "1" if column_value else "0"     # change bool to 0 / 1
+                    elif isinstance(column_value,str):
+                        column_value = "0" if (not column_value or column_value == "False") else "1"
                     grafana_dt = grafana_data_types[index]
                     if grafana_dt == "string":
                         column_value = f"\"{column_value}\""
@@ -838,9 +852,10 @@ def set_default_timeseries_struct(table_name, reply_data, functions, trace_level
 
     if reply_json:
         rows = reply_json["Query"]
+        index = -1  # Needed for the trace command below if no data returned
         for index, entry in enumerate(rows):
             attr_time = entry["timestamp"]
-            attr_ms = int(utils_columns.get_time_in_sec(attr_time, False) * 1000)
+            attr_ms = int(utils_columns.string_to_seconds(attr_time, '%Y-%m-%d %H:%M:%S.%f')*1000)
 
             if with_avg:
                 attr_avg = entry["avg_val"]
@@ -877,7 +892,7 @@ def set_default_timeseries_struct(table_name, reply_data, functions, trace_level
                     gr_count += "[%s, %u]" % (attr_count, attr_ms)
 
         if trace_level:
-            utils_print.output("\r\n[Grafana] [increments returned %u rows]" % index, True)
+            utils_print.output("\r\n[Grafana] [increments returned %u rows]" % (index + 1), True)
 
     if with_avg:
         gr_str = gr_avg + "]},"
@@ -1120,7 +1135,7 @@ def set_default_table_struct(table_name, user_functions, reply_data):
         rows = reply_json["Query"]
         for index, entry in enumerate(rows):
             attr_time = entry["timestamp"]
-            attr_ms = int(utils_columns.get_time_in_sec(attr_time, False) * 1000)
+            attr_ms = int(utils_columns.string_to_seconds(attr_time, '%Y-%m-%d %H:%M:%S.%f') * 1000)
 
             if defaults:    # Avg + Min + Max
                 attr_avg = entry["avg_val"]
@@ -1197,7 +1212,7 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
 
 
                 # Set pass_throgh to False because result set is manipulated by this API
-                conditions = "timezone = %s and pass_through = false" % timezone
+                conditions = f"timezone = {timezone} and pass_through = false"
 
                 # Execute and wait for completion
                 ret_val = native_api.exec_sql_stmt(status, servers, dbms_name, conditions, statement, timeout)
@@ -1228,7 +1243,7 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                     continue  # This query was executed
 
                 # Run the AnyLog COMMAND
-                ret_val = native_api.exec_native_cmd(status, servers, statement)
+                ret_val = native_api.exec_native_cmd(status, servers, statement, timeout)
 
                 if ret_val:
                     continue
@@ -1400,9 +1415,16 @@ def make_anylog_query(status, query_params):
 def get_increments_timeseries_stmt(interval_unit, interval_time, time_column, value_column, table_name, start_time,
                                    end_time, where_cond, functions, limit):
 
+    if not interval_unit:
+        # AnyLog will set optimized values
+        sql_prefix = f"SELECT increments({time_column}), "
+    else:
+        # Predefined or Grafana values
+        sql_prefix = f"SELECT increments({interval_unit},{interval_time},{time_column}), "
+
     if functions:
         # User detailed functions
-        source_stmt = "SELECT increments(%s, %u, %s), max(%s) as timestamp "
+        source_stmt = "%smax(%s) as timestamp "
         for func_name in functions:
             source_stmt += ", %s(%s) as %s_val " % (func_name, value_column, func_name)
         source_stmt +=  "from %s " \
@@ -1410,7 +1432,7 @@ def get_increments_timeseries_stmt(interval_unit, interval_time, time_column, va
                         "%s" \
                         "limit %u;"
     else:
-        source_stmt = "SELECT increments(%s, %u, %s)," \
+        source_stmt = "%s" \
                       "max(%s) as timestamp, " \
                       "avg(%s) as avg_val, " \
                       "min(%s) as min_val, " \
@@ -1427,11 +1449,11 @@ def get_increments_timeseries_stmt(interval_unit, interval_time, time_column, va
 
     if functions:
         sql_stmt = source_stmt % (
-        interval_unit, interval_time, time_column, time_column, table_name,
+        sql_prefix, time_column, table_name,
         start_time, end_time, where_stmt, limit)
     else:
         sql_stmt = source_stmt % (
-        interval_unit, interval_time, time_column, time_column, value_column, value_column, value_column, table_name,
+        sql_prefix, time_column, value_column, value_column, value_column, table_name,
         start_time, end_time, where_stmt, limit)
 
     return sql_stmt

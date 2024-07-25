@@ -321,6 +321,8 @@ NOT_SUPPORTED = 237
 ERR_msg_format = 238
 Wrong_address = 239
 ERR_json_search_key = 240
+Profiler_lib_not_loaded = 241
+Profiler_call_not_in_sequence = 242
 
 # note that message is at location of error value + 1 (exit is set at 0)
 status_text = ["Terminating node processes",
@@ -565,6 +567,8 @@ status_text = ["Terminating node processes",
                "Error in message format",               # 238
                "Wrong Address",                         # 239
                "Error in JSON search key",              # 240
+               "Profiler lib not loaded",               # 241
+               "Profiler call not in sequence",          # 242
                ]
 
 
@@ -782,6 +786,7 @@ class ProcessStat:
         self.job_info = JobInfo()
         self.select_parsed = al_parser.SelectParsed()  # An object to parse SQL queries
         self.io_buff = None  # There are cases where the IO buff is per thread. I.E Streaming thread
+        self.mutex_type = "R-"
         self.reset()
 
     # =======================================================================================================================
@@ -834,6 +839,24 @@ class ProcessStat:
     # =======================================================================================================================
     def get_goto_name(self):
         return self.goto_name
+
+    # =======================================================================================================================
+    # Flag the type of mutex used
+    # =======================================================================================================================
+    def flag_mutex(self, mutex_type):
+
+        if mutex_type[1] == self.mutex_type[1]:
+            self.add_error(f"Error in thread mutex order: New {mutex_type} over existing {self.mutex_type}")
+        elif mutex_type[1] == '-' and mutex_type[0] != self.mutex_type[0]:
+            self.add_error(f"Error in thread mutex release: mutex {mutex_type} releasing {self.mutex_type}")
+
+        self.mutex_type = mutex_type
+
+    # =======================================================================================================================
+    # Test if mutexed
+    # =======================================================================================================================
+    def is_mutexed(self):
+        return False if  self.mutex_type[1] == '-' else True
 
     # =======================================================================================================================
     # Set error destination (like stdout of a file)
@@ -912,16 +935,22 @@ class ProcessStat:
             process_log.add("Message", message)
 
     # =======================================================================================================================
-    # Set error value
+    # Set error value which was printed to the console
     # =======================================================================================================================
-    def set_err_value(self, value: int):
+    def set_considerd_err_value(self, value: int):
         self.err_val = value
 
     # =======================================================================================================================
-    # Get error value
+    # Get error value that was printed or returned to the app
     # =======================================================================================================================
-    def get_err_value(self):
+    def get_considered_err_value(self):
         return self.err_val
+
+    # =======================================================================================================================
+    # Error Value is reset to allow prints of the error message inside nested calls to process_cmd
+    # =======================================================================================================================
+    def reset_considerd_err_val(self):
+        self.err_val = 0
 
     # =======================================================================================================================
     # Set warning value

@@ -1964,12 +1964,16 @@ def make_output_row(row_number, title_list, data_types_list, query_data):
                 key = str(x)
                 if key in data.keys():
                     data_type = data_types_list[x]
-                    if data_type in get_value_by_type_:
-                        json_row += get_value_by_type_[data_type](str(data[str(x)]))    # The outer str is because of casting
+                    data_val = data[str(x)]
+                    if not data_val:
+                        json_row += "null"  # add NULL if field not provided
                     else:
-                        json_row += get_value_by_type_["string"](data[str(x)])
+                        if data_type in get_value_by_type_:
+                            json_row += get_value_by_type_[data_type](data_val)    # The outer str is because of casting
+                        else:
+                            json_row += get_value_by_type_["string"](data_val)
                 else:
-                    json_row += "NULL"  # add NULL if field not provided
+                    json_row += "null"  # add NULL if field not provided
 
             json_row += "}"
 
@@ -2241,6 +2245,24 @@ def update_and_stmt(status, and_array, where_str):
         if not ret_value:
             if utils_columns.is_valid_operator(operation):
                 right_operand = utils_data.remove_quotations(right_operand)
+                if operation == 'is':
+                    if right_operand != 'null' and right_operand != 'null)':
+                        # "is null" is allowed
+                        if right_operand == "not":
+                            start_offset, end_offset = get_sql_unit(where_str, False, end_offset)
+                            right_operand =  where_str[start_offset:end_offset]
+                            if right_operand != 'null' and right_operand != "null)":
+                                ret_value = process_status.Failed_to_parse_sql
+                            else:
+                                # the case of "IS NOT NULL"
+                                operation = "is not"
+                        else:
+                            ret_value = process_status.Failed_to_parse_sql
+                    if ret_value:
+                        status.add_keep_error("SQL parsing of WHERE condition failed (failed to identify \"is null\" or \"is not null\"): '%s'" % where_str)
+                        break
+
+
                 and_array.append((left_operand, operation, right_operand))
             else:
                 ret_value = process_status.Failed_to_parse_sql

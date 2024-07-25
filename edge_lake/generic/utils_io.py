@@ -1224,7 +1224,7 @@ def stream_to_browser(status, stream_file, rest_wfile, delete_flag):
 
     return ret_val
 # =======================================================================================================================
-# Gest message body data by reads until EOF is returned
+# Get message body data by reads until EOF is returned
 # https://docs.python.org/3/library/io.html#io.BufferedIOBase
 # =======================================================================================================================
 def read_from_stream(status, io_stream, content_length):

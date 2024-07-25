@@ -794,17 +794,21 @@ class SelectParsed():
     # =======================================================================================================================
     # Apply the results of the leading query on the next query
     # =======================================================================================================================
-    def process_leading_results(self):
+    def process_leading_results(self, status):
 
         leading_query = self.get_current_leading()
 
         # get the result to apply on the next query
         leading_results = leading_query.get_results()
-        if leading_query.get_function() == "period":
-            # update the main query with start time and end time
-            ret_val = self.apply_period_time_interval(leading_results)
+        if not len(leading_results):
+            status.add_error(f"Leading query to determine date range failed to return results: \"{leading_query.get_leading_query()}\"")
+            ret_val = process_status.Missing_leading_results
         else:
-            ret_val = process_status.SUCCESS
+            if leading_query.get_function() == "period":
+                # update the main query with start time and end time
+                ret_val = self.apply_period_time_interval(leading_results)
+            else:
+                ret_val = process_status.SUCCESS
         return ret_val
 
     # =======================================================================================================================

@@ -4,6 +4,13 @@ License, v. 2.0. If a copy of the MPL was not distributed with this
 file, You can obtain one at http://mozilla.org/MPL/2.0/
 """
 
+# Profile Flag
+import os
+enable_profile_ = True if os.getenv("PROFILE_OPERATOR", "False").lower() == "true" else False # Needs to return True - otherwise will be False
+if enable_profile_:
+    import edge_lake.generic.profiler as profiler_
+
+
 import edge_lake.cmd.member_cmd as member_cmd
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.process_log as process_log
@@ -228,9 +235,11 @@ def run_operator(dummy: str, conditions: dict):
                                             ])
 
     stats.update_one_value("operator", "summary", "status", "Active")
-    stats.update_one_value("operator", "summary", "start timestamp", current_timestamp)
-    stats.update_one_value("operator", "prep_info", "operator timestamp", current_timestamp)
+    stats.update_one_value("operator", "prep_info", "operator timestamp", current_timestamp)    # Update operator start time
 
+#    if enable_profile_:
+#        utils_print.output_box("Starting Operator Profiling ...")
+#        profiler = profiler_.profiler_start()
 
     while 1:
 
@@ -241,6 +250,8 @@ def run_operator(dummy: str, conditions: dict):
         if ret_val:
             # Including Operator terminated - or global termination
             break
+
+        stats.update_stat_value("operator", "prep_info", "first_file_time", None, True, True)       # Update operator first file to be processes or after reset
 
         for file_name in files_to_process:
 
@@ -322,6 +333,11 @@ def run_operator(dummy: str, conditions: dict):
     is_running = False
 
     current_config = False
+
+'''    if enable_profile_:
+        profiler_.profiler_end(profiler)
+        profiler_.profiler_print("Operator Profile", profiler)
+'''
 # ----------------------------------------------------------
 # This setup avoids race condition between threads to create the table:
 # If the table is not created - we revert to a single thread process.
@@ -505,6 +521,7 @@ def process_watch_file(status, mem_view, conditions, config, with_tsd_info, par_
 
 
         if not process_file:
+            stats.update_stat_value("operator", "prep_info", "last_file_time", None, True, False)  # Update operator last SQL file to be processes
             ret_val = file_processing_failure(status, ret_val, config, file_name, file_info)
 
 

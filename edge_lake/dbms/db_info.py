@@ -8,6 +8,8 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 # generic_dir = os.path.expanduser(os.path.expandvars('$HOME/EdgeLake/source/generic'))
 # sys.path.insert(0, generic_dir)
 
+import time
+
 import edge_lake.dbms.cursor_info as cursor_info
 import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.process_status as process_status
@@ -126,6 +128,8 @@ def non_select_sql_stmt(status, dbms_name, sql_command):
 # =======================================
 def insert_rows(status, dbms_name, table_name, list_inserts):
 
+    dbms_start_time = time.time()
+
     db_connect = get_connection(dbms_name)
     if db_connect == None:
         status.add_keep_error("Database \'%s\' not connected" % dbms_name)
@@ -147,7 +151,8 @@ def insert_rows(status, dbms_name, table_name, list_inserts):
     # commit or if error than rollback
     if ret_val:
         db_connect.commit(status, db_cursor)
-        operator_update_inserts(dbms_name, table_name, len(list_inserts), True)  # Update stat on inserts
+        dbms_process_time = - time.time() - dbms_start_time
+        operator_update_inserts(dbms_name, table_name, len(list_inserts), True, dbms_process_time)  # Update stat on inserts
     else:
         db_connect.rollback(status, db_cursor)
 
@@ -238,6 +243,8 @@ def commands_for_temp_table(db_name, table_name):
 # Process a SQL Statement from a file
 # ======================================
 def process_sql_from_file(status, dbms_name, table_name, file_path):
+
+    dbms_start_time = time.time()
     db_connect = get_connection(dbms_name)
     if db_connect == None:
         status.add_keep_error("DBMS '%s' not connected" % dbms_name)
@@ -250,6 +257,7 @@ def process_sql_from_file(status, dbms_name, table_name, file_path):
         rows_counter = 0
     else:
 
+
         ret_val, rows_counter = db_connect.execute_sql_file(status, db_cursor, file_path)
 
         if ret_val:
@@ -259,7 +267,9 @@ def process_sql_from_file(status, dbms_name, table_name, file_path):
 
         db_connect.close_cursor(status, db_cursor)
 
-        operator_update_inserts(dbms_name, table_name, rows_counter, False) # Update stat on inserts
+        dbms_process_time = time.time() - dbms_start_time
+
+        operator_update_inserts(dbms_name, table_name, rows_counter, False, dbms_process_time) # Update stat on inserts
 
     return [ret_val, rows_counter]
 # =======================================
@@ -865,7 +875,6 @@ def get_dbms_array():
     global active_dbms
     return list(active_dbms)
 
-
 # =======================================
 # Get the number of databases
 # ======================================
@@ -877,18 +886,18 @@ def count_dbms():
 # =======================================
 # Get the list of databases
 # ======================================
-def get_dbms_list():
+def get_dbms_list(status):
     global active_dbms
-    stmt = "\r\nList of DBMS connections\r\n"
-    stmt += "Logical DBMS         Database Type IP:Port                        Storage\r\n"
-    stmt += "-------------------- ------------- ------------------------------ -------------------------\r\n"
+
+    title = ["Logical DBMS", "Database Type", "IP:Port", "Configuration", "Storage"]
+    info_list = []
     for key in sorted(list(active_dbms)):
         dbms = active_dbms[key]['connection']
-        stmt += key.ljust(20)[:20] + " "
-        stmt += active_dbms[key]['db type'].ljust(13)[:13] + " "
-        stmt += dbms.get_ip_port().ljust(30)[:30] + " "
-        stmt += dbms.get_storage_type() + "\r\n"
-    return stmt
+
+        info_list.append((key, active_dbms[key]['db type'],  dbms.get_ip_port(), dbms.get_config(status), dbms.get_storage_type()))
+
+    reply = utils_print.output_nested_lists(info_list, "Active DBMS Connections", title, True)
+    return reply
 # =======================================
 # Get the dictionary with databases info
 # ======================================

@@ -47,6 +47,13 @@ class MONGODB:
 
         self.connection_mutex = threading.Lock()  # Global lock to add/remove connection
 
+    # =======================================================================================================================
+    #  Return the special configuration for "get databases" command
+    # =======================================================================================================================
+    def get_config(self, status):
+
+        return ""
+
     def get_engine_name(self):
         return self.engine_name
 
