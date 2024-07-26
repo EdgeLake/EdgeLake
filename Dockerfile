@@ -1,4 +1,4 @@
-FROM python:3.10-alpine as base
+FROM python:3.11-alpine as base
 
 # declare params
 ENV PYTHONPATH=/app/EdgeLake/ \
@@ -9,7 +9,8 @@ ENV PYTHONPATH=/app/EdgeLake/ \
     LOCAL_SCRIPTS=/app/deployment-scripts/node-deployment \
     TEST_DIR=/app/deployment-scripts/test \
     DEBIAN_FRONTEND=noninteractive \
-    NODE_TYPE=generic
+    NODE_TYPE=generic \
+    DEPLOYMNET_TYPE=prod
 
 WORKDIR $EDGELAKE_PATH
 
@@ -25,7 +26,7 @@ RUN apk update && \
     apk add --no-cache bash git openssh-client gcc python3-dev musl-dev && \
     apk add bash python3 python3-dev py3-pip wget build-base libffi-dev py3-psutil && \
     apk add --no-cache bash git openssh-client gcc python3-dev build-base libffi-dev musl-dev && \
-    python3 -m pip install --upgrade pip wheel pyinstaller cython && \
+    python3 -m pip install --upgrade pip wheel pyinstaller cython orjson && \
     python3 -m pip install --upgrade -r /app/EdgeLake/requirements.txt && \
     python3 /app/EdgeLake/setup.py install && \
     git clone https://github.com/EdgeLake/deployment-scripts/ && \
