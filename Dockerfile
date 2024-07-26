@@ -1,7 +1,8 @@
 FROM python:3.10-alpine as base
 
 # declare params
-ENV EDGELAKE_PATH=/app \
+ENV PYTHONPATH=/app/EdgeLake/ \
+    EDGELAKE_PATH=/app \
     EDGELAKE_HOME=/app/EdgeLake \
     BLOCKCHAIN_DIR=/app/EdgeLake/blockchain \
     DATA_DIR=/app/EdgeLake/data \
@@ -25,16 +26,15 @@ RUN apk update && \
     apk add bash python3 python3-dev py3-pip wget build-base libffi-dev py3-psutil && \
     apk add --no-cache bash git openssh-client gcc python3-dev build-base libffi-dev musl-dev && \
     python3 -m pip install --upgrade pip wheel pyinstaller cython && \
-    python3 -m pip install --upgrade -r /app/EdgeLake/requirements.txt
-    # && \
-    # python3 /app/EdgeLake/setup.py install && \
-    # git clone https://github.com/AnyLog-co/deployment-scripts/ && \
-#     rm -rf  *.spec build/ EdgeLake && mkdir EdgeLake && \
-#     mv ${EDGELAKE_PATH}/setup.cfg ${EDGELAKE_PATH}/EdgeLake/setup.cfg && \
-#     mv ${EDGELAKE_PATH}/LICENSE ${EDGELAKE_PATH}/EdgeLake/LICENSE && \
-#     mv ${EDGELAKE_PATH}/README.md ${EDGELAKE_PATH}/EdgeLake/README.md
+    python3 -m pip install --upgrade -r /app/EdgeLake/requirements.txt && \
+    python3 /app/EdgeLake/setup.py install && \
+    git clone https://github.com/EdgeLake/deployment-scripts/ && \
+    rm -rf  *.spec build/ EdgeLake && mkdir EdgeLake && \
+    mv ${EDGELAKE_PATH}/setup.cfg ${EDGELAKE_PATH}/EdgeLake/setup.cfg && \
+    mv ${EDGELAKE_PATH}/LICENSE ${EDGELAKE_PATH}/EdgeLake/LICENSE && \
+    mv ${EDGELAKE_PATH}/README.md ${EDGELAKE_PATH}/EdgeLake/README.md
 
 
 FROM base AS deployment
-ENTRYPOINT /bin/bash
-# ENTRYPOINT ${EDGELAKE_PATH}/dist/edgelake process deployment-scripts/node-deployment/main.al
+ENTRYPOINT ${EDGELAKE_PATH}/dist/edgelake process deployment-scripts/node-deployment/main.al
+
