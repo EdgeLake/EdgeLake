@@ -8,9 +8,13 @@ from datetime import datetime
 import ipaddress
 import uuid
 import hashlib
+import re
 
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.process_log as process_log
+
+# Define the pattern for characters to replace - 1) single quote 2) double quote 3) any control characters (both lower than space and higher than tilde ~).
+basic_pattern_ = re.compile(r"['\"\x00-\x1F\x7F-\x9F]")
 
 # Conversion table to allow proper dbms names and table names
 translate_dict_ = {}
@@ -239,6 +243,25 @@ def is_supported_data_type(data_type):
 def reset_str_chars( source_str ):
     global translate_dict_
     return source_str.translate ( translate_dict_ )
+
+# ======================================================================================================================
+# Remove control chars (replace with space) - keep printable chars
+# Replace the following:
+# '\'': '`', '"': '`',  chars lower than ' ' or greater than  '~' with space
+# ======================================================================================================================
+def prep_data_string(src_str):
+
+    # Define the replacement function
+    def replacement(match):
+        ch = match.group(0)
+        if ch == '\'' or  ch == '"':
+            return '`'
+        return ' '
+
+    # Perform the replacement
+    result = basic_pattern_.sub(replacement, src_str)
+
+    return result
 
 # ======================================================================================================================
 # Remove control chars (replace with space) - keep printable chars

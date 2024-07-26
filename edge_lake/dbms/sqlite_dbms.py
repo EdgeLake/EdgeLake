@@ -9,6 +9,7 @@ import sys
 import sqlite3
 from sqlite3 import Error
 
+from edge_lake.dbms.database import sql_storage
 import edge_lake.generic.utils_io as utils_io
 import edge_lake.generic.utils_sql as utils_sql
 import edge_lake.generic.process_status as process_status
@@ -28,9 +29,10 @@ sync_map_ = {
 # =======================================================================================================================
 # SQLITE Instance
 # =======================================================================================================================
-class SQLITE:
+class SQLITE(sql_storage):
 
     def __init__(self, in_ram):
+        super().__init__()
         self.dbms_name = ""
         self.path = ""  # path to the data files
         self.in_ram = in_ram  # True for an in memory dbms
@@ -39,31 +41,6 @@ class SQLITE:
         self.engine_name = "sqlite"
         self.autocommit = True
         self.single_insert = True   # The JSON are mapped to a single insert. False maps the JSON to multiple inserts
-
-    def get_engine_name(self):
-        return self.engine_name
-
-    def get_dbms_name(self):
-        return self.dbms_name
-
-    def retrieve_files(self, *args):
-        return process_status.No_dbms_engine_support
-
-    def remove_multiple_files(self, *args):
-        return process_status.No_dbms_engine_support
-
-    def remove_file(self, *args):
-        return process_status.No_dbms_engine_support
-
-    def get_file_list(self, *args):
-        return None
-
-    def count_files(self, *args):
-        return -1
-
-    def store_file(self, *args):
-        return False
-
 
     # =======================================================================================================================
     #  Return the special configuration for "get databases" command
@@ -101,11 +78,6 @@ class SQLITE:
     def get_ip_port(self):
         return "Local"
 
-    # =======================================================================================================================
-    #  Return True for SQL Storage
-    # =======================================================================================================================
-    def is_sql_storage(self):
-        return True
     # =======================================================================================================================
     #  Return the storage type
     # =======================================================================================================================

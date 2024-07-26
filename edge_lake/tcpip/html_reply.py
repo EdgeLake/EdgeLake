@@ -607,7 +607,11 @@ def set_chart_set(status, json_string, chart_type):
                         colors_index = 0
                         for index, key_val in enumerate(entry.items()):
                             key = key_val[0]
-                            val = key_val[1]
+                            value = key_val[1]
+                            if not index:
+                                val = value     # This is the X Axis - can be a string
+                            else:
+                                val = get_number(value) # Get a number from a string
 
                             if not index:
                                     # Get the X axes values
@@ -621,7 +625,7 @@ def set_chart_set(status, json_string, chart_type):
                                     data["datasets"][info_id]["borderColor"] = f"'{borderColor_bar[colors_index]}'"
                                     colors_index += 1
                                     if colors_index >= len(backgroundColor_bar):
-                                        index = 0       # Reuse colors
+                                        colors_index = 0       # Reuse colors
 
                                 data["datasets"][info_id]["data"].append(val)
 
@@ -1115,9 +1119,25 @@ def html_from_json(added_html, html_section, subsection):
     return new_section
 
 
+# -----------------------------------------------------------------------------
+# return True if the input value is a number or a string that represents a number.
+# -----------------------------------------------------------------------------
+def get_number(value):
+    # Check if the value is an instance of int or float
 
+    if isinstance(value, (int, float)):
+        return value
+    # Check if the value is a string that can be converted to a number
+    if isinstance(value, str):
+        try:
+            float_val = float(value)
+            return float_val
+        except ValueError:
+            pass
 
+    if isinstance(value, bool):
+        return 1 if True else 0
 
-
-
-
+    if value == None:
+        return 0
+    return 1

@@ -252,7 +252,7 @@ def get_sql_reply_data(status: process_status, logical_dbms: str, io_stream):
     if not db_info.set_cursor(status, dbms_cursor,
                               "system_query"):  # "system_query" - a local database that keeps the query results
         status.add_error("Error", "Query DBMS not recognized: system_query")
-        return [process_status.DBMS_error, ""]
+        return [process_status.DBMS_error, "", 0]
 
     if not db_info.process_sql_stmt(status, dbms_cursor, sql_local_node):
         if io_stream:
@@ -260,17 +260,20 @@ def get_sql_reply_data(status: process_status, logical_dbms: str, io_stream):
             utils_io.write_to_stream(status, io_stream, result_set, True, True)
             status.add_error("Failed to prepare a query on local node: " + sql_local_node)
         db_info.close_cursor(status, dbms_cursor)
-        return [process_status.ERR_SQL_failure, ""]
+        return [process_status.ERR_SQL_failure, "", 0]
 
     get_next = True
     first = True
     ret_val = process_status.SUCCESS
+    rows_counter = 0
 
     while get_next:  # read each row - when the rows is read, it is copied to one or more data blocks - see message message_header.copy_data() below.
 
         get_next, rows_data = db_info.process_fetch_rows(status, dbms_cursor, "Query", 1, title_list, None)
         if not get_next or not rows_data:
             break
+
+        rows_counter += 1
 
         if (len(time_columns) and (not timezone or timezone != "utc")) or len(casting_columns):
             # change time from utc to current
@@ -319,7 +322,7 @@ def get_sql_reply_data(status: process_status, logical_dbms: str, io_stream):
 
     db_info.close_cursor(status, dbms_cursor)
 
-    return [ret_val, out_data]
+    return [ret_val, out_data, rows_counter]
 
 
 # =======================================================================================================================

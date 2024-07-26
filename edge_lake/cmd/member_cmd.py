@@ -63,8 +63,8 @@ import edge_lake.cmd.json_instruct as json_instruct
 import edge_lake.generic.process_log as process_log
 import edge_lake.generic.stats as stats
 import edge_lake.generic.version as version
+import edge_lake.generic.profiler as profiler
 
-from edge_lake.json_to_sql.mapping_policy import set_mapping_trace
 from edge_lake.json_to_sql.suggest_create_table import *
 from edge_lake.dbms.dbms import connect_dbms, get_real_dbms_name
 import edge_lake.generic.node_info as node_info
@@ -151,16 +151,22 @@ sql_commands = {
     "create" : 1,
 }
 
-profilers_dict_ = {
-                    #  Target     Status Link to profiler
-                    #             on/off
-        "operator" : [aloperator, False, None],
+traced_func_ = {
+    "grafana"   :   0,
+    "mapping"   :   0,
 }
+
 
 nodes_options_ = ['operator','publisher','query','master']
 nodes_pattern_ = '|'.join(map(re.escape, nodes_options_))   # This is to quickly find node type
 commands_options_ = ["subset", "timeout"]
 commands_pattern_ = "|".join(re.escape(word) for word in commands_options_)
+
+# =======================================================================================================================
+# get the trace level of a function
+# =======================================================================================================================
+def get_func_trace_level(function_name):
+    return traced_func_[function_name]
 
 # =======================================================================================================================
 # Return True if the query pool is active
@@ -2000,8 +2006,8 @@ def get_command_ip_port(status, cmd_words):
         ip_port_values.append([ip, port, "", "", True, 0])
 
     else:
-        # format in parenthesis
-        ips_ports = re.sub('\s+', ' ',ip_port_val[1:-1])  # remove extra spaces
+        # format in parentheses
+        ips_ports = re.sub(r'\s+', ' ',ip_port_val[1:-1])  # remove extra spaces
         ips_ports = ips_ports.strip()  # remove leading and trailing spaces
 
         if len(ips_ports) and (ips_ports.startswith("blockchain get") or ips_ports[0][0] == '('):
@@ -7789,35 +7795,22 @@ def get_profiler_output(status, io_buff_in, cmd_words, trace):
         # conditions not satisfied by keywords or command structure
         return [ret_val, None]
 
+    if not profiler.is_active():
+        return process_status.Profiler_lib_not_loaded
+
     target = interpreter.get_one_value(conditions, "target")
 
-    if not target in profilers_dict_:
+    if not profiler.is_target(target):
         status.add_error("Not recognized profile target: %s" % target)
-        return [process_status.ERR_command_struct, None]
+        return process_status.ERR_command_struct
 
-    process = profilers_dict_[target][0]        # Ptr to the process
-    if not process:
-        # not yet declared
-        status.add_error("Profiler not running for target: %s" % target)
-        ret_val = process_status.ERR_command_struct
+    if profiler.is_running(target):
+        # profiler was not set to off
+        status.add_error("profiler for target: %s is at 'on' mode (switch to 'off')" % target)
+        ret_val = process_status.Profiler_call_not_in_sequence
     else:
 
-        is_declared =   getattr(process, "enable_profile_")
-
-        if not is_declared:
-            ret_val = process_status.Profiler_lib_not_loaded
-        else:
-
-            if profilers_dict_[target][1]:
-                # profiler was not set to off
-                status.add_error("profiler for target: %s is at 'on' mode (switch to 'off')" % target)
-                ret_val = process_status.Profiler_call_not_in_sequence
-            else:
-
-                profiler = profilers_dict_[target][2]
-                method_to_call = getattr(process, "profiler_")
-
-                reply = method_to_call.get_profiler_results(f"{target[0].upper()}{target[1:]} Profile", profiler)
+        reply = profiler.get_profiler_results(target)
 
     return [ret_val, reply]
 # =======================================================================================================================
@@ -7838,7 +7831,7 @@ def set_profiler(status, io_buff_in, cmd_words, trace):
     #                                exists   Counter  Unique
 
     keywords = {"target": ("str", True, False, True),   # i.e. target = "operator"
-
+                "reset": ("bool", False, False, True),  # Reset / maintain results
                 }
 
     ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
@@ -7846,42 +7839,37 @@ def set_profiler(status, io_buff_in, cmd_words, trace):
         # conditions not satisfied by keywords or command structure
         return ret_val
 
+    if not profiler.is_active():
+        return process_status.Profiler_lib_not_loaded
+
     target = interpreter.get_one_value(conditions, "target")
 
-    if not target in profilers_dict_:
+    if not profiler.is_target(target):
         status.add_error("Not recognized profile target: %s" % target)
         return process_status.ERR_command_struct
 
-    process = profilers_dict_[target][0]        # Ptr to the process
+    if operation == "on":
+        reset_results = interpreter.get_one_value_or_default(conditions, "reset", True)
+        if not profiler.set_instructions(target, True, reset_results):
+            # is already on
+            status.add_error("Repeatable calls to set profiler to 'on' for target: %s" % target)
+            return process_status.Profiler_call_not_in_sequence
+        comment = "Sart New Run" if reset_results else "Continue Previous Run"
 
-    is_declared =   getattr(process, "enable_profile_")
+    elif operation == "off":
+        # Turn off
+        if not profiler.set_instructions(target, False, False):
+            # profiler was not turned on
+            status.add_error("profiler for target: %s is at 'off' mode" % target)
+            return process_status.Profiler_call_not_in_sequence
+        comment = "Run Paused"
+    else:
+        status.add_error("Profile command is missing on/off call")
+        ret_val = process_status.ERR_command_struct
 
-    if not is_declared:
-        return process_status.Profiler_lib_not_loaded
-
-    if is_declared:
+    if not ret_val:
         opr_name = "Start" if operation == "on" else "Stop"
-        utils_print.output_box("%s %s profiling ..." % (opr_name, target))
-
-        if operation == "on":
-            if profilers_dict_[target][1]:
-                # is already on
-                status.add_error("Repeatable calls to set profiler to 'on' for target: %s" % target)
-                return process_status.Profiler_call_not_in_sequence
-            profilers_dict_[target][1] = True   # Flag to ON
-            method_to_call = getattr(process, "profiler_")
-            profiler = method_to_call.profiler_start()
-            profilers_dict_[target][2] = profiler       # Save the active profiler
-        else:
-            # Turn off
-            if not profilers_dict_[target][1]:
-                # profiler was not turned on
-                status.add_error("profiler for target: %s is at 'off' mode" % target)
-                return process_status.Profiler_call_not_in_sequence
-            profiler = profilers_dict_[target][2]
-            method_to_call = getattr(process, "profiler_")
-            method_to_call.profiler_end(profiler)
-            profilers_dict_[target][1] = False
+        utils_print.output_box(f"{opr_name} {target} profiling ... {comment}")
 
     return ret_val
 # =======================================================================================================================
@@ -9159,7 +9147,7 @@ def blockchain_drop_host(status, io_buff_in, cmd_words, trace, func_params):
 
     sql_delete = "delete from ledger where host = '%s'" % ip_port
 
-    reply_val, rows = db_info.process_contained_delete_stmt(status, "blockchain", sql_delete)
+    reply_val, rows = db_info.process_contained_stmt(status, "blockchain", sql_delete)
 
     if reply_val:
         if rows >= 1:
@@ -14090,10 +14078,11 @@ def _set_trace(status, io_buff_in, cmd_words, trace):
                     else:
                         trace_command = ""      # All commands
                     utils_sql.set_trace_level(trace_level, trace_command)
-                elif command == "mapping":
-                    # Enables trace when source data is mapped in mapping_policy.apply_policy_schema()
+                elif command in traced_func_:
+                    # Enables trace on functions
+                    # For example: when source data is mapped in mapping_policy.apply_policy_schema()
                     # command: trace level = 1 mapping
-                    set_mapping_trace(trace_level)
+                    traced_func_[command] = trace_level
                 else:
                     # test sub command
                     command_list = command.split(' ',1)
@@ -17203,7 +17192,7 @@ _set_methods = {
                    'help': {
                        'usage': "set compression [on/off]",
                        'example': "set compression on",
-                       'text': "Enable\disable compression of data in message transfer.",
+                       'text': "Enable/disable compression of data in message transfer.",
                        'keywords' : ["data", "configuration"],
 
                         }
@@ -18440,7 +18429,7 @@ _get_methods = {
                     'usage': "get git [version/info] [path to github root]",
                     'example': "get git version\n"
                                "get git info\n"
-                               "get git version D:\AnyLog-Code",
+                               "get git version D:/AnyLog-Code",
                     'text': "Return the git version or info.",
                     'keywords' : ["node info"],
                     }

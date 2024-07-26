@@ -5,6 +5,7 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 """
 
 import json
+import orjson
 import re
 import sys
 
@@ -169,45 +170,49 @@ def str_to_list(data: str):
 # JSON requires double quotes for its strings -  there are no single quotes in a JSON string
 # =======================================================================================================================
 def str_to_json(data: str):
-    fix_json = False
+
     try:
-        json_object = json.loads(data, strict=False)
-    except ValueError as error:
-        if not data:
-            err_msg = "Empty data string provided as JSON data"
-            process_log.add("Error", err_msg)  # Log Error
-            json_object = None
-        else:
-            err_msg = "JSON value error (line and column are of the JSON struct): " + str(error)
-            fix_json = True
-            json_object = None
-    except TypeError as error:
-        err_msg = "JSON type error (line and column are of the JSON struct): " + str(error)
-        process_log.add("Error", err_msg)  # Log Error
-        json_object = None
+        json_object = orjson.loads(data)    # fast process
     except:
         fix_json = False
-        err_msg = "Error", "Failed to map string to JSON"
-        process_log.add("Error", err_msg)  # Log Error
-        json_object = None
-
-    if fix_json:
-        modified = change_json_data(data)
-        modified = utils_data.replace_string_chars(True, modified, None, True)
         try:
-            json_object = json.loads(modified, strict=False)
+            json_object = json.loads(data, strict=False)
         except ValueError as error:
+            if not data:
+                err_msg = "Empty data string provided as JSON data"
+                process_log.add("Error", err_msg)  # Log Error
+                json_object = None
+            else:
+                err_msg = "JSON value error (line and column are of the JSON struct): " + str(error)
+                fix_json = True
+                json_object = None
+        except TypeError as error:
+            err_msg = "JSON type error (line and column are of the JSON struct): " + str(error)
             process_log.add("Error", err_msg)  # Log Error
-            err_msg = utils_data.get_str_to_json_error(err_msg, data)
-            if err_msg:
-                process_log.add("Error", err_msg)
             json_object = None
         except:
+            fix_json = False
+            err_msg = "Error", "Failed to map string to JSON"
             process_log.add("Error", err_msg)  # Log Error
-            err_msg = utils_data.get_str_to_json_error(err_msg, data)
-            if err_msg:
-                process_log.add("Error", err_msg)
             json_object = None
+
+        if fix_json:
+            modified = change_json_data(data)
+            modified = utils_data.replace_string_chars(True, modified, None, True)
+            try:
+                json_object = json.loads(modified, strict=False)
+            except ValueError as error:
+                process_log.add("Error", err_msg)  # Log Error
+                err_msg = utils_data.get_str_to_json_error(err_msg, data)
+                if err_msg:
+                    process_log.add("Error", err_msg)
+                json_object = None
+            except:
+                process_log.add("Error", err_msg)  # Log Error
+                err_msg = utils_data.get_str_to_json_error(err_msg, data)
+                if err_msg:
+                    process_log.add("Error", err_msg)
+                json_object = None
 
     return json_object
 

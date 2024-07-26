@@ -323,6 +323,7 @@ Wrong_address = 239
 ERR_json_search_key = 240
 Profiler_lib_not_loaded = 241
 Profiler_call_not_in_sequence = 242
+Profiler_process_failure = 243
 
 # note that message is at location of error value + 1 (exit is set at 0)
 status_text = ["Terminating node processes",
@@ -569,6 +570,7 @@ status_text = ["Terminating node processes",
                "Error in JSON search key",              # 240
                "Profiler lib not loaded",               # 241
                "Profiler call not in sequence",          # 242
+               "Profiler process failure",              # 243
                ]
 
 

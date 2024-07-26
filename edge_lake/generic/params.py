@@ -585,7 +585,7 @@ def analyze_if(status, cmd_words, offset_start, conditions_list):
                 break
 
         if need_end_or and not and_or_word:
-            status.add_error("Failed to parse in \"if\" stmt, missing end\or\else: %s" % ' '.join(cmd_words[offset_start:]))
+            status.add_error(f'Failed to parse in "if" stmt, missing end or else: {' '.join(cmd_words[offset_start:])}')
             ret_val = process_status.Failed_to_parse_if
             break
 

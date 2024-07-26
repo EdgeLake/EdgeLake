@@ -273,9 +273,9 @@ def process_sql_from_file(status, dbms_name, table_name, file_path):
 
     return [ret_val, rows_counter]
 # =======================================
-# Process a single delete Statement
+# Process a single delete Statement i.e. Insert / Delete
 # ======================================
-def process_contained_delete_stmt(status, dbms_name, sql_command):
+def process_contained_stmt(status, dbms_name, sql_command):
     db_connect = get_connection(dbms_name)
     if db_connect == None:
         status.add_keep_error("DBMS '%s' not connected" % dbms_name)
@@ -302,10 +302,7 @@ def process_contained_delete_stmt(status, dbms_name, sql_command):
 
         db_connect.close_cursor(status, db_cursor)
 
-    reply_list = [ret_val, rows]
-    return reply_list
-
-
+    return [ret_val, rows]
 # =======================================
 # Process a single select Statement - Fetch all rows with this call
 # Get dbms object -> get cusrosr -> exec. sql -> close cursor
@@ -1588,7 +1585,7 @@ def delete_tsd_row(status, table_name, row_id):
 
     sql_delete = f"delete from {table_name} where file_id = '{row_id}'"
 
-    reply_val, rows = process_contained_delete_stmt(status, "almgm", sql_delete)
+    reply_val, rows = process_contained_stmt(status, "almgm", sql_delete)
 
     if reply_val:
         if rows == 1:
@@ -1772,7 +1769,7 @@ def blockchain_delete_by_id(status, policy_id):
 
     sql_delete = "delete from ledger where policy_id = '%s'" % policy_id
 
-    reply_val, rows = process_contained_delete_stmt(status, "blockchain", sql_delete)
+    reply_val, rows = process_contained_stmt(status, "blockchain", sql_delete)
 
     if reply_val:
         if rows == 1:
@@ -1844,7 +1841,7 @@ def blockchain_select(status, destination: str, filename: str, lock_key: str):
                     policy = entry[1].replace("\\'", "'")       # The policy entry
 
             if not host or not policy:
-                status.add_error("\Error in policy format: %s" % str(entry))
+                status.add_error("Error in policy format: %s" % str(entry))
                 ret_val = False
                 break
 
@@ -1853,7 +1850,7 @@ def blockchain_select(status, destination: str, filename: str, lock_key: str):
                 if json_entry:
                     utils_print.jput(json_entry, True)
                 else:
-                    status.add_error("\Error in policy format: %s" % str(policy))
+                    status.add_error("Error in policy format: %s" % str(policy))
                     ret_val = False
                     break
 

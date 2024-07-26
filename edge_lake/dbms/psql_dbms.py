@@ -18,10 +18,12 @@ import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.interpreter as interpreter
 import edge_lake.generic.utils_sql as utils_sql
+from edge_lake.dbms.database import sql_storage
 
 
-class PSQL:
+class PSQL(sql_storage):
     def __init__(self):
+        super().__init__()
         self.conn_pool = None
         self.dbms_name = ""
         self.ip_port = ""
@@ -57,32 +59,6 @@ class PSQL:
 
         return config_str
 
-    # =======================================================================================================================
-    #  Return the DBMS Engine Name
-    # =======================================================================================================================
-    def get_engine_name(self):
-        return self.engine_name
-
-    def get_dbms_name(self):
-        return self.dbms_name
-
-    def retrieve_files(self, *args):
-        return process_status.No_dbms_engine_support
-
-    def remove_multiple_files(self, *args):
-        return process_status.No_dbms_engine_support
-
-    def remove_file(self, *args):
-        return process_status.No_dbms_engine_support
-
-    def get_file_list(self, *args):
-        return None
-
-    def count_files(self, *args):
-        return -1
-
-    def store_file(self, *args):
-        return False
 
     # =======================================================================================================================
     #  Return True if the Cusror is self contained - it does not need any info from AnyLog
@@ -96,11 +72,6 @@ class PSQL:
     def get_ip_port(self):
         return self.ip_port
 
-    # =======================================================================================================================
-    #  Return True for SQL Storage
-    # =======================================================================================================================
-    def is_sql_storage(self):
-        return True
     # =======================================================================================================================
     #  Return the storage type
     # =======================================================================================================================

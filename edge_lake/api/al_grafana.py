@@ -77,7 +77,7 @@ class AlQueryParams:
         self.nodes_info = []  # An array to maintain info on nodes in the network
         self.metric = []
         self.attribute = []
-        self.trace_level = 0
+        self.trace_level = member_cmd.get_func_trace_level("grafana")   # Could change by a dashboard's panel info
         self.timezone = "utc"
 
         # time interval for the query
@@ -303,12 +303,13 @@ class AlQueryParams:
                         if isinstance(al_data["trace_level"], int):
                             self.trace_level = al_data["trace_level"]
 
-                    self.timezone = "utc"  # default is utc
                     if "timezone" in al_data.keys():
                         if isinstance(al_data["timezone"], str):
                             timezone = al_data["timezone"]
                             if timezone:
                                 self.timezone = timezone     # default is utc
+                    if not self.timezone or self.timezone == "browser":
+                        self.timezone = "local"  # local gives the browser timezone
 
 
                     if self.request_type == "info" and "details" in al_data.keys():
@@ -855,7 +856,7 @@ def set_default_timeseries_struct(table_name, reply_data, functions, trace_level
         index = -1  # Needed for the trace command below if no data returned
         for index, entry in enumerate(rows):
             attr_time = entry["timestamp"]
-            attr_ms = int(utils_columns.string_to_seconds(attr_time, '%Y-%m-%d %H:%M:%S.%f')*1000)
+            attr_ms = int(utils_columns.string_to_seconds(attr_time, None)*1000)
 
             if with_avg:
                 attr_avg = entry["avg_val"]
@@ -891,7 +892,7 @@ def set_default_timeseries_struct(table_name, reply_data, functions, trace_level
                 if with_count:
                     gr_count += "[%s, %u]" % (attr_count, attr_ms)
 
-        if trace_level:
+        if trace_level > 1:
             utils_print.output("\r\n[Grafana] [increments returned %u rows]" % (index + 1), True)
 
     if with_avg:
@@ -1135,7 +1136,7 @@ def set_default_table_struct(table_name, user_functions, reply_data):
         rows = reply_json["Query"]
         for index, entry in enumerate(rows):
             attr_time = entry["timestamp"]
-            attr_ms = int(utils_columns.string_to_seconds(attr_time, '%Y-%m-%d %H:%M:%S.%f') * 1000)
+            attr_ms = int(utils_columns.string_to_seconds(attr_time, None) * 1000)
 
             if defaults:    # Avg + Min + Max
                 attr_avg = entry["avg_val"]
@@ -1207,9 +1208,6 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                 trace_level = query_params.get_trace_level()
 
                 timezone = query_params.get_timezone()
-                if trace_level:
-                    utils_print.output("\r\n[Grafana] [run client (%s)] [sql %s timezone = %s] [%s]" % (servers, dbms_name, timezone, statement), True)
-
 
                 # Set pass_throgh to False because result set is manipulated by this API
                 conditions = f"timezone = {timezone} and pass_through = false"
@@ -1219,10 +1217,10 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
 
                 if ret_val:
                     err_msg = f"[Grafana] [Query Process Error] [DBMS: {dbms_name}] [Table: {query_params.get_table_name()}] [Error: {process_status.get_status_text(ret_val)}] [Query: {statement}]"
+                    status.add_error(err_msg)
 
                     if trace_level:
-                        utils_print.output("\r\n" + err_msg, True)
-                    status.add_error(err_msg)
+                        show_grafana_process(trace_level, decode_body, "query", ret_val, -1, servers, timezone, dbms_name, statement)
 
                     if target_id:
                         data_str += ","     # Not the first query
@@ -1230,20 +1228,30 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                     data_str += set_grafana_error(dbms_name, query_params.get_table_name(),f"[Error: {process_status.get_status_text(ret_val)}]")
                     continue
 
-                ret_val, reply_data = native_api.get_sql_reply_data(status, dbms_name, None)
+                ret_val, reply_data, rows_counter = native_api.get_sql_reply_data(status, dbms_name, None)
+
+                if trace_level:
+                    show_grafana_process(trace_level, decode_body, "query", ret_val, rows_counter, servers, timezone, dbms_name, statement)
+
                 if ret_val:
                     continue  # Ignore this query and get to the next
 
                 data_str = map_sql_replies(status, query_params, target_id, data_str, reply_data, trace_level)
 
             elif query_params.get_request_type() == "info":
+
                 # AnyLog command
                 statement = query_params.get_details()
                 if not query_params.new_statement(statement):
                     continue  # This query was executed
 
+                trace_level = query_params.get_trace_level()
+
                 # Run the AnyLog COMMAND
                 ret_val = native_api.exec_native_cmd(status, servers, statement, timeout)
+
+                if trace_level:
+                    show_grafana_process(trace_level, decode_body, "info", ret_val, 0, servers, None, None, statement)
 
                 if ret_val:
                     continue
@@ -1265,6 +1273,12 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                     continue
                 data_str += grafana_world_map(nodes_info)  # TEMPORARY CODE
 
+            else:
+                trace_level = member_cmd.get_func_trace_level("grafana")
+                if trace_level:
+                    show_grafana_process(trace_level, decode_body, "not-recognized", ret_val, 0, 0, None, None, None)
+
+
     if data_str:
         if query_params.is_tsd():
             # Time series view needs completion, table view has all returned data
@@ -1274,6 +1288,34 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
 
     return data_str
 
+# =======================================================================================================================
+# Debug Queries - needs to set debug level.
+# Either in Grafana: debug_level : 1
+# Or as a command: trace level = 1 grafana
+# =======================================================================================================================
+def show_grafana_process(trace_level, decode_body, call_type, ret_val, rows_returned, servers, timezone, dbms_name, statement ):
+    '''
+    call_type is query, command or map
+    '''
+
+    if trace_level > 1:
+        # show the Grafana structure
+        utils_print.output("\rGrafana JSON:\r\n" + decode_body +"\r\nNetwork Call:", True)
+
+
+    msg_text = process_status.get_status_text(ret_val)
+
+    if call_type == "query":
+        al_cmd = f"run client ({servers}) sql {dbms_name} timezone = {timezone} {statement}"
+        print_msg = f"\rProcess: [{ret_val}:{msg_text}] Rows: [{rows_returned}] Stmt: [{al_cmd}]"
+        utils_print.output(print_msg, True)
+    elif call_type == "info":
+        al_cmd = f"run client ({servers}) {statement}"
+        print_msg = f"\rProcess: [{ret_val}:{msg_text}] Stmt: [{al_cmd}]"
+        utils_print.output(print_msg, True)
+    else:
+        print_msg = f"\rUnrecognized Grafana Call"
+        utils_print.output(print_msg, True)
 
 # =======================================================================================================================
 # Get the info on the members which are presented on the map
@@ -1318,7 +1360,7 @@ def get_node_info(status, member, attribute, metric, map_data, trace_level):
 
     ret_val, nodes_str = member_cmd.blockchain_get(status, get_cmd.split(), "", True)
 
-    if trace_level:
+    if trace_level > 1:
         if ret_val:
             result = "Error: %s" % process_status.get_status_text(ret_val)
         elif not nodes_str or not len(nodes_str):

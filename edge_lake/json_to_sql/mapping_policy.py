@@ -49,21 +49,12 @@ import edge_lake.dbms.partitions as partitions
 import edge_lake.dbms.db_info as db_info
 import edge_lake.cmd.member_cmd as member_cmd
 
-mapping_trace_ = 0      # Updated using the command: trace level = 1 mapping
 
 excluded_defaults_ = {
     "default" : "Reserved word",
 }
 
 re_group_pattern_ = r're\.group\((\d+)\)'  # Define the regular expression pattern
-# ==================================================================
-# Set the trace level to show the mapping process
-# command: trace level = 1 mapping
-# ==================================================================
-def set_mapping_trace(trace_level):
-    global mapping_trace_
-
-    mapping_trace_ = trace_level
 
 # ==================================================================
 #
@@ -167,7 +158,6 @@ def apply_policy_schema(status, source_dbms, source_table, policy_inner, policy_
     '''
 
     global tables_schemas_
-    global mapping_trace_
 
     # Provided by the caller
     dbms_name = source_dbms
@@ -276,7 +266,7 @@ def apply_policy_schema(status, source_dbms, source_table, policy_inner, policy_
             if ret_val != process_status.CHANGE_POLICY:
                 break
 
-    if mapping_trace_:
+    if member_cmd.get_func_trace_level("mapping"):
         # Show the process output (the mapped data)
         show_insert_list(ret_val, insert_list)
 

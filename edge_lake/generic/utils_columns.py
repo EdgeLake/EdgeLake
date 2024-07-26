@@ -17,6 +17,8 @@ import edge_lake.generic.process_log as process_log
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_data as utils_data
 
+pattern_func_ = re.compile(r'\[(.*?)\]')    # Pull keys in casting
+
 name_to_instance_ = {
     "str" : str,
     "string" : str,
@@ -1578,7 +1580,7 @@ def change_columns_values(status, timezone, time_columns, casting_columns,  cast
                 col_castings = casting_list[index]      # Get the custing to apply om the column
                 column_val = row[column_name]
 
-                ret_val, row[column_name] = cast_column(status, col_castings, column_val)
+                ret_val, row[column_name] = cast_column(status, row, col_castings, column_val)
                 if ret_val:
                     break
 
@@ -1593,7 +1595,7 @@ def change_columns_values(status, timezone, time_columns, casting_columns,  cast
 # =======================================================================================================================
 # cast to int
 # =======================================================================================================================
-def cast_to_int(status, casting_str, value ):
+def cast_to_int(status, row, casting_str, value ):
     try:
         casted_value = int(value)
     except:
@@ -1605,13 +1607,13 @@ def cast_to_int(status, casting_str, value ):
 # =======================================================================================================================
 # cast to String
 # =======================================================================================================================
-def cast_to_str(status, casting_str, value):
+def cast_to_str(status, row, casting_str, value):
     return str(value)
 
 # =======================================================================================================================
 # cast to float
 # =======================================================================================================================
-def cast_to_float(status, casting_str, value):
+def cast_to_float(status, row, casting_str, value):
 
     ret_val = True
     if casting_str[:6] == "float(" and casting_str[-1] == ')':
@@ -1667,7 +1669,7 @@ def cast_to_float(status, casting_str, value):
 # =======================================================================================================================
 # cast to left or right justified
 # =======================================================================================================================
-def cast_to_just(status, casting_str, value):
+def cast_to_just(status, row, casting_str, value):
 
     if casting_str[:6] == "ljust(" or casting_str[:6] == "rjust(":
         # returns a left-justified string of a given width
@@ -1702,7 +1704,7 @@ def cast_to_just(status, casting_str, value):
 # =======================================================================================================================
 # cast with format
 # =======================================================================================================================
-def cast_with_format(status, casting_str, value):
+def cast_with_format(status, row, casting_str, value):
 
     if casting_str[:7] == "format(" and casting_str[-1] == ')':
         casting_key = casting_str[7:-1]
@@ -1716,10 +1718,35 @@ def cast_with_format(status, casting_str, value):
     return casted_value
 
 # =======================================================================================================================
+# cast by function
+# =======================================================================================================================
+def cast_by_function(status, row, casting_str, value):
+
+    if casting_str[:9] == "function(" and casting_str[-1] == ')':
+        try:
+            str_function = casting_str[9:-1]
+
+            # Function to replace each match with the corresponding value from the dictionary
+            def replace_match(match):
+                key = match.group(1)
+                return str(row.get(key, match.group(0)))  # Keep the placeholder if key not found
+
+            new_string = pattern_func_.sub(replace_match, str_function)
+
+            casted_value = eval(new_string)
+
+        except:
+            status.add_error(f"Casting using function '{casting_str}' failed")
+            casted_value = None
+    else:
+        casted_value = None
+
+    return casted_value
+# =======================================================================================================================
 # cast to date_time
 # Return second or minute or hour or day or month or year
 # =======================================================================================================================
-def cast_to_date_time(status, casting_str, value):
+def cast_to_date_time(status, row, casting_str, value):
 
     try:
         # Step 1: Parse the datetime string
@@ -1752,11 +1779,12 @@ casting_methods_ = {
     'rj' : cast_to_just,
     'fo' : cast_with_format,
     'da' : cast_to_date_time,
+    'fu' : cast_by_function,
 }
 # =======================================================================================================================
 # Apply casting on a column
 # =======================================================================================================================
-def cast_column(status, col_castings, column_val):
+def cast_column(status, row, col_castings, column_val):
     '''
     col_custing - the list of casting to apply on the column: i.e. int::format(":,")
     '''
@@ -1773,7 +1801,7 @@ def cast_column(status, col_castings, column_val):
 
         method_index = casting_str[0:2]
         if method_index in casting_methods_:
-            casted_value = casting_methods_[method_index](status, casting_str, casted_value)
+            casted_value = casting_methods_[method_index](status, row, casting_str, casted_value)
             if casted_value == None:
                 # Casting failed
                 ret_val = process_status.CASTING_FAILURE
@@ -2329,6 +2357,10 @@ def get_unified_date_time(datetime_matches):
 def string_to_seconds(date_string, date_format):
 
     try:
+        if not date_format:
+            # take the default:
+            date_format = '%Y-%m-%dT%H:%M:%S.%fZ' if date_string[-1] == 'Z' else '%Y-%m-%d %H:%M:%S.%f'
+
         # Parse the date string into a datetime object
         dt_object = datetime.strptime(date_string, date_format)
 

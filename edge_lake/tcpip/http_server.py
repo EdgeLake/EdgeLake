@@ -10,6 +10,10 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import sys
 import ssl
+import os
+with_profiler_ = True if os.getenv("PROFILER", "False").lower() == "true" else False      # Needs to return True - otherwise will be False
+if with_profiler_:
+    import edge_lake.generic.profiler as profiler
 
 try:
     import OpenSSL
@@ -599,7 +603,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     # Failed to process with AnyLog command
     # =======================================================================================================================
-    def error_failed_process(self, status, with_wait, error_code, http_method, command, err_msg):
+    def error_failed_process(self, status, with_wait, error_code, http_method, into_output, command, err_msg):
 
         err_reply = {
             "method": http_method,
@@ -622,19 +626,32 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         if not reply:
             reply = str(err_reply)
 
-        if not with_wait:
-            # If with_wait it True - a SQL query is processed and different threads satisfy the query
-            # The headers were send before the process started
+        if into_output:
 
-            if reply:
-                content_type = get_result_set_type(reply)  # returns 'text/json' or "text"
-            else:
-                reply = "AnyLog command returned an error"  # Generic reply
-                content_type = 'text'
+            # Place error in the html and send as HTMP
+            encoded_message = html_reply.to_html(status, reply, "text/html", into_output, None).encode(encoding='UTF-8')
 
-            self.send_reply_headers(status, REST_BAD_REQUEST, reply, True, content_type, 0, True, None)
+            content_type = "text/html"
+            ret_val = self.send_reply_headers(status, REST_OK, None, False, content_type, len(encoded_message),
+                                              False, None)
+            if not ret_val:
+                write_ret_value = utils_io.write_encoded_to_stream(status, self.wfile, encoded_message)
 
-        write_ret_value = utils_io.write_to_stream(status, self.wfile, reply, True, True)
+        else:
+
+            if not with_wait:
+                # If with_wait it True - a SQL query is processed and different threads satisfy the query
+                # The headers were send before the process started
+
+                if reply:
+                    content_type = get_result_set_type(reply)  # returns 'text/json' or "text"
+                else:
+                    reply = "AnyLog command returned an error"  # Generic reply
+                    content_type = 'text'
+
+                self.send_reply_headers(status, REST_BAD_REQUEST, reply, True, content_type, 0, True, None)
+
+            write_ret_value = utils_io.write_to_stream(status, self.wfile, reply, True, True)
 
     # =======================================================================================================================
     # Mismatch between REST CALL and AnyLog command - return an error
@@ -751,31 +768,33 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
         command = get_value_from_headers(self.al_headers, "command")
 
-        if self.authenticate_request(status, "GET", command):
+        if command:
 
-            if user_agent == "grafana":
+            if self.authenticate_request(status, "GET", command):
 
-                ret_val = al_grafana.grafana_get(status, self)
+                if user_agent == "grafana":
 
-            elif user_agent == "anylog":
+                    ret_val = al_grafana.grafana_get(status, self)
 
-                try:
-                    ret_val = self.al_exec(status, "get", command)      # Updated version
-                except:
-                    errno, value, stack_trace = sys.exc_info()[:3]
-                    self.handle_exception(status, "GET", errno, value, stack_trace)
-                    ret_val = process_status.REST_call_err
+                elif user_agent == "anylog":
+
+                    try:
+                        ret_val = self.al_exec(status, "get", command)      # Updated version
+                    except:
+                        errno, value, stack_trace = sys.exc_info()[:3]
+                        self.handle_exception(status, "GET", errno, value, stack_trace)
+                        ret_val = process_status.REST_call_err
+                else:
+                    # Treat like ping - return OK
+                    self.send_reply_headers(status, REST_OK, "", False, 'text/json', 0, True, None)
+
+                native_api.end_job(status)  # need to end Job regardless of an error. for example in time-out to release the job
             else:
-                # Treat like ping - return OK
-                self.send_reply_headers(status, REST_OK, "", False, 'text/json', 0, True, None)
+                ret_val = process_status.Failed_message_authentication
 
-            native_api.end_job(status)  # need to end Job regardless of an error. for example in time-out to release the job
-        else:
-            ret_val = process_status.Failed_message_authentication
+            update_stats("GET", user_agent, ret_val, self.client_address)
 
-        update_stats("GET", user_agent, ret_val, self.client_address)
-
-        self.log_streaming(ret_val)
+            self.log_streaming(ret_val)
 
     # =======================================================================================================================
     # An option to place AnyLog header on the URL line.
@@ -902,6 +921,9 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     def do_POST(self):
 
+        if with_profiler_:
+            profiler.manage("post")     # Stop, Start and reset the profiler
+
         self.msg_body = None
         self.al_headers = set_al_headers(self.headers._headers)
         status = process_status.ProcessStat()
@@ -988,6 +1010,9 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         update_stats("POST", user_agent, ret_val, self.client_address)
 
         self.log_streaming(ret_val)
+
+        if with_profiler_:
+            profiler.stop("post")     # Force Profiler because thread goes to sleep
 
     # =======================================================================================================================
     # send info to MQTT CLIENT
@@ -1082,7 +1107,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                     # Operator returned an error
 
                     err_msg = j_handle.get_operator_error_txt()         # Error returned by operators
-                    self.error_failed_process(status, with_wait, ret_val, http_method, command, err_msg)
+                    self.error_failed_process(status, with_wait, ret_val, http_method, into_output, command, err_msg)
 
 
                 elif not with_wait and is_select:
@@ -1384,6 +1409,9 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     def do_PUT(self):
 
+        if with_profiler_:
+            profiler.manage("put")     # Stop, Start and reset the profiler
+
         status = process_status.ProcessStat()
         self.msg_body = None
         self.al_headers = set_al_headers(self.headers._headers)
@@ -1413,6 +1441,9 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         update_stats("PUT", user_agent, ret_val, self.client_address)
 
         self.log_streaming(ret_val)
+
+        if with_profiler_:
+            profiler.stop("put")     # Force Profiler because thread goes to sleep
 
     # =======================================================================================================================
     # AnyLog PUT method def - write data

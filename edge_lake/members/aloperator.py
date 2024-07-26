@@ -4,12 +4,10 @@ License, v. 2.0. If a copy of the MPL was not distributed with this
 file, You can obtain one at http://mozilla.org/MPL/2.0/
 """
 
-# Profile Flag
 import os
-enable_profile_ = True if os.getenv("PROFILE_OPERATOR", "False").lower() == "true" else False # Needs to return True - otherwise will be False
-if enable_profile_:
-    import edge_lake.generic.profiler as profiler_
-
+with_profiler_ = True if os.getenv("PROFILER", "False").lower() == "true" else False      # Needs to return True - otherwise will be False
+if with_profiler_:
+    import edge_lake.generic.profiler as profiler
 
 import edge_lake.cmd.member_cmd as member_cmd
 import edge_lake.generic.process_status as process_status
@@ -237,19 +235,24 @@ def run_operator(dummy: str, conditions: dict):
     stats.update_one_value("operator", "summary", "status", "Active")
     stats.update_one_value("operator", "prep_info", "operator timestamp", current_timestamp)    # Update operator start time
 
-#    if enable_profile_:
-#        utils_print.output_box("Starting Operator Profiling ...")
-#        profiler = profiler_.profiler_start()
+    if with_profiler_:
+        utils_print.output_box("Starting Operator Profiling ...")
 
     while 1:
 
         file_list = []  # needs to be inside the while loop to be initiated (as the same file will be called again)
+
+        if with_profiler_:
+            profiler.stop("operator")     # Force Profiler because thread goes to sleep
 
         ret_val, files_to_process = member_cmd.get_files_from_dir(status, "operator", 5, config.watch_dir, "file", file_types, file_list, flush_function, files_in_process, True)
 
         if ret_val:
             # Including Operator terminated - or global termination
             break
+
+        if with_profiler_:
+            profiler.manage("operator")     # Stop, Start and reset the profiler
 
         stats.update_stat_value("operator", "prep_info", "first_file_time", None, True, True)       # Update operator first file to be processes or after reset
 
@@ -319,6 +322,9 @@ def run_operator(dummy: str, conditions: dict):
         if ret_val:
             break
 
+    if with_profiler_:
+        profiler.stop("operator")  # Force Profiler because thread goes to sleep
+
     process_log.add_and_print("event", "Operator process terminated: %s" % process_status.get_status_text(ret_val))
 
     if threads_count > 1:
@@ -334,10 +340,6 @@ def run_operator(dummy: str, conditions: dict):
 
     current_config = False
 
-'''    if enable_profile_:
-        profiler_.profiler_end(profiler)
-        profiler_.profiler_print("Operator Profile", profiler)
-'''
 # ----------------------------------------------------------
 # This setup avoids race condition between threads to create the table:
 # If the table is not created - we revert to a single thread process.
