@@ -768,33 +768,31 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
         command = get_value_from_headers(self.al_headers, "command")
 
-        if command:
+        if self.authenticate_request(status, "GET", command):
 
-            if self.authenticate_request(status, "GET", command):
+            if user_agent == "grafana":
 
-                if user_agent == "grafana":
+                ret_val = al_grafana.grafana_get(status, self)
 
-                    ret_val = al_grafana.grafana_get(status, self)
+            elif command and user_agent == "anylog":
 
-                elif user_agent == "anylog":
-
-                    try:
-                        ret_val = self.al_exec(status, "get", command)      # Updated version
-                    except:
-                        errno, value, stack_trace = sys.exc_info()[:3]
-                        self.handle_exception(status, "GET", errno, value, stack_trace)
-                        ret_val = process_status.REST_call_err
-                else:
-                    # Treat like ping - return OK
-                    self.send_reply_headers(status, REST_OK, "", False, 'text/json', 0, True, None)
-
-                native_api.end_job(status)  # need to end Job regardless of an error. for example in time-out to release the job
+                try:
+                    ret_val = self.al_exec(status, "get", command)      # Updated version
+                except:
+                    errno, value, stack_trace = sys.exc_info()[:3]
+                    self.handle_exception(status, "GET", errno, value, stack_trace)
+                    ret_val = process_status.REST_call_err
             else:
-                ret_val = process_status.Failed_message_authentication
+                # Treat like ping - return OK
+                self.send_reply_headers(status, REST_OK, "", False, 'text/json', 0, True, None)
 
-            update_stats("GET", user_agent, ret_val, self.client_address)
+            native_api.end_job(status)  # need to end Job regardless of an error. for example in time-out to release the job
+        else:
+            ret_val = process_status.Failed_message_authentication
 
-            self.log_streaming(ret_val)
+        update_stats("GET", user_agent, ret_val, self.client_address)
+
+        self.log_streaming(ret_val)
 
     # =======================================================================================================================
     # An option to place AnyLog header on the URL line.

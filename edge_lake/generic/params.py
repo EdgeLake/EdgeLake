@@ -118,9 +118,9 @@ def set_directory_locations(home_path):
     if home_path[-1] == '\\' or  home_path[-1] == '/':
         home_path = home_path[:-1]
     home_path = os.path.expanduser(os.path.expandvars(home_path))
-    network_path = home_path + path_separator + "AnyLog-Network" + path_separator
+    network_path = home_path + path_separator + "EdgeLake" + path_separator
 
-    add_param("anylog_path", home_path)  # Path to AnyLog-Network
+    add_param("edgelake_path", home_path)  # Path to EdgeLake
 
     add_param("blockchain_sql", "%sblockchain%sblockchain.sql" % (network_path, path_separator))  # Blockchain file
     add_param("blockchain_file", "%sblockchain%sblockchain.json" % (network_path, path_separator))  # Blockchain file
@@ -585,7 +585,7 @@ def analyze_if(status, cmd_words, offset_start, conditions_list):
                 break
 
         if need_end_or and not and_or_word:
-            status.add_error(f'Failed to parse in "if" stmt, missing end or else: %s ' % ' '.join(cmd_words[offset_start:]))
+            status.add_error(f"Failed to parse in \"if\" stmt, missing end or else: {' '.join(cmd_words[offset_start:])}")
             ret_val = process_status.Failed_to_parse_if
             break
 

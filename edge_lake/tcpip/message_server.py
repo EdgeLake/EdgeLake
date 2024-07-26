@@ -1015,7 +1015,7 @@ def is_mqtt(mem_view):
     protocol_name_length = msg_get_int(mem_view, 2, 2)
     if protocol_name_length < 20:
         protocol_name = msg_get_bytes(mem_view, 4, protocol_name_length).lower()
-        if protocol_name and (protocol_name == "mqtt" or protocol_name == "mqisdp'"):
+        if protocol_name and (protocol_name == "mqtt" or protocol_name == "mqisdp"):
             # In MQTT 3.1 the protocol name is "MQISDP". In MQTT 3.1.1 the protocol name is represented as "MQTT".
             # https://www.oasis-open.org/committees/download.php/55095/mqtt-diffs-v1.0-wd01.doc
             ret_val = True
