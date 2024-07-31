@@ -43,7 +43,11 @@ def create_dbms(db_name, dbms, db_type, connection_pool):
     connection_pool - True - if the driver manage connections
     '''
     global active_dbms
-    active_dbms[db_name] = {'connection': dbms, 'db type': db_type, 'pool' : connection_pool}
+    if db_name == "system_query" or db_name == "almgm" or db_name == "blockchain":
+        owner = "system"
+    else:
+        owner = "user"
+    active_dbms[db_name] = {'connection': dbms, 'db type': db_type, 'pool' : connection_pool, 'owner': owner}
 # =======================================
 # Get DBMS connection
 # ======================================
@@ -858,7 +862,16 @@ def get_db_type(db_name):
         db_type = ""
     return db_type
 
-
+# =======================================
+# Get database owner - user or system
+# ======================================
+def get_db_owner(db_name):
+    global active_dbms
+    try:
+        db_owner = active_dbms[db_name]['owner']
+    except:
+        db_owner = ""
+    return db_owner
 # =======================================
 # Is valid DBMS
 # ======================================
@@ -886,12 +899,12 @@ def count_dbms():
 def get_dbms_list(status):
     global active_dbms
 
-    title = ["Logical DBMS", "Database Type", "IP:Port", "Configuration", "Storage"]
+    title = ["Logical DBMS", "Database Type", "Owner", "IP:Port", "Configuration", "Storage"]
     info_list = []
     for key in sorted(list(active_dbms)):
         dbms = active_dbms[key]['connection']
 
-        info_list.append((key, active_dbms[key]['db type'],  dbms.get_ip_port(), dbms.get_config(status), dbms.get_storage_type()))
+        info_list.append((key, active_dbms[key]['db type'], active_dbms[key]['owner'],  dbms.get_ip_port(), dbms.get_config(status), dbms.get_storage_type()))
 
     reply = utils_print.output_nested_lists(info_list, "Active DBMS Connections", title, True)
     return reply
@@ -1957,28 +1970,31 @@ def select_parser(status, select_parsed, dbms_name, src_command, return_no_data,
         # If multiple nodes assigned to the same cluster - updated the where condition to data on the 2 nodes.
         select_parsed.update_cluster_status(nodes_safe_ids)     # This method relates to the HA - considering only data on all nodes
 
-    if is_view_exists(status, dbms_name, table_name):
-        with_view = True
-    else:
-        with_view = False
-        ret_val = load_table_info(status, dbms_name, table_name, return_no_data)  # if not a view - load local table def to memory
-        if ret_val:
-            reply_list = [ret_val, "", src_command]
-            return reply_list
-
-    select_parsed.set_view(with_view)  # A user defined view
-
-    is_suport_join = db_connect.is_suport_join()
-
-    if unify_results.make_sql_stmt(status, select_parsed, is_suport_join):
-        ret_val = process_status.SUCCESS
-        sql_stmt = select_parsed.remote_query
-    else:
-        ret_val = process_status.Failed_to_parse_sql
+    if get_db_owner(dbms_name) == "system":
+        # Issue the query to the system tables without changes
         sql_stmt = src_command
+    else:
+        if is_view_exists(status, dbms_name, table_name):
+            with_view = True
+        else:
+            with_view = False
+            ret_val = load_table_info(status, dbms_name, table_name, return_no_data)  # if not a view - load local table def to memory
+            if ret_val:
+                reply_list = [ret_val, "", src_command]
+                return reply_list
 
-    reply_list = [ret_val, table_name, sql_stmt]
-    return reply_list
+        select_parsed.set_view(with_view)  # A user defined view
+
+        is_suport_join = db_connect.is_suport_join()
+
+        if unify_results.make_sql_stmt(status, select_parsed, is_suport_join):
+            ret_val = process_status.SUCCESS
+            sql_stmt = select_parsed.remote_query
+        else:
+            ret_val = process_status.Failed_to_parse_sql
+            sql_stmt = src_command
+
+    return [ret_val, table_name, sql_stmt]
 
 # ==================================================================
 # Return the size of the dbms in bytes

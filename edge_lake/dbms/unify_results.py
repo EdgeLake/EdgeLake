@@ -415,6 +415,8 @@ def increment_function(select_parsed, projection, function_id, remote_dbms, remo
     if not time_interval:
         return ["", ""]
 
+    select_parsed.set_increment_info(g_query)   # Keep the info for trace mode (Grafana trace shows these values)
+
     column_type = db_info.get_column_type(remote_dbms, remote_table, column_name)
 
     new_field_name = function + "_" + str(function_id)

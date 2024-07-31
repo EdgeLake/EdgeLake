@@ -158,6 +158,7 @@ class SQLITE(sql_storage):
             # memory dbms info - https://www.sqlite.org/uri.html and https://www.sqlite.org/sharedcache.html
             self.first_conn = self.db_connect_thread(status)
 
+
         return ret_val
 
     # ==================================================================
@@ -173,6 +174,9 @@ class SQLITE(sql_storage):
                 conn = sqlite3.connect(self.connect_name, uri=True, timeout=100000, check_same_thread=False)   # Keep long timeout because a lot of conflicts if autocommit is changed to False
             else:
                 conn = sqlite3.connect(self.connect_name, timeout=10, check_same_thread=False) # how long the connection should wait for a lock until raising an exception. The default for the timeout parameter is 5.0 (five seconds).
+
+            conn.execute("PRAGMA busy_timeout = 5000;") # change the busy timeout after the connection has been established:
+            #conn.execute("PRAGMA journal_mode=WAL;")
 
             if self.autocommit:
                 # Use autocommit

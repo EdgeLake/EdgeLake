@@ -70,10 +70,6 @@ from edge_lake.dbms.dbms import connect_dbms, get_real_dbms_name
 import edge_lake.generic.node_info as node_info
 import edge_lake.tcpip.port_forwarding as port_forwarding
 
-
-code_version_ = 0    # git log -1 --oneline --decorate
-
-
 watch_directories = {}  # a dictionary of directories and threads watching each directory
 dir_mutex = threading.Lock()  # mutex to check threads considering directories
 connection_mutex = threading.Lock()  # mutex to sync threads yodating the connection list
@@ -309,7 +305,7 @@ def _connect_dbms(status, io_buff_in, cmd_words, trace):
                 "connection" : ("str", False, False, True), # special connection string for the database
                 "autocommit": ("bool", False, False, True),  # change autocommit config with the underlying database
                 "unlog" : ("bool", False, False, True),     # create unlogged tables
-                "fsync": ("bool", False, False, True),  # create unlogged tables
+                # "fsync": ("bool", False, False, True),  # create unlogged tables
                 }
 
     ret_val, counter, conditions = interpreter.get_dict_from_words(status, words_array,
@@ -16009,12 +16005,9 @@ def get_pool_status(status, io_buff_in, cmd_words, trace):
 # ------------------------------------------------
 def get_version(status, io_buff_in, cmd_words, trace):
 
-    global code_version_
+    code_version = node_info.get_version(status)
 
-    if not code_version_:
-        code_version_ = node_info.get_version(status)
-
-    reply = f"EdgeLake: {code_version_}/240226"
+    reply = f"EdgeLake Version: {code_version}"   # Includes git version and date
 
     return [process_status.SUCCESS, reply]
 

@@ -54,6 +54,11 @@ bring_types_ = {
 
 pattern_bring = re.compile('[ []{}:"]')  # Find any of these occurrences - to void the bring
 
+pattern_any_ = re.compile(r'[{}"\'\n\t\r]')  # Find any of these occurrences
+pattern_include_comma_ = re.compile(r'[{}"\'\n\t\r,]')  # Find any of these occurrences
+pattern_single_ = re.compile(r'[\'\n\t\r]')  # Single queotation
+pattern_double_ = re.compile(r'["\n\t\r]')  # Single queotation
+
 
 # =======================================================================================================================
 # Validate Policy Structure
@@ -1068,16 +1073,40 @@ def get_policy_value(policy, policy_type, attr_name, default_val):
 # Make JSON rows - organize JSON data as rows - each JSON unit is a string with a single '\n' at the end of the string
 # ======================================================================================================================
 def make_json_rows(status, source_data):
-    pattern_any = re.compile('[{}"\'\n\t\r]')  # Find any of these occurrences
-    pattern_include_comma = re.compile('[{}"\'\n\t\r,]')  # Find any of these occurrences
-    pattern_single = re.compile('[\'\n\t\r]')  # Single queotation
-    pattern_double = re.compile('["\n\t\r]')  # Single queotation
 
+    ret_val = process_status.ERR_wrong_json_structure
+
+    if source_data[0] == '[' and source_data[-1] == ']':
+        try:
+            # Step 1: Parse the JSON string into a Python list of dictionaries
+            json_object = orjson.loads(source_data)  # fast process
+        except:
+            pass
+        else:
+            row_counter = len(json_object)
+            try:
+                # Step 2: Convert each dictionary to a JSON string with a newline at the end
+                json_strings = [json.dumps(item) + '\n' for item in json_object]
+            except:
+                pass
+            else:
+                updated_data = ''.join(json_strings)
+                ret_val = process_status.SUCCESS
+
+    if ret_val:
+        ret_val, updated_data, row_counter = make_row_by_row(status, source_data)
+
+    return [ret_val, updated_data, row_counter]
+
+# ======================================================================================================================
+# Make JSON rows - organize JSON data as rows - each JSON unit is a string with a single '\n' at the end of the string
+# ======================================================================================================================
+def make_row_by_row(status, source_data):
     row_counter = 0
     add_new_line = False
     paren_counter = 0
     copied_offset = 0
-    updated_data = ""
+    updated_data = []
     ret_val = process_status.SUCCESS
 
     offset = 0
@@ -1101,74 +1130,57 @@ def make_json_rows(status, source_data):
                     length += 1
 
         while offset < length:
+            # Select pattern based on whether a new line is needed
+            pattern = pattern_include_comma_ if add_new_line else pattern_any_
+            match = pattern.search(source_data, offset)
 
-            if add_new_line:
-                obj = pattern_include_comma.search(source_data, offset)
-            else:
-                obj = pattern_any.search(source_data, offset)
-            if not obj:
+            if not match:
                 break
-            ch = obj.group()
-            offset = obj.start()
 
-            if ch == '\n' or ch == '\t' or ch == '\r' or ch == ',':
-                # replace with space
+            ch = match.group()
+            start = match.start()
+            if ch in ('\n', '\t', '\r', ','):
                 if ch == '\n' and add_new_line:
-                    # Found as needed - a new line at the end of the row
                     add_new_line = False
                 else:
-                    updated_data += (source_data[copied_offset: offset] + ' ')
-                    copied_offset = offset + 1
+                    updated_data.append(source_data[copied_offset:start] + ' ')
+                    copied_offset = start + 1
             elif ch == '{':
                 if add_new_line:
-                    updated_data += (source_data[copied_offset: offset] + '\n{')
-                    copied_offset = offset + 1
+                    updated_data.append(source_data[copied_offset:start] + '\n{')
+                    copied_offset = start + 1
                     add_new_line = False
                 paren_counter += 1
             elif ch == '}':
-                if not paren_counter:
-                    status.add_keep_error(
-                        "Missing parenthesis of type '}' in the JSON structure at offset: %u" % obj.start())
+                if paren_counter == 0:
+                    status.add_keep_error(f"Missing parenthesis of type '}}' in the JSON structure at offset: {start}")
                     ret_val = process_status.ERR_wrong_json_structure
                     break
                 row_counter += 1
                 paren_counter -= 1
-                if not paren_counter:
-                    # New row - need to fine a new line (or add a new line
+                if paren_counter == 0:
                     add_new_line = True
             elif ch == '\'':
-                # find matching up to '\n' or '\r'
-                obj = pattern_single.search(source_data, offset + 1)
-                if not obj:
-                    status.add_keep_error("Missing single quotation in the JSON structure at offset: %u" % (offset + 1))
+                match = pattern_single_.search(source_data, start + 1)
+                if not match or match.group() != '\'':
+                    status.add_keep_error(f"Missing single quotation in the JSON structure at offset: {start + 1}")
                     ret_val = process_status.ERR_wrong_json_structure
                     break
-                ch = obj.group()
-                if ch != '\'':
-                    status.add_keep_error("Missing single quotation in the JSON structure at offset: %u" % obj.start())
-                    ret_val = process_status.ERR_wrong_json_structure
-                    break
-                offset = obj.start()
+                start = match.start()
             elif ch == '"':
-                # find matching up to '\n' or '\r'
-                obj = pattern_double.search(source_data, offset + 1)
-                if not obj:
-                    status.add_keep_error("Missing double quotation in the JSON structure at offset: %u" % (offset + 1))
+                match = pattern_double_.search(source_data, start + 1)
+                if not match or match.group() != '"':
+                    status.add_keep_error(f"Missing double quotation in the JSON structure at offset: {start + 1}")
                     ret_val = process_status.ERR_wrong_json_structure
                     break
-                ch = obj.group()
-                if ch != '"':
-                    status.add_keep_error("Missing double quotation in the JSON structure at offset: %u" % obj.start())
-                    ret_val = process_status.ERR_wrong_json_structure
-                    break
-                offset = obj.start()
-            offset += 1
+                start = match.start()
+
+            offset = start + 1
 
     if not ret_val:
-        if not copied_offset:
-            updated_data = source_data  # Source data was set as needed
-        elif copied_offset < offset:
-            updated_data += source_data[copied_offset: offset]
+        if copied_offset:
+            updated_data.append(source_data[copied_offset:offset])
+        updated_data = ''.join(updated_data)
 
     return [ret_val, updated_data, row_counter]
 

@@ -1220,7 +1220,7 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                     status.add_error(err_msg)
 
                     if trace_level:
-                        show_grafana_process(trace_level, decode_body, "query", ret_val, -1, servers, timezone, dbms_name, statement)
+                        show_grafana_process(status, query_params, trace_level, decode_body, "query", ret_val, -1, servers, timezone, dbms_name, statement)
 
                     if target_id:
                         data_str += ","     # Not the first query
@@ -1231,7 +1231,7 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                 ret_val, reply_data, rows_counter = native_api.get_sql_reply_data(status, dbms_name, None)
 
                 if trace_level:
-                    show_grafana_process(trace_level, decode_body, "query", ret_val, rows_counter, servers, timezone, dbms_name, statement)
+                    show_grafana_process(status, query_params, trace_level, decode_body, "query", ret_val, rows_counter, servers, timezone, dbms_name, statement)
 
                 if ret_val:
                     continue  # Ignore this query and get to the next
@@ -1251,7 +1251,7 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                 ret_val = native_api.exec_native_cmd(status, servers, statement, timeout)
 
                 if trace_level:
-                    show_grafana_process(trace_level, decode_body, "info", ret_val, 0, servers, None, None, statement)
+                    show_grafana_process(status, query_params, trace_level, decode_body, "info", ret_val, 0, servers, None, None, statement)
 
                 if ret_val:
                     continue
@@ -1276,7 +1276,7 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
             else:
                 trace_level = member_cmd.get_func_trace_level("grafana")
                 if trace_level:
-                    show_grafana_process(trace_level, decode_body, "not-recognized", ret_val, 0, 0, None, None, None)
+                    show_grafana_process(status, query_params, trace_level, decode_body, "not-recognized", ret_val, 0, 0, None, None, None)
 
 
     if data_str:
@@ -1293,7 +1293,7 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
 # Either in Grafana: debug_level : 1
 # Or as a command: trace level = 1 grafana
 # =======================================================================================================================
-def show_grafana_process(trace_level, decode_body, call_type, ret_val, rows_returned, servers, timezone, dbms_name, statement ):
+def show_grafana_process(status, query_params,  trace_level, decode_body, call_type, ret_val, rows_returned, servers, timezone, dbms_name, statement ):
     '''
     call_type is query, command or map
     '''
@@ -1306,8 +1306,17 @@ def show_grafana_process(trace_level, decode_body, call_type, ret_val, rows_retu
     msg_text = process_status.get_status_text(ret_val)
 
     if call_type == "query":
+        if query_params.get_request_type() == "increments":
+            # add query details
+            j_handle = status.get_active_job_handle()
+            details = j_handle.get_select_parsed().get_increment_info()
+        else:
+            details = ""
+
         al_cmd = f"run client ({servers}) sql {dbms_name} timezone = {timezone} {statement}"
-        print_msg = f"\rProcess: [{ret_val}:{msg_text}] Rows: [{rows_returned}] Stmt: [{al_cmd}]"
+
+        print_msg = f"\rProcess: [{ret_val}:{msg_text}] Rows: [{rows_returned}] Details: [{details}]\r\nStmt: [{al_cmd}]"
+
         utils_print.output(print_msg, True)
     elif call_type == "info":
         al_cmd = f"run client ({servers}) {statement}"

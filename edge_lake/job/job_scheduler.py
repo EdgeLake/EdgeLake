@@ -11,7 +11,7 @@ import edge_lake.job.job_instance as job_instance
 import edge_lake.job.job_handle as job_handle
 
 
-JOB_INSTANCES = 100  # non-scheduled (run once) jobs
+JOB_INSTANCES = 500  # non-scheduled (run once) jobs
 
 unique_job_id = 0
 job_location = JOB_INSTANCES

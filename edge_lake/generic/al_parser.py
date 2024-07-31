@@ -54,6 +54,7 @@ class SelectParsed():
         self.projection_parsed = []  # array with the projection list
         self.is_func_calls = False  # are projected field values or functions
         self.proprietary_functions = []  # array with anylog functions (like increments)
+        self.increment_info = ""        # Time unit and interval - used in trace mode by Grafana
         self.where_tree = None  # a TREE structure representing the where stmt
         self.distinct = False
         self.casting_list = []  # A list of casting for each column retrieved like ::float(3))
@@ -86,6 +87,17 @@ class SelectParsed():
         self.pass_through = False
         self.per_column = None      # A field name used in local query (with extended tables) to specify limit per table
 
+    # =======================================================================================================================
+    # Increment function info - used in trace mode by Grafana
+    # =======================================================================================================================
+    def set_increment_info(self, info):
+        self.increment_info = info
+
+    # =======================================================================================================================
+    # Increment function info - used in trace mode by Grafana
+    # =======================================================================================================================
+    def get_increment_info(self):
+        return self.increment_info
 
     # =======================================================================================================================
     # A local query will do the limit locally (not in the SQL query)
