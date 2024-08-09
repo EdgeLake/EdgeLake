@@ -871,7 +871,7 @@ def make_pull_keys(word_str):
                 key_string += "[\"%s\"]" % entry[2:-1]
             else:
                 # Include spaces in the re,search test
-                if re.search("[ {}:]", entry):
+                if re.search("[{}:]", entry):
                     is_key = False  # wrong CHAR SET used
                     break
                 # Add quortation if not an index to a table
@@ -1076,25 +1076,31 @@ def make_json_rows(status, source_data):
 
     ret_val = process_status.ERR_wrong_json_structure
 
-    if source_data[0] == '[' and source_data[-1] == ']':
-        try:
-            # Step 1: Parse the JSON string into a Python list of dictionaries
-            json_object = orjson.loads(source_data)  # fast process
-        except:
-            pass
-        else:
-            row_counter = len(json_object)
+    if not source_data:
+        updated_data = []
+        row_counter = 0
+    else:
+
+        if source_data[0] == '[' and source_data[-1] == ']':
             try:
-                # Step 2: Convert each dictionary to a JSON string with a newline at the end
-                json_strings = [json.dumps(item) + '\n' for item in json_object]
+                # Step 1: Parse the JSON string into a Python list of dictionaries
+                json_object = orjson.loads(source_data)  # fast process
             except:
                 pass
             else:
-                updated_data = ''.join(json_strings)
-                ret_val = process_status.SUCCESS
+                row_counter = len(json_object)
+                try:
+                    # Step 2: Convert each dictionary to a JSON string with a newline at the end
+                    json_strings = [json.dumps(item) + '\n' for item in json_object]
+                except:
+                    pass
+                else:
+                    updated_data = ''.join(json_strings)
+                    ret_val = process_status.SUCCESS
 
-    if ret_val:
-        ret_val, updated_data, row_counter = make_row_by_row(status, source_data)
+        if ret_val:
+            # Failed - try different way
+            ret_val, updated_data, row_counter = make_row_by_row(status, source_data)
 
     return [ret_val, updated_data, row_counter]
 

@@ -70,6 +70,14 @@ unit_to_timedelta_ = {
     'year': 'days'  # approximate year as 365 days
 }
 
+second_conversions_ = [
+    ("year", 31536000),
+    ("month", 259200),
+    ("day", 86400),
+    ("hour", 3600),
+    ("minute", 60),
+]
+
 
 # =======================================================================================================================
 # Get a timezone object, if not exists - create a new timezone instance
@@ -2370,3 +2378,17 @@ def string_to_seconds(date_string, date_format):
         seconds_since_epoch = 0
 
     return seconds_since_epoch
+
+
+# -----------------------------------------------------------------------------------------------
+# Convert seconds of time to  seconds, minutes, hours, days, months and years
+# -----------------------------------------------------------------------------------------------
+def seconds_to_time(seconds):
+    # Return time and unit (i.e. 3 days)
+
+    if seconds < 60:
+        return [seconds, "second"]
+
+    for entry in second_conversions_:
+        if seconds >= entry[1]:
+            return [seconds / entry[1], entry[0]]

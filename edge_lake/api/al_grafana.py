@@ -79,6 +79,18 @@ class AlQueryParams:
         self.attribute = []
         self.trace_level = member_cmd.get_func_trace_level("grafana")   # Could change by a dashboard's panel info
         self.timezone = "utc"
+        if "scopedVars" in body_info and "__interval_ms" in body_info["scopedVars"] and 'value' in body_info["scopedVars"]["__interval_ms"]:
+            grafana_seconds = body_info["scopedVars"]["__interval_ms"]["value"] / 1000
+            if grafana_seconds < 1:
+                # Smallest supported
+                self.grafana_interval_time = 1
+                self.grafana_interval_unit = "second"
+            else:
+                self.grafana_interval_time, self.grafana_interval_unit = utils_columns.seconds_to_time(grafana_seconds)
+
+        else:
+            self.grafana_interval_time = None
+            self.grafana_interval_unit = None
 
         # time interval for the query
         if "interval" in body_info.keys():
@@ -221,21 +233,26 @@ class AlQueryParams:
                                 self.interval_unit = None
                                 self.interval_time = None
 
-                    if "interval" in al_data:
-                        # Overwrite Grafana interval
+                    if "interval" in al_data and al_data["interval"] != "optimize":
+                        # Overwrite the interval optimized/default intervals provided by AnyLog
                         interval = al_data["interval"].strip()
 
                         if len(interval) > 5:
-                            if interval[-1] == 's':
-                                # remove plural
-                                interval = interval[:-1]
-                            index = interval.find(' ')      # The space between the number and units
-                            if index > 0:
-                                if interval[:index].isnumeric():
-                                    interval_unit = interval[index+1:].lstrip()
-                                    if interval_unit in utils_sql.increment_date_types:
-                                        self.interval_unit = interval_unit
-                                        self.interval_time = int(interval[:index])
+                            if interval == "dashboard" and self.grafana_interval_unit:
+                                # Take the interval from Grafana's dashborad
+                                self.interval_time = int(self.grafana_interval_time)
+                                self.interval_unit = self.grafana_interval_unit
+                            else:
+                                if interval[-1] == 's':
+                                    # remove plural
+                                    interval = interval[:-1]
+                                index = interval.find(' ')      # The space between the number and units
+                                if index > 0:
+                                    if interval[:index].isnumeric():
+                                        interval_unit = interval[index+1:].lstrip()
+                                        if interval_unit in utils_sql.increment_date_types:
+                                            self.interval_unit = interval_unit
+                                            self.interval_time = int(interval[:index])
 
 
                     if "sql" in al_data.keys():
@@ -1290,7 +1307,7 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
 
 # =======================================================================================================================
 # Debug Queries - needs to set debug level.
-# Either in Grafana: debug_level : 1
+# Either in Grafana: trace_level : 1
 # Or as a command: trace level = 1 grafana
 # =======================================================================================================================
 def show_grafana_process(status, query_params,  trace_level, decode_body, call_type, ret_val, rows_returned, servers, timezone, dbms_name, statement ):
@@ -1309,7 +1326,10 @@ def show_grafana_process(status, query_params,  trace_level, decode_body, call_t
         if query_params.get_request_type() == "increments":
             # add query details
             j_handle = status.get_active_job_handle()
-            details = j_handle.get_select_parsed().get_increment_info()
+            if j_handle.get_select_parsed():
+                details = j_handle.get_select_parsed().get_increment_info()
+            else:
+                details = ""
         else:
             details = ""
 

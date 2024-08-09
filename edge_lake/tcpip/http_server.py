@@ -1120,6 +1120,8 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
                     write_ret_value = self.local_table_query(status, j_handle, with_wait, nodes_count, nodes_replied)
 
+                    j_instance.set_not_active()
+
                 elif with_wait and is_select:
                     # This is a select command that was executed against other network nodes
 
@@ -1153,6 +1155,8 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                                     reply = utils_print.output_nested_lists(error_list, "\r\nReply errors:", ["Node IP", "Port", "Par", "Ret-Code", "Error Message"], True)
                                     write_ret_value = utils_io.write_to_stream(status, self.wfile, reply, True, True)
                         j_instance.data_mutex_release(status, 'W')
+
+                        j_instance.set_not_active()
                 elif with_wait and not is_select:
                     # This is a print message returned from multiple nodes
 
@@ -1455,9 +1459,13 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         msg_body = self.get_msg_body(status)
         ret_val, msg_data, row_counter = utils_json.make_json_rows(status, msg_body)
         if ret_val:
-            status.keep_error("Failed to process JSON data")
+            if not msg_body:
+                err_msg = "Failed to process JSON data: Message Body is empty"
+            else:
+                err_msg = "Failed to process JSON data"
+            status.add_error(err_msg)
         elif not msg_data:
-            status.keep_error("REST PUT command without new data")
+            status.add_error("REST PUT command without new data")
             headers_info.rest_status = REST_API_MISSING_BODY
         else:
             prep_dir = params.get_value_if_available("!prep_dir")  # dir where the data will be written
