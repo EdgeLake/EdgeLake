@@ -1183,7 +1183,7 @@ def transform_by_data_type(value, target_data_type):
 
 
 # =======================================================================================================================
-# Given a date string, return number of seconds since epoch
+# Given a date string, return number of seconds since epoch -  -- ASSUMES INPUT TIME IS IN LOCAL TIME
 # =======================================================================================================================
 def get_time_in_seconds(date_time):
     date_str = unify_date_time(date_time)
@@ -1196,7 +1196,7 @@ def get_time_in_seconds(date_time):
 
     try:
         date_obj = time.strptime(date_str_no_seconds[:19], TIME_FORMAT_STR_NO_MS)
-        timestamp = time.mktime(date_obj)
+        timestamp = time.mktime(date_obj)   #  -- ASSUMES INPUT TIME IS IN LOCAL TIME
     except ValueError as e:
         process_log.add("Error", "Failed to process date string: %s" % date_time)
         timestamp = 0
@@ -1208,6 +1208,47 @@ def get_time_in_seconds(date_time):
                 timestamp += float(date_str[index:])
 
     return timestamp
+
+# =======================================================================================================================
+# UTC to Milliseconds -  -- ASSUMES INPUT TIME IS IN UTC
+# =======================================================================================================================
+def get_utc_to_ms(utc_time_str):
+
+    try:
+        date_format = "%Y-%m-%dT%H:%M:%S.%fZ" if utc_time_str[10] == 'T' else "%Y-%m-%d %H:%M:%S.%f"
+        # Parse the UTC time string into a datetime object
+        utc_dt = datetime.strptime(utc_time_str, date_format)
+
+        # Convert the datetime object to seconds since the epoch
+        epoch_time = (utc_dt - datetime(1970, 1, 1)).total_seconds()
+
+        # Convert seconds to milliseconds
+        epoch_time_ms = int(epoch_time * 1000)
+    except:
+        epoch_time_ms = -1
+
+    return epoch_time_ms
+
+# =======================================================================================================================
+# UTC to Milliseconds
+# =======================================================================================================================
+def get_ms_from_date_time(date_string):
+
+    try:
+        date_format = "%Y-%m-%dT%H:%M:%S.%fZ" if date_string[10] == 'T' else "%Y-%m-%d %H:%M:%S.%f"
+        # Parse the UTC time string into a datetime object
+        date_object = datetime.strptime(date_string, date_format)
+        # Convert the datetime object to a timestamp
+        timestamp = date_object.timestamp()
+        # Convert the timestamp (in float) to milliseconds
+        milliseconds = int(timestamp * 1000)
+    except:
+        milliseconds = -1
+
+    return milliseconds
+
+
+
 
 
 # =======================================================================================================================
@@ -1573,8 +1614,7 @@ def change_columns_values(status, timezone, time_columns, casting_columns,  cast
                     format_string = TIME_FORMAT_STR
                 if format_string:
                     # The data is flagged as UTC - or force conversion by specifying timezone is "local"
-                    row[key] = utc_to_timezone(row[key], format_string, timezone)
-
+                    row[key] = utc_to_timezone(date_value, format_string, timezone)
 
         for index, key in enumerate(casting_columns):
 

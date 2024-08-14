@@ -4361,7 +4361,7 @@ def query_row_by_row(status, dbms_cursor, io_buff_in, conditions, sql_time, sql_
         if message:  # prepare a reply
 
             fetch_counter += 1
-            # if data retrieved is send to an query node
+            # if data retrieved is send to a query node
 
             if f_object:
                 # Symetric encryption
@@ -4466,6 +4466,13 @@ def query_row_by_row(status, dbms_cursor, io_buff_in, conditions, sql_time, sql_
 
     if message:
 
+        job_instance.get_query_monitor().update_monitor(dbms_time)
+        query_log_time = job_instance.get_query_log_time()  # -1 means no logging, 0 - all or value representing query threshold in seconds
+        if query_log_time >= 0:
+            if query_log_time <= dbms_time:
+                # log slow queries
+                query_info = f"Sec: {dbms_time:>4,} Rows: {fetch_counter:>6,} DBMS: {dbms_cursor.get_table_name()} SQL: {sql_command}"
+                process_log.add("query", query_info)
 
         # if data retrieved is send to a query node
         if ret_val != process_status.ERR_network:
@@ -5959,6 +5966,76 @@ def _disconnect_dbms(status, io_buff_in, cmd_words, trace):
     return ret_val
 
 
+# =======================================================================================================================
+# Get Info on partitions
+# get partitions info where dbms = smart_city and table = test
+'''
+Replacing:
+info table sensors readings partitions\n'
+                            'info table sensors readings partitions last\n'
+                            'info table sensors readings partitions first\n'
+                            'info table sensors readings partitions count',
+'''
+# =======================================================================================================================
+def get_partitions_info(status, io_buff_in, cmd_words, trace):
+
+    words_count = len(cmd_words)
+
+    offset = get_command_offset(cmd_words)
+
+    #                        Must     Add      Is
+    #                        exists   Counter  Unique
+
+    keywords = {"dbms": ("str", True, False, True),
+                "table": ("str", True, False, True),
+            }
+
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, offset + 4, 0, keywords, False)
+    if ret_val:
+        # conditions not satisfied by keywords or command structure
+        return [ret_val, None]
+
+
+    dbms_name = conditions["dbms"][0]
+    table_name = conditions["table"][0]
+
+    output_list = []
+
+    if partitions.is_partitioned(dbms_name, table_name):
+
+        partition_list = db_info.get_partitions_info(status, dbms_name, table_name, False)
+        '''
+        Example Info Returned
+        0 = {list: 3} ['par_test_2024_08_00_d14_insert_timestamp', '2024-08-01', '2024-08-14']
+        0 = {str} 'par_test_2024_08_00_d14_insert_timestamp'
+        1 = {str} '2024-08-01'
+        2 = {str} '2024-08-14'
+        __len__ = {int} 3
+        '''
+        if partition_list:
+            previous_table = ""
+            for entry in partition_list:
+                # Pull table name
+                match = re.search(r'\d', entry[0]) # Offset to date digit
+                table_by_par = entry[0][4:match.start()-1]
+                if table_by_par == previous_table:
+                    par_table = ""      # Info in the list
+                    counter += 1        # Count partitions per table
+                else:
+                    counter = 1
+                    par_table = table_by_par
+                    previous_table = table_by_par
+                start_date = entry[1]
+                end_date = entry[2]
+                output_list.append([par_table, counter, entry[0], start_date, end_date])
+
+            info_string = utils_print.output_nested_lists(output_list, f"Partitions in DBMS: '{dbms_name}'", ["Table", "Counter", "Partition", "Start Date", "End Data"], True, "    ")
+        else:
+            info_string = "Not Partitioned"
+    else:
+        info_string= "Not Partitioned"
+
+    return [ret_val, info_string]
 # =======================================================================================================================
 # Return the info on the specified table or view.
 # Examples:
@@ -14449,7 +14526,7 @@ def get_partitions(status, io_buff_in, cmd_words, trace):
                             reply = utils_print.format_dictionary(par_struct, True, False, False, None)
                     else:
 
-                        reply = db_info.get_partitions_info(status, dbms_name, table_name)
+                        reply = db_info.get_partitions_info(status, dbms_name, table_name, True)
                         if not reply:
                             ret_val = process_status.Missing_par_info
                             reply = "No partitions info"
@@ -17589,7 +17666,7 @@ _get_methods = {
                      'keywords': ["debug", "profile"],
                      },
             'trace': 0,
-    },
+        },
 
         'stack trace': {
             'command': process_status.get_stack_traces,
@@ -17601,8 +17678,19 @@ _get_methods = {
                      'text': 'Output the stack trace of all threads',
                      'keywords': ["debug"],
                      },
-            'trace': 0,
-        },
+                'trace': 0,
+            },
+
+        'partitions info': {
+                'command': get_partitions_info,
+                'words_min': 10,
+                'help': {'usage': 'get partitions info where dbms = smart_city and table = test and details = [true/false]',
+                         'example': 'get partitions info where dbms = smart_city and table = test and details = true',
+                         'text': 'Provide info on the partitions used or a list of all partitions in the database',
+                         'keywords': ["node info", "dbms"],
+                         },
+                'trace': 0,
+            },
 
         'policies diff': {
                     'command': diff_policies,

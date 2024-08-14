@@ -1075,25 +1075,26 @@ def get_policy_value(policy, policy_type, attr_name, default_val):
 def make_json_rows(status, source_data):
 
     ret_val = process_status.ERR_wrong_json_structure
-
+    err_value = ""
     if not source_data:
         updated_data = []
         row_counter = 0
     else:
-
-        if source_data[0] == '[' and source_data[-1] == ']':
-            try:
-                # Step 1: Parse the JSON string into a Python list of dictionaries
-                json_object = orjson.loads(source_data)  # fast process
-            except:
-                pass
+        # Step 1: Parse the JSON string into a Python list of dictionaries
+        json_object = str_to_json(source_data)
+        if json_object:
+            if isinstance(json_object, dict):
+                # dictionary:
+                updated_data = source_data    # 1 JSON entry
+                row_counter = 1
+                ret_val = process_status.SUCCESS
             else:
                 row_counter = len(json_object)
                 try:
                     # Step 2: Convert each dictionary to a JSON string with a newline at the end
                     json_strings = [json.dumps(item) + '\n' for item in json_object]
                 except:
-                    pass
+                    errno, err_value = sys.exc_info()[:2]
                 else:
                     updated_data = ''.join(json_strings)
                     ret_val = process_status.SUCCESS

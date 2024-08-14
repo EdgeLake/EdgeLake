@@ -646,24 +646,29 @@ def get_table_partitions_list(status, dbms_name: str, table_name: str):
 # =======================================
 # Get the list of partitions with additional info on each partition
 # ======================================
-def get_partitions_info(status, dbms_name: str, table_name: str):
+def get_partitions_info(status, dbms_name: str, table_name: str, is_str:bool):
+    # Get partition info as a list or a string
+
+    reply_info = None
+
     d_name = dbms_name.lower()
     t_name = table_name.lower()
 
     db_connect = get_connection(dbms_name)
     if db_connect == None:
         status.add_keep_error("DBMS '%s' not connected" % dbms_name)
-        data_string = ""
     else:
-        ret_val, data_string = db_connect.get_table_partitions(status, d_name, t_name)
-        if ret_val and data_string:
-            info_list = partitions.get_info_partitions(status, d_name, t_name, data_string)
-            if not info_list:
-                data_string = None
-            else:
-                data_string = utils_print.output_nested_lists(info_list, "", ["Partition Name", "Start Date", "End Date"], True)
+        ret_val, par_info = db_connect.get_table_partitions(status, d_name, t_name)
+        if ret_val and par_info:
+            info_list = partitions.get_info_partitions(status, d_name, t_name, par_info)
+            if info_list:
+                if is_str:
+                    # Return a string
+                    reply_info = utils_print.output_nested_lists(info_list, "", ["Partition Name", "Start Date", "End Date"], True)
+                else:
+                    reply_info = info_list  # Return a list
 
-    return data_string
+    return reply_info
 # =======================================
 # Get a list with the partition name in each partition
 # ======================================
@@ -1970,29 +1975,25 @@ def select_parser(status, select_parsed, dbms_name, src_command, return_no_data,
         # If multiple nodes assigned to the same cluster - updated the where condition to data on the 2 nodes.
         select_parsed.update_cluster_status(nodes_safe_ids)     # This method relates to the HA - considering only data on all nodes
 
-    if get_db_owner(dbms_name) == "system":
-        # Issue the query to the system tables without changes
-        sql_stmt = src_command
+    if is_view_exists(status, dbms_name, table_name):
+        with_view = True
     else:
-        if is_view_exists(status, dbms_name, table_name):
-            with_view = True
-        else:
-            with_view = False
-            ret_val = load_table_info(status, dbms_name, table_name, return_no_data)  # if not a view - load local table def to memory
-            if ret_val:
-                reply_list = [ret_val, "", src_command]
-                return reply_list
+        with_view = False
+        ret_val = load_table_info(status, dbms_name, table_name, return_no_data)  # if not a view - load local table def to memory
+        if ret_val:
+            reply_list = [ret_val, "", src_command]
+            return reply_list
 
-        select_parsed.set_view(with_view)  # A user defined view
+    select_parsed.set_view(with_view)  # A user defined view
 
-        is_suport_join = db_connect.is_suport_join()
+    is_suport_join = db_connect.is_suport_join()
 
-        if unify_results.make_sql_stmt(status, select_parsed, is_suport_join):
-            ret_val = process_status.SUCCESS
-            sql_stmt = select_parsed.remote_query
-        else:
-            ret_val = process_status.Failed_to_parse_sql
-            sql_stmt = src_command
+    if unify_results.make_sql_stmt(status, select_parsed, is_suport_join):
+        ret_val = process_status.SUCCESS
+        sql_stmt = select_parsed.remote_query
+    else:
+        ret_val = process_status.Failed_to_parse_sql
+        sql_stmt = src_command
 
     return [ret_val, table_name, sql_stmt]
 

@@ -41,7 +41,7 @@ information.
 
 ### Query API
 
-Example `timeserie` request
+Example `timeseries` request
 ``` javascript
 {
   "panelId": 1,

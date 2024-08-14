@@ -805,16 +805,13 @@ def process_message( topic, user_id, user_msg):
                 # Stat per broker
                 ip_port = client_sbscr.get_ip_port()
                 topics_dict = broker_to_topic[ip_port]      # List of topics for this broker
-                if not topic in topics_dict:
-                    status.add_error("Received message without subscriotion on topic: '%s'" % topic)
-                    if '#' in topics_dict:
-                        # Generic - get all topic
-                        topic_info = topics_dict['#']
-                    else:
-                        topic_info = None
-                    ret_val = process_status.MQTT_non_subscribed_err
-                else:
+                if topic in topics_dict:
                     topic_info = topics_dict[topic]
+                else:
+                    topic, topic_info = get_partial_match_topic(topics_dict, topic)
+                    if not topic_info:
+                        status.add_error("Received message without subscription on topic: '%s'" % topic)
+                        ret_val = process_status.MQTT_non_subscribed_err
 
                 if topic_info:
                     topic_info[1] += 1      # Counter messages
@@ -844,6 +841,34 @@ def process_message( topic, user_id, user_msg):
         subscript_mutex[user_id].release_read()
 
     return ret_val
+
+
+# ----------------------------------------------------------------------
+# Get a topic by comparison up to the hashtag (if exists)
+# ----------------------------------------------------------------------
+def get_partial_match_topic(topics_dict, topic):
+    """
+    topics_dict - the dictionary with info as f(topic). these topics can include hashtag
+    topic - the topic published withhou the hashtag
+    """
+
+    # Find if topics with partial match
+    topic_info = None
+    updated_topic = topic
+    for key in topics_dict:
+        if key[-1] == '#':
+            # Match prefix
+            key_len = len(key)
+            if key_len == 1:
+                topic_info = topics_dict[key]  # MAP All topics
+                updated_topic = key            # The topic with the hashtag
+                break
+            elif key[:-1] == topic[:key_len - 1]:
+                topic_info = topics_dict[key]  # Prefix match
+                updated_topic = key
+                break
+
+    return [updated_topic, topic_info]
 
 # ----------------------------------------------------------------------
 # Process a message using the bring command

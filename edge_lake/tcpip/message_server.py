@@ -498,8 +498,10 @@ class MQTT_MESSAGES(SESSION):
                 # Move the published data to the streamer through the MQTT Client on_message process
                 self.userdata = mqtt_topics_[self.topic_name]
             else:
-                self.userdata = 0
-                ret_val = process_status.Unrecognized_mqtt_topic
+                self.topic_name, self.userdata = mqtt_client.get_partial_match_topic(mqtt_topics_, self.topic_name)
+                if not self.userdata:
+                    self.userdata = None
+                    ret_val = process_status.Unrecognized_mqtt_topic
         if not ret_val:
             # Respond to the PUBLISH packet:
             # If QoS is 0 - None

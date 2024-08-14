@@ -69,8 +69,9 @@ def map_columns(status: process_status, dbms_name, table_name, tsd_name, tsd_id,
     attr_names_map = {}  # Map the keys in the JSON entry to lower
 
     for entry in json_data:
-        time_presence = False
+
         value_presence = False
+        time_presence = True        # Will be set to False if "insert_timestamp" (current_utc) is not used
 
         column_array = ["DEFAULT", current_utc, tsd_name, tsd_id]
 
@@ -95,7 +96,7 @@ def map_columns(status: process_status, dbms_name, table_name, tsd_name, tsd_id,
             if isinstance(column_value, str):
                 value_presence, column_value = handle_string_column_value(column_value, column_type, column_info[3], current_utc)
             elif isinstance(column_value, bool):
-                pass
+                value_presence = True
             elif isinstance(column_value, int):
                 time_presence = True  # This row has time value
                 if column_type.startswith("timestamp"):

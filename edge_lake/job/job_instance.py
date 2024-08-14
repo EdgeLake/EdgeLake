@@ -1315,6 +1315,8 @@ class JobInstance:
             data.append(["Local Create", self.job_info.select_parsed.local_create])
         if self.job_info.select_parsed.local_query != "":  # the SQL to provide the unified result
             data.append(["Local Query", self.job_info.select_parsed.local_query])
+        if self.job_info.select_parsed.get_increment_info():  # the SQL to provide the unified result
+            data.append(["Increment Info", self.job_info.select_parsed.get_increment_info()])
 
 
         output_txt += utils_print.output_nested_lists(data, "", None, True)
@@ -1574,6 +1576,17 @@ def get_query_stats(is_json):
     global query_monitor
     return query_monitor.get_stats(is_json)
 
+# =======================================================================================================================
+# Get the query log time that was set using "set query log" or "set query log profile [n] seconds"
+# =======================================================================================================================
+def get_query_log_time():
+    return query_log_time
+
+# =======================================================================================================================
+# Get the query monitor
+# =======================================================================================================================
+def get_query_monitor():
+    return query_monitor
 # =======================================================================================================================
 # Test Mutex Order by thread name
 # =======================================================================================================================
