@@ -36,14 +36,12 @@ def tcp_server( host: str, port: int, is_bind:bool, workers_count, trace):
 
     # Set a pool of workers threads
     workers_pool = utils_threads.WorkersPool("TCP", workers_count)
-    member_cmd.set_system_pool("tcp", workers_pool)
     buffer_size = params.TCP_BUFFER_SIZE
     params.add_param("anylog_server_port", str(port))
 
     net_utils.message_server("TCP Server", "tcp", host, port, buffer_size, workers_pool, rceive_data, is_bind, trace)
 
     net_utils.remove_connection(0)
-    member_cmd.set_system_pool("tcp", None)
     workers_pool = None
 
 # ----------------------------------------------------------------

@@ -13,7 +13,8 @@ import edge_lake.dbms.projection_entry as projection_entry
 import edge_lake.generic.utils_sql as utils_sql
 import edge_lake.generic.utils_columns as utils_columns
 import edge_lake.generic.utils_data as utils_data
-
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.trace_func as trace_func
 # ==================================================================
 # Create a dbms table, on the publisher node, per each issued query.
 # The table name inclused the job number.
@@ -647,15 +648,19 @@ def period_time_frame(select_parsed, description, table_name, updated_column_nam
     if select_parsed.with_leading_queries():
         # use leading query
         if filter == "":
-            leading = "sql %s text select max(%s) from %s where %s <= %s" % (
+            leading = "sql %s timezone = utc select max(%s) from %s where %s <= %s" % (
             select_parsed.remote_dbms, column_name, table_name, column_name, end_date_time)
             sub_sql_remote = "%s > %s and %s <= %s" % (column_name, "%s", column_name, "%s")
         else:
-            leading = "sql %s text select max(%s) from %s where %s <= %s %s" % (
+            leading = "sql %s timezone = utc select max(%s) from %s where %s <= %s %s" % (
             select_parsed.remote_dbms, column_name, table_name, column_name, end_date_time, filter)
             sub_sql_remote = "%s > %s and %s <= %s %s" % (column_name, "%s", column_name, "%s", filter)
 
         l_query = select_parsed.get_new_leading_query()  # get leading query
+
+        if trace_func.get_func_trace_level("period"):
+            utils_print.output(f"\r\n run client () {leading}", True)
+
         l_query.set_leading_query(leading)
         l_query.set_period_function(time_unit, count)
 

@@ -1769,7 +1769,6 @@ def rest_server(params: params, host: str, port: int, is_bind:bool, conditions):
     http_server_info.workers_count = interpreter.get_one_value_or_default(conditions, "threads", 5)
 
     http_server_info.workers_pool = utils_threads.WorkersPool("REST", http_server_info.workers_count, False)
-    member_cmd.set_system_pool("rest", http_server_info.workers_pool)
 
     declared_ip_port = host + ":" + str(port)
 
@@ -1817,8 +1816,6 @@ def rest_server(params: params, host: str, port: int, is_bind:bool, conditions):
         pass
 
     net_utils.remove_connection(1)      # Remove the REST connection IP/Port
-
-    member_cmd.set_system_pool("rest", None)
 
     http_server_info.workers_pool.exit()
 

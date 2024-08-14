@@ -64,6 +64,7 @@ import edge_lake.generic.process_log as process_log
 import edge_lake.generic.stats as stats
 import edge_lake.generic.version as version
 import edge_lake.generic.profiler as profiler
+import edge_lake.generic.trace_func as trace_func
 
 from edge_lake.json_to_sql.suggest_create_table import *
 from edge_lake.dbms.dbms import connect_dbms, get_real_dbms_name
@@ -147,10 +148,6 @@ sql_commands = {
     "create" : 1,
 }
 
-traced_func_ = {
-    "grafana"   :   0,
-    "mapping"   :   0,
-}
 
 
 nodes_options_ = ['operator','publisher','query','master']
@@ -158,11 +155,7 @@ nodes_pattern_ = '|'.join(map(re.escape, nodes_options_))   # This is to quickly
 commands_options_ = ["subset", "timeout"]
 commands_pattern_ = "|".join(re.escape(word) for word in commands_options_)
 
-# =======================================================================================================================
-# get the trace level of a function
-# =======================================================================================================================
-def get_func_trace_level(function_name):
-    return traced_func_[function_name]
+
 
 # =======================================================================================================================
 # Return True if the query pool is active
@@ -262,14 +255,6 @@ job_process_stat_ = {}          # A dictionary updated with job status - i.e. - 
 workers_pool = None         # Pool of workers thread
 
 echo_queue = None  # A message queue for buffered messages
-
-
-system_threads_pools_ = {
-    # The lists of continues system threads using a pool
-}
-
-def set_system_pool(pool_name, pool_obj):
-    system_threads_pools_[pool_name] = pool_obj
 
 # =======================================================================================================================
 # Connect a logical database to a physical database
@@ -2244,46 +2229,6 @@ def get_goto_line(status, name_to_line, goto_name):
     status.add_error("Script includes goto command without declared destination: '%s'" % goto_name)
     return -1  # not found
 
-
-# =======================================================================================================================
-# List of system threads and their status
-# get system threads
-# get system threads where pool = tcp and with_details = true and with_reset = true
-# =======================================================================================================================
-def get_system_threads(status, io_buff_in, cmd_words, trace):
-
-    global system_threads_pools_
-
-    info = ""
-    #                             Must     Add      Is
-    #                             exists   Counter  Unique
-    keywords = {"pool": ("str", False, False, True),        # The name of the pool
-                "details": ("bool", False, False, True),    # Include details
-                "reset": ("bool", False, False, True),      # Reset statistics
-                }
-    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
-
-    if not ret_val:
-        pool = interpreter.get_one_value_or_default(conditions, "pool", None)
-        details = interpreter.get_one_value_or_default(conditions, "details", False)
-        reset = interpreter.get_one_value_or_default(conditions, "reset", False)
-
-        if pool:
-            if pool in system_threads_pools_:
-                # A single pool
-                if  system_threads_pools_[pool]:
-                    # If not Null
-                    info += ("\r\n" + system_threads_pools_[pool].get_info(details, reset))
-            else:
-                status.add_error(f"Command 'get system threads' - Error in pool name: '{pool}'")
-                ret_val = process_status.ERR_command_struct
-        else:
-            # all pools
-            for key, pool in system_threads_pools_.items():
-                if pool:
-                    info += ("\r\n" + pool.get_info(details, reset))
-
-    return [ret_val, info]
 # =======================================================================================================================
 # List of threads running scrips and their info
 # =======================================================================================================================
@@ -6595,7 +6540,6 @@ def _exit(status, io_buff_in, cmd_words, trace):
         # wake the Rest server
         http_server.signal_rest_server()
         if workers_pool:
-            set_system_pool("query", None)
             workers_pool.exit()  # exit query threads
 
         mqtt_client.exit(0)
@@ -11459,7 +11403,7 @@ def next_query(status, io_buff_in, j_instance):
         is_leading, new_message = process_leading_message(status, select_parsed)
         if is_leading:
             # send leading message
-            message = new_message  # The Leadeing Message
+            message = new_message  # The Leading Message
             ret_val = process_status.SUCCESS
         else:
             # Get main query
@@ -14151,11 +14095,11 @@ def _set_trace(status, io_buff_in, cmd_words, trace):
                     else:
                         trace_command = ""      # All commands
                     utils_sql.set_trace_level(trace_level, trace_command)
-                elif command in traced_func_:
+                elif trace_func.is_traced(command):
                     # Enables trace on functions
                     # For example: when source data is mapped in mapping_policy.apply_policy_schema()
                     # command: trace level = 1 mapping
-                    traced_func_[command] = trace_level
+                    trace_func.set_trace_level(command, trace_level)
                 else:
                     # test sub command
                     command_list = command.split(' ',1)
@@ -16478,7 +16422,6 @@ def set_query_pool(status, io_buff_in, cmd_words, trace):
                 ret_val = process_status.ERR_process_failure
             else:
                 workers_pool = utils_threads.WorkersPool("Query", int(workers_count))
-                set_system_pool("query", workers_pool)
                 ret_val = process_status.SUCCESS
     else:
         ret_val = process_status.ERR_command_struct
@@ -17660,7 +17603,7 @@ _get_methods = {
         'profiler': {
             'command': get_profiler_output,
             'words_min': 7,
-            'help': {'usage': 'get profiler output where target = [target name]',
+            'help': {'usage': 'get profiler output where target = [process name]',
                      'example': 'get profiler output where target = operator',
                      'text': 'Output the profiler info',
                      'keywords': ["debug", "profile"],
@@ -18228,11 +18171,13 @@ _get_methods = {
                       'keywords' : ["node info", "configuration"],
                     }
                   },
-        "system threads": {'command': get_system_threads,
+        "system threads": {'command': utils_threads.get_system_threads,
                      'min_words': 3,
                      'help': {
-                         'usage': "get system threads [thread type]",
-                         'example': "get system threads\n""get system threads query",
+                         'usage': "get system threads where pool = [pool type] and with_details = [true/false] and reset = [true/false]",
+                         'example': "get system threads\n"
+                                    "get system threads where pool = query\n"
+                                    "get system threads where pool = rest and details = true",
                          'text': "Get the list of system threads and their status.",
                          'keywords': ["node info", "configuration", "monitor"],
                      }

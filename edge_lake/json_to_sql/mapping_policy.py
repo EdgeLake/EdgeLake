@@ -45,6 +45,7 @@ import edge_lake.generic.utils_print as utils_print
 import edge_lake.generic.params as params
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_io as utils_io
+import edge_lake.generic.trace_func as trace_func
 import edge_lake.dbms.partitions as partitions
 import edge_lake.dbms.db_info as db_info
 import edge_lake.cmd.member_cmd as member_cmd
@@ -266,7 +267,7 @@ def apply_policy_schema(status, source_dbms, source_table, policy_inner, policy_
             if ret_val != process_status.CHANGE_POLICY:
                 break
 
-    if member_cmd.get_func_trace_level("mapping"):
+    if trace_func.get_func_trace_level("mapping"):
         # Show the process output (the mapped data)
         show_insert_list(ret_val, insert_list)
 
