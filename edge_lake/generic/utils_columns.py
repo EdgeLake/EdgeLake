@@ -1217,6 +1217,8 @@ def get_utc_to_ms(utc_time_str):
         # Convert seconds to milliseconds
         epoch_time_ms = int(epoch_time * 1000)
     except:
+        errno, value = sys.exc_info()[:2]
+        process_log.add("Error", f"Failed date conversion (get_utc_to_ms) on '{utc_time_str}' with error: {errno}: {value}")
         epoch_time_ms = -1
 
     return epoch_time_ms
@@ -1235,13 +1237,11 @@ def get_ms_from_date_time(date_string):
         # Convert the timestamp (in float) to milliseconds
         milliseconds = int(timestamp * 1000)
     except:
+        errno, value = sys.exc_info()[:2]
+        process_log.add("Error", f"Failed date conversion (get_ms_from_date_time) on '{date_string}' with error: {errno}: {value}")
         milliseconds = -1
 
     return milliseconds
-
-
-
-
 
 # =======================================================================================================================
 # Given a date string in a format YYYY-MM-DD, return date object
