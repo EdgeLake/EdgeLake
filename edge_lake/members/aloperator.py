@@ -477,7 +477,7 @@ def process_watch_file(status, mem_view, conditions, config, with_tsd_info, par_
 
                     return ret_val      # Can return success or error
 
-                # Create the table if it does not exists - This process is done for every processed file (SQL or JSON)
+                # Create the table if it does not exist - This process is done for every processed file (SQL or JSON)
                 ret_val = create_table.validate_table(status, mem_view, file_info.dbms_name, file_info.table_name,
                                                       with_tsd_info, file_info.instructions, False, "", file_name,
                                                       trace_level)

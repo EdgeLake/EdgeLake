@@ -1968,6 +1968,19 @@ def make_output_row(row_number, title_list, data_types_list, query_data):
                     if not data_val:
                         json_row += "null"  # add NULL if field not provided
                     else:
+                        if data_type == "casting":
+                            # determine the data_type dynamically
+                            if isinstance(data_val,str):
+                                data_type = "str"
+                            elif isinstance(data_val,int):
+                                data_type = "int"
+                            elif isinstance(data_val, float):
+                                data_type = "float"
+                            elif isinstance(data_val, bool):
+                                data_type = "bool"
+                            else:
+                                data_type = "string"
+                            data_val = str(data_val)    # print will format the string by type
                         if data_type in get_value_by_type_:
                             json_row += get_value_by_type_[data_type](data_val)    # The outer str is because of casting
                         else:

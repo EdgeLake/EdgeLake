@@ -291,22 +291,37 @@ class AlQueryParams:
 
                 if "sql" in al_data.keys():
                     self.provided_sql = True        # SQL provided from the dashboards - process reply as increment or period
-                    if not self.default_query:
+                    if not self.request_type:
+                        # can be set on increment or period
                         self.request_type = "sql"   # Process reply as a SQL query
 
                     self.sql_query = True
-                    self.sql_stmt = str(al_data["sql"])
-                    if self.sql_stmt:
-                        self.sql_stmt = self.sql_stmt.strip()  # remove leading and trailing spaces
-                        if self.sql_stmt[-1] == ';':
-                            self.sql_stmt = self.sql_stmt[:-1]  # remove the end of stmt comma as the stmt can be extended
+                    self.sql_stmt = str(al_data["sql"]).strip()
+
+                    if len(self.sql_stmt) < 10:
+                        return [process_status.Failed_to_parse_sql, "Error in SQL stmt format"]
+
+                    if self.sql_stmt[-1] == ';':
+                        self.sql_stmt = self.sql_stmt[:-1]  # remove the end of stmt comma as the stmt can be extended
 
                     # get the table name in lower case to find the table name location and the WHERE location
                     sql_lower = self.sql_stmt.lower()  # Can not change self.sql_stmt to lower - some values needs to be in capital letters
+                    if sql_lower[:7] != "select ":
+                        return [process_status.Failed_to_parse_sql, "Failed to identify 'select' in SQL stmt"]
+
+                    # Test if increments
+                    if not self.default_query:
+                        # User did nit specify "type" : "increment" in the payload
+                        for index in range(7, len(sql_lower)):
+                            if sql_lower[index] != ' ':
+                                if sql_lower[index:index+10] == "increments":
+                                    self.default_query = True
+                                    self.request_type = "increments"
+                                break
+
                     if not table_provided:
                         # get the table name from the sql statement
-                        self.table_name = utils_sql.get_select_table_name(
-                            sql_lower)  # Table name mention explicitly in the SQL
+                        self.table_name = utils_sql.get_select_table_name(sql_lower)  # Table name mention explicitly in the SQL
                     else:
                         # change the table name pn the SQL using the table name in the JSON
                         offset_start, offset_end = utils_sql.get_offsets_table_name(sql_lower)
@@ -377,12 +392,6 @@ class AlQueryParams:
     # =======================================================================================================================
     def is_tsd(self):
         return self.timeseries
-
-    # =======================================================================================================================
-    # Return True for default query
-    # =======================================================================================================================
-    def is_default_query(self):
-        return self.default_query
 
     # =======================================================================================================================
     # Return True for default query
@@ -1679,7 +1688,8 @@ def make_anylog_query(status, query_params):
 
     if query_params.is_default_query():
         if query_params.get_request_type() == "period":
-            sql_stmt = get_period_timeseries_stmt(interval_unit, interval_time, time_column, value_column, table_name,
+            user_stmt = query_params.get_user_stmt()
+            sql_stmt = get_period_timeseries_stmt(status, user_stmt, interval_unit, interval_time, time_column, value_column, table_name,
                                                   start_time, end_time, where_cond, functions, limit)
         elif query_params.get_request_type() == "increments":
             if query_params.is_provided_sql():
@@ -1792,7 +1802,7 @@ def update_increments_stmt(status, user_stmt, interval_unit, interval_time, time
 # Make a timeseries SQL statement to pull the last data provided
 # SELECT MIN(value) AS min, AVG(value) AS avg, MAX(value) AS max FROM ping_sensor WHERE period(day, 1, now(), timestamp) AND device_name = '${device_name}'
 # =======================================================================================================================
-def get_period_timeseries_stmt(interval_unit, interval_time, time_column, value_column, table_name, start_time,
+def get_period_timeseries_stmt(status, user_stmt, interval_unit, interval_time, time_column, value_column, table_name, start_time,
                                end_time, where_cond, functions, limit):
 
     if where_cond:
@@ -1800,8 +1810,24 @@ def get_period_timeseries_stmt(interval_unit, interval_time, time_column, value_
     else:
         where_stmt = ""
 
+    if user_stmt:
+        # User specifies the SQL
+        """
+        {
+          "type": "period",
+          "sql": "select max(insert_timestamp) as insert_timestamp, avg(hw_influent) as hw_influent from wwp_analog",
+          "time_column": "insert_timestamp",
+          "grafana": {
+            "format_as": "table"
+          },
+          "trace_level" : 1
+        }
+        """
+        period_func = f" where period({interval_unit}, {interval_time}, '{end_time}',{time_column} {where_stmt});"
 
-    if functions:
+        sql_stmt = user_stmt + period_func
+
+    elif functions:
         source_stmt = "SELECT max(%s) as timestamp"
         for func_name in functions:
             source_stmt += ", %s(%s) as %s_val" % (func_name, value_column, func_name)
@@ -1809,6 +1835,7 @@ def get_period_timeseries_stmt(interval_unit, interval_time, time_column, value_
         source_stmt += " from %s where period(%s, %u, '%s', %s %s);"
 
         sql_stmt = source_stmt % (time_column, table_name, interval_unit, interval_time, end_time, time_column, where_stmt)
+
 
     else:
         source_stmt = "SELECT " \

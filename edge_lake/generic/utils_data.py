@@ -38,6 +38,7 @@ data_types_unifier_ = {
 
     "str" :     "varchar",
     "string" :  "varchar",
+    'char varying' : "varchar",
     "uuid"   :  "uuid",
     "int":      "int",
     "bigint":   "bigint",
@@ -219,6 +220,24 @@ def unify_data_type( status, data_type_name ):
 
     return [ret_val, data_type]
 
+# -------------------------------------------------------------------------
+#   Return a unified data type from the data_types_unifier_
+# -------------------------------------------------------------------------
+def get_unified_data_type( data_type_name ):
+
+    global data_types_unifier_
+
+    data_type = data_type_name.strip()
+    if len(data_type):
+        if data_type in data_types_unifier_:
+            return data_types_unifier_[data_type]
+        if data_type.startswith("timestamp "):
+            return "timestamp"
+        if data_type.startswith("character"):
+            data_type = data_type.strip()   # Make the parenthesis without spaces (before and after)
+            return data_type.replace("character", "char", 1)
+
+    return None
 # -------------------------------------------------------------------------
 # Return true if the data type is in the supported dictionary
 # -------------------------------------------------------------------------

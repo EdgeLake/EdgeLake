@@ -44,14 +44,6 @@ def get_instance_by_name(instance_name):
     return instance
 
 
-cast_to_type_ = {        # Map casting name to data type
-
-    "float" : "float",
-    "int"   : "int",
-    "ljust" : "str",
-    "rjust" : "str"
-}
-
 tz_list = {}
 
 #datetime_pattern_ = r"'([\d-]+\s[\d:.]+)'" # using re - captures the datetime string in the format 'YYYY-MM-DD HH:MM:SS.ffffff'.
@@ -1659,6 +1651,17 @@ def cast_to_str(status, row, casting_str, value):
     return str(value)
 
 # =======================================================================================================================
+# do lstrip
+# =======================================================================================================================
+def cast_lstrip(status, row, casting_str, value):
+    return str(value).lstrip()
+# =======================================================================================================================
+# do rstrip
+# =======================================================================================================================
+def cast_rstrip(status, row, casting_str, value):
+    return str(value).rstrip()
+
+# =======================================================================================================================
 # cast to float
 # =======================================================================================================================
 def cast_to_float(status, row, casting_str, value):
@@ -1828,6 +1831,8 @@ casting_methods_ = {
     'fo' : cast_with_format,
     'da' : cast_to_date_time,
     'fu' : cast_by_function,
+    'ls' : cast_lstrip,
+    'rs' : cast_rstrip,
 }
 # =======================================================================================================================
 # Apply casting on a column
@@ -1861,32 +1866,6 @@ def cast_column(status, row, col_castings, column_val):
 
 
     return [ret_val,casted_value]
-
-# =======================================================================================================================
-# Return the data type by the cast string
-# =======================================================================================================================
-def cast_key_to_type(casting_per_column):
-
-    global cast_to_type_        # a Mapping dict from casting to data type
-
-    casting_str = casting_per_column[-1]       # Could be multiple casting for a column, take the last one
-
-    if casting_str[-1] == ')':
-        index = casting_str.rfind('(')
-        if index > 0:
-            key = casting_str[:index]
-            if key in cast_to_type_:
-                data_type = cast_to_type_[key]
-            else:
-                data_type = None
-        else:
-            data_type = None
-    elif casting_str in cast_to_type_:
-        data_type = cast_to_type_[casting_str]
-    else:
-        data_type = None
-
-    return data_type
 
 # =======================================================================================================================
 # Validate a date string

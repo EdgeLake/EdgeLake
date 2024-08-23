@@ -965,17 +965,12 @@ class PSQL(sql_storage):
     # ======================================
     def get_insert_rows(self, status: process_status, dbms_name: str, table_name: str, insert_size: int,
                         column_names: list, insert_rows: list):
-        insert_statements = f"INSERT INTO {table_name} VALUES"
+        insert_statements = []
 
-        rows_added = False
         for row in insert_rows:
-            # transform from an array of columns to a comma seperated string
             if not row:
                 continue
-            if not rows_added:
-                insert_statements += f"\n({','.join(row)})"     # No Comma  before row
-                rows_added = True
-            else:
-                insert_statements += f",\n({','.join(row)})"
+            insert_statements.append(f"({','.join(row)})")
 
-        return insert_statements + ';'
+        return f"INSERT INTO {table_name} VALUES " + ",\n".join(insert_statements) + ';'
+

@@ -2009,7 +2009,15 @@ def get_dbms_size(status, dbms_name):
 
     reclaim_dbms_space(status, dbms_name)
 
-    reply = db_connect.get_dbms_size(status)  # Implemented by each interface
+    dbms_size = db_connect.get_dbms_size(status)  # Implemented by each interface
+
+    if len(dbms_size) > 3:
+        try:
+            reply = f"{int(dbms_size):,}"
+        except:
+            reply = dbms_size
+    else:
+        reply = dbms_size
 
     return reply
 

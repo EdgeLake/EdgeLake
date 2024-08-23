@@ -834,66 +834,54 @@ class SQLITE(sql_storage):
     # Get a single insert for all new entries
     # ======================================
     def get_single_insert(self, status: process_status, dbms_name: str, table_name: str, insert_size: int,
-                            column_names: list, insert_rows: list):
+                          column_names: list, insert_rows: list):
 
-        column_names_str = ""
-        for entry in column_names:
-            column_names_str += f"{entry[1]}, "
-        insert_statements = f"INSERT INTO {table_name} ({column_names_str[:-2]}) VALUES"
+        # Generate column names string
+        column_names_str = ", ".join(entry[1] for entry in column_names)
+        insert_statements = []
 
-        rows_added = False
         for row in insert_rows:
-            # transform from an array of columns to a comma seperated string
             if not row:
                 continue
 
-            columns_string = ""
-            for col_val in row:
-                if col_val == "DEFAULT":
-                    columns_string += "NULL, "
-                else:
-                    columns_string += f"{col_val}, "
+            # Generate values string
+            columns_string = ", ".join("NULL" if col_val == "DEFAULT" else col_val for col_val in row)
 
-            if columns_string:
-                if not rows_added:
-                    insert_statements += f"\n({columns_string[:-2]})"     # No Comma  before row
-                    rows_added = True
-                else:
-                    insert_statements += f",\n({columns_string[:-2]})"
+            insert_statements.append(f"({columns_string})")
 
-        return insert_statements + ';'
+        return f"INSERT INTO {table_name} ({column_names_str}) VALUES " + ",\n".join(insert_statements) + ';'
 
     # =======================================
     # Map rows to insert statements
     # Adding column names and removing default values
     # ======================================
     def get_multiple_inserts(self, status: process_status, dbms_name: str, table_name: str, insert_size: int,
-                        column_names: list, insert_rows: list):
-        insert_statements = ""
+                             column_names: list, insert_rows: list):
+        insert_statements = []
         counter_columns = len(column_names)
+
         for column_values in insert_rows:
             if not column_values:
                 continue
-            names_string = ""
-            values_string = ""
+
             if counter_columns < len(column_values):
-                status.add_error("Table '%s.%s' is declared with %u columns and row inserted has %u columns" % (
-                dbms_name, table_name, counter_columns, len(column_values)))
-                insert_statements = ""
-                break
+                status.add_error(
+                    f"Table '{dbms_name}.{table_name}' is declared with {counter_columns} columns and row inserted has {len(column_values)} columns")
+                return ""
+
+            names_list = []
+            values_list = []
 
             for index, value in enumerate(column_values):
-
                 if value != "DEFAULT":
-                    # add column name and value
-                    # Column name is a list wheras every entry includes: <JSON Attribute Name><Table Column Name><Data Type><Default Value>
-                    names_string += column_names[index][1] + ','
-                    values_string += value + ','
+                    # Add column name and value
+                    names_list.append(column_names[index][1])
+                    values_list.append(value)
 
-            insert_stmt = "INSERT INTO %s (%s) VALUES (%s);\n" % (table_name, names_string[:-1], values_string[:-1])
-            insert_statements += insert_stmt
-        return insert_statements
+            insert_stmt = f"INSERT INTO {table_name} ({','.join(names_list)}) VALUES ({','.join(values_list)});"
+            insert_statements.append(insert_stmt)
 
+        return "\n".join(insert_statements)
 
 # =======================================================================================================================
 # Database name can include path - seperate the database name from the path

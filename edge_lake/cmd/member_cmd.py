@@ -1730,7 +1730,7 @@ def blockchain_select_schema(status, dbms_name, table_name):
 
     ret_val, create_stmt = blockchain_get(status, cmd.split(), blockchain_file, True)
     if ret_val or not create_stmt:
-        status.add_error("Missing 'create' section in blockchain info for table: '%s.%s'" % (dbms_name, table_name))
+        status.add_error("Failed to retrieve table definition from metadata policy for table: '%s.%s'" % (dbms_name, table_name))
         return None
 
     ret_val, t_name, schema_list = utils_sql.create_to_column_info(status, create_stmt)
@@ -1917,12 +1917,12 @@ def load_table_metadata_from_blockchain(status, db_cursor, output_prefix, dbms_n
     if output and len(output):
         string_data = utils_sql.format_db_rows(status, db_cursor, output_prefix, output, [], None)
     else:
-        status.add_error("Failed to get blockchain data on: %s.%s" % (dbms_name, table_name))
+        status.add_error(f"Failed to get metadata info from Table Policy with DBMS: '{dbms_name}' and Table: '{table_name}'")
         return process_status.Failed_load_table_blockchain
 
     table_info = utils_json.str_to_json(string_data)
     if table_info == None:
-        status.add_error("Failed to map blockchain data on: %s.%s" % (dbms_name, table_name))
+        status.add_error(f"Error in the format of a Table Policy (DBMS: '{dbms_name}' and Table: '{table_name}')")
         return process_status.Failed_load_table_blockchain
 
     db_info.set_table(dbms_name, table_name, table_info)
@@ -3964,11 +3964,7 @@ def deliver_rows(status, io_buff_in, j_instance, receiver_id, par_id, is_pass_th
             # Data types changed - create a new data type list representing the output
             types_list = copy.copy(data_types_list)
             for index, column_id in  enumerate(casting_columns):
-                new_data_type = utils_columns.cast_key_to_type(casting_list[index])
-                if not new_data_type:
-                    status.add_error(f"Casting instraction {casting_list[index]} is not recognized")
-                    return process_status.NON_supported_casting
-                types_list[int(column_id)] = new_data_type
+                types_list[int(column_id)] = "casting"  # "casting" will force the output code to determine the type dynamically as it can change with casting
         else:
             types_list = data_types_list
         ret_val = output_manager.init(status, select_parsed.get_source_query(), title_list, types_list, select_parsed.get_dbms_name())
@@ -6211,8 +6207,10 @@ def _drop_table(status, io_buff_in, cmd_words, trace):
         command = message_header.get_command(mem_view)
         msg_words = command.split()
         words_array = msg_words
+        is_msg = True
     else:
         words_array = cmd_words
+        is_msg = False
 
     if len(words_array) == 7 and utils_data.test_words(words_array, 3, ["where", "dbms", "="]):
         table_name = params.get_value_if_available(words_array[2])
@@ -6244,8 +6242,12 @@ def _drop_table(status, io_buff_in, cmd_words, trace):
     else:
         ret_value = process_status.ERR_command_struct
 
-    return ret_value
+    if is_msg:
+        reply = process_status.get_status_text(ret_value)
+        display = "echo"  # error goes to the message queue
+        ret_val = send_display_message(status, ret_value, display, io_buff_in, reply, False)  # send text message to peers
 
+    return ret_value
 
 # =======================================================================================================================
 # Drops a partition
@@ -9645,83 +9647,6 @@ def update_blockchain(status, platform, mem_view, policy, ip_port, blockchain_fi
     return ret_val
 
 # =======================================================================================================================
-# Drop instances across the entire network:
-# drop network table where dbms = dbms_name and table = table name and master = !master_node
-# drop network operator where id = [operator id]
-# =======================================================================================================================
-def drop_network_object(status, io_buff_in, cmd_words, trace):
-
-    words_count = len(cmd_words)
-    if cmd_words[3] != "where":
-       ret_val = process_status.ERR_command_struct
-    else:
-        #                          Must     Add      Is
-        #                          exists   Counter  Unique
-        keywords = {"master": ("str", True, False, True),
-                    "dbms": ("str", False, True, True),
-                    "table": ("str", False, True, True),
-                    "id": ("str", False, False, True),  # File, dbms
-                    }
-        ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
-        if ret_val:
-            # conditions not satisfied by keywords or command structure
-            return ret_val
-
-        master_node = interpreter.get_one_value(conditions, "master")
-
-        if  words_count == 15 and cmd_words[2] == "table":
-            if counter != 2:
-                status.add_error("Missing dbms and table names in 'drop network table' command")
-                ret_val = process_status.ERR_command_struct
-            else:
-                dbms_name = interpreter.get_one_value(conditions, "dbms")
-                table_name = interpreter.get_one_value(conditions, "table")
-                ret_val = drop_network_table(status, io_buff_in, master_node, dbms_name, table_name)
-        elif words_count == 11 and cmd_words[2] == "operator":
-            operator_id = interpreter.get_one_value(conditions, "id")
-            if operator_id:
-                # send drop policy command to the master node
-                get_command = "blockchain get operator where id = %s" % operator_id
-                ret_val =  drop_policy_from_metadata(status, io_buff_in, master_node, get_command)
-            else:
-                status.add_error("Missing Operator ID in 'drop network operator' command")
-                ret_val = process_status.ERR_command_struct
-        else:
-            ret_val = process_status.ERR_command_struct
-
-    return ret_val
-
-# =======================================================================================================================
-# Drop network instance across the enire network:
-# drop network table where dbms = dbms_name and table = table name
-# drop network operator where id = [operator id]
-# =======================================================================================================================
-def drop_network_table(status, io_buff_in, master_node, dbms_name, table_name):
-    '''
-    Identify all nodes that host data and send drop table command
-    Update the blockchain to remove the table
-    '''
-    ret_val = process_status.SUCCESS
-
-    # Get the list of nodes that have local tables to drop
-    ret_val, operators_list = resolve_destination(status, "", False, dbms_name, table_name, "")
-
-    if not ret_val:
-
-        for operator in operators_list:
-            # drop the table with all operators
-            command_str = "run client %s:%s drop table %s where dbms = %s" % (operator[0], operator[1], table_name, dbms_name)
-            ret_val = process_cmd(status, command_str, False, None, None, io_buff_in)
-            if ret_val:
-                break
-
-        if not ret_val:
-            # drop the table definition from the blockchain
-            get_command = "blockchain get table where name = %s and dbms = %s" % (table_name, dbms_name)
-            ret_val = drop_policy_from_metadata(status, io_buff_in, master_node, get_command)
-
-    return ret_val
-# =======================================================================================================================
 # Retrieve the policy and if available -
 # send a message to the master node / or blockchain to delete the policy
 # =======================================================================================================================
@@ -9735,6 +9660,13 @@ def drop_policy_from_metadata(status, io_buff_in, master_node, get_command):
     if not ret_val:
         if len(policy) == 1:
             # Drop the operator policies
+            if not master_node:
+                cmd_get_master = f"blockchain get (master) bring.ip_port"
+                ret_val, master_node = blockchain_get(status, cmd_get_master.split(), None, True)
+                if ret_val or not master_node or not isinstance(master_node, str):
+                    status.add_error("Failed to retrieve Master Node IP and port from the Ledger")
+                    return process_status.ERR_process_failure
+
             policy_str = utils_json.to_string(policy[0])
             command_str = "run client %s blockchain drop policy %s" % (master_node, policy_str)
             ret_val = process_cmd(status, command_str, False, None, None, io_buff_in)
@@ -13497,7 +13429,150 @@ def test_connection(status, io_buff_in, cmd_words, trace):
     ret_val, reply = net_utils.test_host_port(ip_port)
     return [ret_val, reply]
 
+# =======================================================================================================================
+# Issue "drop table" command on all nodes that maintain the table's data
+# AND removes the blockchain ledger
+# Example: drop network table where name = ping_sensor and dbms = lsl_demo and master = 10.0.0.25:2548
+# =======================================================================================================================
+def drop_network_table(status, io_buff_in, cmd_words, trace):
 
+    reply = ""
+    keywords = {
+        #                 Must     Add      Is
+        #                 exists   Counter  Unique
+
+        "dbms": ("str", True, False, True),
+        "name": ("str", True, False, True),
+        "master": ("str", True, False, False),
+    }
+
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
+    if ret_val:
+        return ret_val
+
+    dbms_name = conditions["dbms"][0]
+    if dbms_name == '*':
+        status.add_error(f"Unrecognized database name - asterisk (*) for dbms name is not allowed")
+        return process_status.Error_command_params
+
+    table_name = conditions["name"][0]
+    if table_name == '*':
+        status.add_error(f"Unrecognized table name - asterisk (*) for table name is not allowed")
+        return process_status.Error_command_params
+
+    master_node = interpreter.get_one_value_or_default(conditions, "master", None)
+
+    # Get the list of nodes that have local tables to drop
+    ret_val, operators_list = resolve_destination(status, "", False, dbms_name, table_name, "")
+
+    # Get the list of operators that host the data
+    if not ret_val:
+        if not len(operators_list):
+            status.add_error(f"No operators for dbms: '{dbms_name}' and table '{table_name}'")
+            ret_val = process_status.Error_command_params
+        else:
+            ip_port_list = []
+            for operator in operators_list:
+                ip_port_list.append(f"{operator[0]}:{operator[1]}")
+            drop_cmd = f"drop_table_cmd{{}} = run client ({','.join(ip_port_list)}) drop table {table_name} where dbms = {dbms_name}"
+            ret_val = process_cmd(status, drop_cmd, False, None, None, io_buff_in)
+            if not ret_val:
+
+                time.sleep(3)       # Wait for the round trips
+
+                nodes_reply_str = params.get_value_if_available("!drop_table_cmd")
+                nodes_reply = utils_json.str_to_json(nodes_reply_str)
+                if not nodes_reply:
+                    status.add_error(f"Failed to interpret replies for 'test network tables' command with DBMS: '{dbms_name}' and table '{table_name}'")
+                    ret_val = process_status.ERR_process_failure
+                else:
+                    reply_summary = []
+                    all_dropped = True
+                    for operator in operators_list:
+                        ip_port = f"{operator[0]}:{operator[1]}"
+                        if ip_port in nodes_reply:
+                            # this node replied to the 'test network table command"
+                            single_reply = nodes_reply[ip_port]
+                            if single_reply != "Success":
+                                all_dropped = False
+                        else:
+                            single_reply = "No reply from node"
+                            all_dropped = False
+                        reply_summary.append([ip_port, single_reply])
+
+                    if all_dropped:
+                        get_command = f"blockchain get table where name = {table_name} and dbms = {dbms_name}"
+                        ret_val =  drop_policy_from_metadata(status, io_buff_in, master_node, get_command)
+                        if not ret_val:
+                            reply_summary.append(["Ledger Policy", "Dropped"])
+                        else:
+                            reply_summary.append(["Ledger Policy", "Not Dropped"])
+
+                    reply = utils_print.output_nested_lists(reply_summary, f"Drop Network Table: {dbms_name}.{table_name}", ["IP:Port","Status"], True)
+                    utils_print.output(reply, True)
+
+    return ret_val
+
+# =======================================================================================================================
+# Issue "test table" command on all nodes that maintain the table's data
+# Example: test network table where name = ping_sensor and dbms = lsl_demo
+# =======================================================================================================================
+def test_network_table(status, io_buff_in, cmd_words, trace):
+
+    reply = ""
+    keywords = {
+        #                 Must     Add      Is
+        #                 exists   Counter  Unique
+
+        "dbms": ("str", True, False, True),
+        "name": ("str", True, False, True),
+    }
+
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
+    if ret_val:
+        return [ret_val, None]
+
+    dbms_name = conditions["dbms"][0]
+    if dbms_name == '*':
+        status.add_error(f"Unrecognized database name - asterisk (*) for dbms name is not allowed")
+        return [process_status.Error_command_params, reply]
+
+    table_name = conditions["name"][0]
+
+    # Get the list of operators that host the data
+    operators = metadata.get_operators_by_company('*', dbms_name, table_name)
+    if not len(operators):
+        status.add_error(f"No operators for dbms: '{dbms_name}' and table '{table_name}'")
+        ret_val = process_status.Error_command_params
+    else:
+        ip_port_list = []
+        for operator in operators:
+            ip_port_list.append(operator[7])
+        test_cmd = f"test_table_cmd{{}} = run client ({','.join(ip_port_list)}) test table {table_name} where dbms = {dbms_name}"
+        ret_val = process_cmd(status, test_cmd, False, None, None, io_buff_in)
+
+        time.sleep(3)       # Wait for the round trips
+
+        nodes_reply_str = params.get_value_if_available("!test_table_cmd")
+        nodes_reply = utils_json.str_to_json(nodes_reply_str)
+        if not nodes_reply:
+            status.add_error(f"Failed to interpret replies for 'test network tables' command with DBMS: '{dbms_name}' and table '{table_name}'")
+            ret_val = process_status.ERR_process_failure
+        else:
+            reply_summary = []
+            for entry in operators:
+                operator_name = entry[5]
+                ip_port = entry[7]
+                if ip_port in nodes_reply:
+                    # this node replied to the 'test network table command"
+                    single_reply = nodes_reply[ip_port]
+                else:
+                    single_reply = "No reply from node"
+                reply_summary.append([operator_name, ip_port, single_reply])
+
+            reply = utils_print.output_nested_lists(reply_summary, f"Network status for DBMS: '{dbms_name}' Table '{table_name}'", ["Operator","IP:Port","Status"], True)
+
+    return [ret_val, reply]  # Return a message if an error
 # =======================================================================================================================
 # Test that a table definition in the dbms is the same as the blockchain definition of the table
 # Example: test table ping_sensor where dbms = lsl_demo
@@ -13620,9 +13695,13 @@ def compare_schema_ledger_to_table(status, dbms_name, table_name, blockchain_sch
                     break
 
                 if l_data_type != d_data_type:
-                    reply = f"Test table {dbms_name}.{table_name} schema failed: column {index + 1} ({l_column_name}) with data type '{l_data_type}' in blockchain and '{d_data_type}' in dbms schema"
-                    ret_val = process_status.Inconsistent_schema
-                    break
+                    l_unified_dt = utils_data.get_unified_data_type(l_data_type)
+                    d_unified_dt = utils_data.get_unified_data_type(d_data_type)
+                    if not l_unified_dt or not d_unified_dt or l_unified_dt != d_unified_dt:
+                        # Can be "timestamp without time zone" in the dbms and timestamp in the ledger
+                        reply = f"Test table {dbms_name}.{table_name} schema failed: column {index + 1} ({l_column_name}) with data type '{l_data_type}' in blockchain and '{d_data_type}' in dbms schema"
+                        ret_val = process_status.Inconsistent_schema
+                        break
 
     else:
         reply = "\r\n\r\nSchema for %s.%s in the local database is not recognized" % (dbms_name, table_name)
@@ -17378,6 +17457,17 @@ _test_methods = {
                        'keywords' : ["debug", "dbms"],
                     }
                    },
+        "network table": {'command': test_network_table,
+              'words_count': 11,
+              'help': {
+                  'usage': "test network table where name = [table name] and dbms = [dbms name]",
+                  'example': "test network table where name = ping_sensor and dbms = lsl_demo\n"
+                             "test network table where name = * and dbms = lsl_demo",
+                  'text': "Issue 'test table' command for all the operator nodes that host the table.",
+                  'link': 'blob/master/test%20commands.md#test-table',
+                  'keywords': ["debug", "dbms"],
+              }
+        },
 
 }
 
@@ -18786,6 +18876,7 @@ commands = {
                             'create table tsd_info where dbms = almgm',
                  'text': 'Creates a data table assigned to the named database. The structure of the table is derived from the metadata in the blockchain\n'
                          'The tables \'ledger\' and \'tsd_info\' are system tables and their structure is predefined',
+                'link' : 'blob/master/sql%20setup.md#creating-tables',
                  'keywords' : ["data"],
                  },
         'trace': 0,
@@ -18816,12 +18907,27 @@ commands = {
         'trace': 0,
     },
 
+    "drop network table": {'command': drop_network_table,
+                      'words_mon': 11,
+                      'help': {
+                          'usage': "drop network table where name = [table name] and dbms = [dbms name] and master = [master_node]",
+                          'example': "drop network table where name = ping_sensor and dbms = lsl_demo and master = 10.0.0.25:2548",
+                          'text': "Issue a 'drop table' command for all the operator nodes that host the table.\n"
+                                  "Issue a 'blockchain drop policy' command to remove the policy from the ledger.",
+                          'link' : 'blob/master/sql%20setup.md#dropping-a-table-on-all-nodes',
+                          'keywords': ["data", "dbms"],
+                      },
+                    'trace': 0,
+    },
+
     'drop table': {
         'command': _drop_table,
         'help': {'usage': 'drop table [table name] where dbms = [dbms name]',
-                 'example': 'drop table tsd_info where dbms = almgm',
+                 'example': 'drop table ping_sensor where dbms = lsl_demo\n'
+                            'drop table tsd_info where dbms = almgm',
                  'text': 'Drop a table in the named database. If the table is partitioned, all partitions are dropped.',
-                 'keywords' : ["data"],
+                 'link' : 'blob/master/sql%20setup.md#dropping-tables',
+                 'keywords' : ["data", "dbms"],
                  },
         'trace': 0,
     },
@@ -18929,17 +19035,6 @@ commands = {
                     'The call returns the sql file name and path',
             'keywords' : ["data", "json"],
             },
-        'trace': 0,
-    },
-
-    'drop network': {
-        'command': drop_network_object,
-        'help': {'usage': 'drop network [object] where [conditions]',
-                 'example': 'drop network table where dbms = my_dbms and table = sensor_35_data\n'
-                            'drop network operator where id = 3428878990774992003ac663',
-                 'text': 'Drop an object (like a table or an operator) and update the related policies from all network nodes',
-                 'keywords' : ["policy"],
-                 },
         'trace': 0,
     },
 
