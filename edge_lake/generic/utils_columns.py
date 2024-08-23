@@ -1207,7 +1207,11 @@ def get_time_in_seconds(date_time):
 def get_utc_to_ms(utc_time_str):
 
     try:
-        date_format = "%Y-%m-%dT%H:%M:%S.%fZ" if utc_time_str[10] == 'T' else "%Y-%m-%d %H:%M:%S.%f"
+        if utc_time_str[10] == 'T':
+            date_format = "%Y-%m-%dT%H:%M:%S.%fZ" if utc_time_str[-1] == 'Z' else "%Y-%m-%dT%H:%M:%S.%f"
+        else:
+            # No T no Z
+            date_format = "%Y-%m-%d %H:%M:%S.%f"
         # Parse the UTC time string into a datetime object
         utc_dt = datetime.strptime(utc_time_str, date_format)
 
@@ -1229,7 +1233,11 @@ def get_utc_to_ms(utc_time_str):
 def get_ms_from_date_time(date_string):
 
     try:
-        date_format = "%Y-%m-%dT%H:%M:%S.%fZ" if date_string[10] == 'T' else "%Y-%m-%d %H:%M:%S.%f"
+        if date_string[10] == 'T':
+            date_format = "%Y-%m-%dT%H:%M:%S.%fZ" if date_string[-1] == 'Z' else "%Y-%m-%dT%H:%M:%S.%f"
+        else:
+            # No T no Z
+            date_format = "%Y-%m-%d %H:%M:%S.%f"
         # Parse the UTC time string into a datetime object
         date_object = datetime.strptime(date_string, date_format)
         # Convert the datetime object to a timestamp
