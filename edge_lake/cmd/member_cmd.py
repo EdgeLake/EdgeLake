@@ -1172,7 +1172,8 @@ def blockchain_push_local(status, io_buff_in, cmd_words, trace, func_params):
         json_dictionary = None
 
     if not ret_val:
-        ret_val, json_dictionary = prep_policy(status, cmd_words[policy_offset], func_params[0])
+        compare_to_file = not func_params[1]    # If message to blockchain - this is a master node, avoid compare to local blockchain file
+        ret_val, json_dictionary = prep_policy(status, cmd_words[policy_offset], func_params[0], compare_to_file)
 
         if not ret_val:
             # if blockchain table was not created - create table ledger in blockchain dbms
@@ -8961,7 +8962,7 @@ def blockchain_commit(status, io_buff_in, cmd_words, trace, func_params):
             platform_name = params.get_value_if_available(cmd_words[3])
             json_key = params.get_value_if_available(cmd_words[4])
 
-            ret_val, json_dictionary = prep_policy(status, json_key, b_file)
+            ret_val, json_dictionary = prep_policy(status, json_key, b_file, True)
 
             if not ret_val:
                 policy_id =  utils_json.get_policy_value(json_dictionary, None, "id", None)
@@ -9089,12 +9090,16 @@ def blockchain_wait(status, io_buff_in, cmd_words, trace, func_params):
 # =======================================================================================================================
 # Add Missing components to the policy
 # =======================================================================================================================
-def prep_policy(status: process_status, json_key:str, blockchain_file:str):
+def prep_policy(status: process_status, json_key:str, blockchain_file:str, compare_to_file:bool):
     '''
     Giving a key to the AnyLog dictionary, the value assigned to the key is retrieved.
     If the value represents a Policy, the policy is validated and missing attributes are added:
     * Depending on the Policy type - the policy missing attributes are added.
     * For all policies - the ID and Date attribute are added (if missing from the policy)
+
+    compare_to_file - determine if to test policy against local file. In master this process is not done because:
+    a) It was done at the edge nodes
+    b) With master and operator in a single node, it can reject policies at the master
     '''
 
     json_data = params.get_value_if_available(json_key)
@@ -9114,12 +9119,13 @@ def prep_policy(status: process_status, json_key:str, blockchain_file:str):
         ret_val = policies.add_json_id_date(json_dictionary)  # if there is no ID to the JSON, add ID
         if not ret_val:
 
-            ret_val = policies.process_new_policy(status, json_dictionary, blockchain_file)  # Add values to special type of policies
-            if not ret_val:
-                if not utils_json.validate(json_dictionary):  # test dictionary can be represented as JSON
-                    ret_val = process_status.ERR_wrong_json_structure
-                else:
-                    ret_val = process_status.SUCCESS
+            if compare_to_file:
+                ret_val = policies.process_new_policy(status, json_dictionary, blockchain_file)  # Add values to special type of policies
+                if not ret_val:
+                    if not utils_json.validate(json_dictionary):  # test dictionary can be represented as JSON
+                        ret_val = process_status.ERR_wrong_json_structure
+                    else:
+                        ret_val = process_status.SUCCESS
     else:
         status.add_keep_error("String is not representative of JSON: " + json_data)
         ret_val = process_status.ERR_wrong_json_structure
@@ -14438,6 +14444,8 @@ def get_node_status(status, io_buff_in, cmd_words, trace):
 
     ret_val = process_status.SUCCESS
     reply = node_info.get_node_name() + " running"
+    if profiler.is_active():
+        reply += " -- in profiling mode"
 
     if words_count == (offset + 2):
         # Only get status
@@ -15902,6 +15910,8 @@ def get_operator_exec(status, io_buff_in, cmd_words, trace):
             query_counter = query_details["id"]
             rows_count = query_details["rows_count"]
             limit = query_details["limit"]
+            if not "threads" in query_details:
+                break       # Query was not yet set by the query thread
             threads_participating = query_details["threads"]
             threads_done = query_details["done"]
             thread_info = query_details["info"]

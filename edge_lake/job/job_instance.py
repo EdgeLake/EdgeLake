@@ -1240,7 +1240,7 @@ class JobInstance:
                             status = "Error: %s" % (process_status.get_status_text(returned_code))
                 else:
                     if self.job_status == "Delivered":
-                        status = "Received"  # message that does not need a reply
+                        status = "Delivered"  # message that does not need a reply
                     else:
                         if self.members[x][y].is_last_block() == False:
                             status = "Processing"

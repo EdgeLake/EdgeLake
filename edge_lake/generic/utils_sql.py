@@ -10,7 +10,7 @@ import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_data as utils_data
 import edge_lake.generic.utils_columns as utils_columns
 import edge_lake.generic.utils_print as utils_print
-
+import edge_lake.generic.params as params
 
 trace_level_ = 0
 trace_command_ = ""     # Limit trace to this command
@@ -1022,6 +1022,24 @@ def orgaize_where_condition(source_string, offset):
             where_string += source_string[offset_copied:offset_copied + bytes_to_copy] + replace_char
             bytes_to_copy = 0
             offset_copied = offset + 1
+        elif char == "!" and previous == ' ':
+            # replace with dictionary
+            where_string += source_string[offset_copied:offset_copied + bytes_to_copy]
+            bytes_to_copy = 0
+            offset_next = source_string.find(' ', offset)   # Find the space to flag end of word after exclamation point
+            if offset_next == -1:
+                offset_next = len(source_string)
+            offset_copied = offset_next + 1
+            key = source_string[offset:offset_next]
+            if len(key) >= 2:
+                word_value = params.get_value_if_available(key)
+            else:
+                word_value = key
+            where_string += word_value if word_value else source_string[offset:offset_next]
+            previous = where_string[-1]
+            where_string += ' '
+            char = ' '     # Because char was replaced by dictionary and space is jumped over by  offset += 1 below
+            offset = offset_next
         else:
             bytes_to_copy += copy_length
 

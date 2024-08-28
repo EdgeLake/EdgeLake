@@ -642,12 +642,23 @@ def grafana_post(status, request_handler, decode_body, timeout):
         ret_val = stream_data_to_grafana(status, request_handler, data_str)
 
     else:
-        status.add_error("[Grafana API Error] [Unrecognized key provided by Grafana to POST request: '%s']" % request_handler.path)
-        ret_val = process_status.REST_call_err
+        grafana_request = utils_json.str_to_json(decode_body)
+        if isinstance(grafana_request,dict) and "payload" in grafana_request:
+            ret_val, data_str = process_other_request(status, grafana_request)
+
+            if ret_val:
+                status_txt = process_status.get_status_text(ret_val)
+                data_str = f'{{"message": "{data_str}", "status": "{status_txt} ({ret_val})"}}'
+
+            ret_val = stream_data_to_grafana(status, request_handler, data_str)
+
+        else:
+            ret_val = process_status.REST_call_err
+
+        if ret_val:
+            status.add_error("[Grafana API Error] [Unrecognized key provided by Grafana to POST request: '%s']" % request_handler.path)
 
     return ret_val
-
-
 # -----------------------------------------------------------------------------------
 # Get the list of tables for all database
 # -----------------------------------------------------------------------------------
@@ -1010,7 +1021,7 @@ def set_default_timeseries_struct(table_name, reply_data, functions, is_fixed_po
     else:
         gr_str = gr_str[:-1]    # Remove suffix comma
 
-    return gr_str  # return syting in grafana format
+    return gr_str  # return string in grafana format
 # =======================================================================================================================
 # Organize the reply data (to the default query) in the Grafana format to time series view
 # Example: data_str = '[{"target": "series B", "datapoints": [[-0.5799358614273129, 1598992658000], [-0.9281617508387254, 1599014215647], [0.18279045401831143, 1599014236823]]}]'
@@ -1912,6 +1923,21 @@ def is_graphed_data_type(data_type):
     return False
 
 # =======================================================================================================================
+# Value to data type
+# =======================================================================================================================
+def val_to_data_type(data_val):
+
+    if isinstance(data_val, int):
+        data_type = "number"
+    elif isinstance(data_val, float):
+        data_type = "number"
+    else:
+        data_type = "string"
+
+
+    return data_type
+
+# =======================================================================================================================
 # Replace AnyLog data type with grafana data type
 # =======================================================================================================================
 def get_grafana_data_type(source_data_type):
@@ -1927,3 +1953,30 @@ def get_grafana_data_type(source_data_type):
     else:
         data_type = source_data_type
     return data_type
+
+# =======================================================================================================================
+# Grafana Other Request
+# =======================================================================================================================
+def process_other_request(status, grafana_request):
+
+    ret_val = process_status.Err_grafana_payload
+    gr_reply = None
+
+    if "target" in grafana_request["payload"]:
+        statement = grafana_request["payload"]["target"]
+        if isinstance(statement, str):
+            # Execute and wait for completion
+            ret_val = native_api.exec_al_cmd(status, statement, None, None, 5)
+            if ret_val:
+                gr_reply = f"Failed to execute '{statement}'"
+            else:
+                j_handle = status.get_active_job_handle()  # Need to be done after the execution of the commands
+                result_set = j_handle.get_result_set()
+
+                #gr_reply = '[{ "text": "Server 1", "value": "server1" }, { "text": "Server 2", "value": "server2" }]'
+
+                gr_reply = result_set.replace("'",'"')
+    else:
+        gr_reply = "Missing Target in Grafana Payload"
+
+    return [ret_val, gr_reply]
