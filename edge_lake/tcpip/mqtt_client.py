@@ -1244,7 +1244,7 @@ def get_dest_name(status, topic, object_bring, message, object_type):
 
     if not ret_val:
         # To lower case and replace space with underscore
-        object_name = object_name.lower()
+        object_name = object_name.strip().lower()
         object_name = utils_data.reset_str_chars(object_name)
 
 

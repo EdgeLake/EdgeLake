@@ -22,7 +22,7 @@ import edge_lake.dbms.unify_results as unify_results
 import edge_lake.generic.params as params
 from edge_lake.generic.process_log import add
 from edge_lake.dbms.sqlite_dbms import get_dbms_connect_info
-from edge_lake.generic.utils_data import get_string_hash
+from edge_lake.generic.utils_data import get_string_hash, get_formatted_hms
 from edge_lake.dbms.dbms import connect_dbms, is_blobs_dbms
 from edge_lake.generic.stats import operator_update_inserts
 
@@ -32,6 +32,68 @@ active_tables = {}  # Table info as f(dbms name+table)
 active_views = {}  # View info as f(dbms name+view)
 
 
+insert_threshold_ = 0
+reported_rows_ = 0      # The number of rows on previous print
+reported_time_ = 0
+total_rows_ = 0
+start_time_ = 0
+
+# ===============================================================
+# Update performance stat of the insert stmt
+# ===============================================================
+def update_performance(rows_count):
+    global start_time_
+    global total_rows_
+    global reported_rows_
+    global reported_time_
+
+    total_rows_ += rows_count
+    if total_rows_ - reported_rows_ >= insert_threshold_:
+        current_time = time.time()
+        if reported_time_:
+            delta_time_sec = current_time - reported_time_
+        else:
+            delta_time_sec = current_time - start_time_
+
+        delta_rows = total_rows_ - reported_rows_
+        run_time_sec = current_time - start_time_
+        if not run_time_sec:
+            return
+        rows_per_sec = round(total_rows_ / run_time_sec, 3)
+
+        if not delta_time_sec:
+            return
+
+        delta_per_sec = round(delta_rows / delta_time_sec, 3)
+
+        run_time = get_formatted_hms(run_time_sec)
+        delta_time = get_formatted_hms(delta_time_sec)
+
+        info_table = [[run_time, total_rows_, rows_per_sec, delta_time, delta_rows, delta_per_sec]]
+
+        reported_rows_ = total_rows_
+        reported_time_ = current_time
+
+        output_str = utils_print.output_nested_lists(info_table, "", ["Run Time", "Total Rows", "Rows/Sec", "Delta Time", "New Rows", "New/Sec"], False)
+        utils_print.output(output_str, True)
+
+
+# ===============================================================
+# If the value is not 0, stats is printed every threshold inserts
+# ===============================================================
+def set_insert_threshold(value):
+    global insert_threshold_
+    global reported_rows_
+    global reported_time_
+    global total_rows_
+    global start_time_
+
+    insert_threshold_ = value
+    # Reset
+    reported_rows_ = 0  # The number of rows on previous print
+    reported_time_ = 0
+    total_rows_ = 0
+    start_time_ = 0
 # =======================================
 # Create new database
 # ======================================
@@ -280,6 +342,12 @@ def process_sql_from_file(status, dbms_name, table_name, file_path):
 # Process a single delete Statement i.e. Insert / Delete
 # ======================================
 def process_contained_stmt(status, dbms_name, sql_command):
+
+    global start_time_
+
+    if insert_threshold_ and not start_time_:
+        start_time_ = time.time()
+
     db_connect = get_connection(dbms_name)
     if db_connect == None:
         status.add_keep_error("DBMS '%s' not connected" % dbms_name)
@@ -305,6 +373,9 @@ def process_contained_stmt(status, dbms_name, sql_command):
             rows = 0
 
         db_connect.close_cursor(status, db_cursor)
+
+    if insert_threshold_ and sql_command[0].lower() == "i":
+        update_performance(rows)
 
     return [ret_val, rows]
 # =======================================

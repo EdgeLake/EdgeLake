@@ -1206,6 +1206,10 @@ def process_projection(status, select_parsed):
 
         select_parsed.add_projection(is_function, inner_name, function_name, as_name, field_name)
         if casting_str:
+            if casting_str[:8] == "timediff" and "now()" in casting_str:
+                # Replace now() with current time
+                utc_time = utils_columns.get_current_utc_time()
+                casting_str = casting_str.replace("now()", f"'{utc_time}'")
             select_parsed.add_casting(index - counter_instruct_func + counter_extended, casting_str)
 
     return ret_val

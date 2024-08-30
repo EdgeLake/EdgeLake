@@ -1441,6 +1441,12 @@ def seconds_to_hms(total_time):
 
     return [hours_time, minutes_time, seconds_time]
 
+# ======================================================================================================================
+# get a string with hh:mm:ss
+# ======================================================================================================================
+def get_formatted_hms(total_time):
+    hours_time, minutes_time, seconds_time = seconds_to_hms(total_time)
+    return "%02u:%02u:%02u" % (hours_time, minutes_time, seconds_time)
 
 # ======================================================================================================================
 # Go over entries in array and replace chars

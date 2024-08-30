@@ -626,6 +626,8 @@ class SelectParsed():
         else:
             for index, data_type in enumerate(query_data_types):
 
+                if len(self.casting_columns) and str(index) in self.casting_columns:
+                    continue        # This date-time is being mapped using casting  -- keep UTC time
                 if data_type.startswith("timestamp"):
                     # make a list of time columns
                     self.date_types.append((str(index), self.query_title[index]))  # A list of the time data types

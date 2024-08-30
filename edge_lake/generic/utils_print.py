@@ -125,17 +125,31 @@ def print_unlock():
 
 # =======================================================================================================================
 # Use control chars to move the cursor up
+'''
+import sys
+sys.stdout.write("\033[2J")  # Clear the entire screen (optional test)
+sys.stdout.write("\033[A")   # Move cursor up one line
+sys.stdout.write("\x1b[2K")  # Clear the line
+sys.stdout.write("\r")       # Move cursor back to the start of the line
+sys.stdout.flush()           # Flush the output buffer
+'''
 # =======================================================================================================================
 def move_lines_up(counter_lines, clear_lines):
     print_mutex.acquire()
-    for _ in range (counter_lines):
+    try:
+        for _ in range(counter_lines):
+            if clear_lines:
+                sys.stdout.write("\x1b[2K")  # Clear the entire line
+                sys.stdout.write("\r")  # Return to the beginning of the line
+            sys.stdout.write("\033[A")  # Move cursor up one line
+            sys.stdout.flush()  # Immediately flush output buffer
+
+        # Optionally clear the final line
         if clear_lines:
-            sys.stdout.write("\x1b[2K")
-        sys.stdout.write("\033[A")
-    if clear_lines:
-        sys.stdout.write("\x1b[2K")
-    sys.stdout.write("\r")      # goto start of line
-    print_mutex.release()
+            sys.stdout.write("\x1b[2K")  # Clear the line again, if needed
+            sys.stdout.flush()  # Flush to make sure it takes effect
+    finally:
+        print_mutex.release()  # Always release the mutex
 # =======================================================================================================================
 # Print to stdout
 # =======================================================================================================================

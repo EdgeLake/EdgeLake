@@ -109,6 +109,7 @@ utc_diff = 0
 TIME_FORMAT_STR = "%Y-%m-%d %H:%M:%S.%f"
 TIME_FORMAT_STR_NO_MS = "%Y-%m-%d %H:%M:%S"     # Without milliseconds
 UTC_TIME_FORMAT_STR = "%Y-%m-%dT%H:%M:%S.%fZ"
+UTC_NO_Z = '%Y-%m-%dT%H:%M:%S.%f'
 UTC_TIME_FORMAT_STR_NO_MS = "%Y-%m-%dT%H:%M:%S" # Without milliseconds
 
 trunc_str = {
@@ -1801,6 +1802,21 @@ def cast_by_function(status, row, casting_str, value):
         casted_value = None
 
     return casted_value
+
+# =======================================================================================================================
+# cast by function
+# =======================================================================================================================
+def ret_time_diff(status, row, casting_str, value):
+
+    seconds_diff =  get_date_time_diff(casting_str[10:-2], value)
+    if not seconds_diff:
+        time_diff = "00:00:00.0"
+    else:
+        ms_diff =  int((seconds_diff - int(seconds_diff)) * 100000)
+        hours_time, minutes_time, seconds_time = utils_data.seconds_to_hms(seconds_diff)
+        time_diff = "%02u:%02u:%02u.%u" % (hours_time, minutes_time, seconds_time, ms_diff)
+
+    return time_diff
 # =======================================================================================================================
 # cast to date_time
 # Return second or minute or hour or day or month or year
@@ -1841,6 +1857,7 @@ casting_methods_ = {
     'fu' : cast_by_function,
     'ls' : cast_lstrip,
     'rs' : cast_rstrip,
+    'ti' : ret_time_diff,   # return time diff
 }
 # =======================================================================================================================
 # Apply casting on a column
@@ -2419,3 +2436,31 @@ def seconds_to_time(seconds):
     for entry in second_conversions_:
         if seconds >= entry[1]:
             return [seconds / entry[1], entry[0]]
+
+# -----------------------------------------------------------------------------------------------
+# Get date time difference in seconds
+# -----------------------------------------------------------------------------------------------
+def get_date_time_diff(time_str1, time_str2):
+    try:
+        # Parse the time strings into datetime objects
+        if time_str1[10] == ' ':
+            time_format = TIME_FORMAT_STR
+        else:
+            time_format = UTC_TIME_FORMAT_STR if time_str1[-1] == 'Z' else UTC_NO_Z
+
+        time1 = datetime.strptime(time_str1, time_format)
+
+        if time_str2[10] == ' ':
+            time_format = TIME_FORMAT_STR
+        else:
+            time_format = UTC_TIME_FORMAT_STR if time_str2[-1] == 'Z' else UTC_NO_Z
+
+        time2 = datetime.strptime(time_str2, time_format)
+
+        # Get the difference in seconds
+        seconds_difference = abs((time2 - time1).total_seconds())
+    except:
+        errno, value = sys.exc_info()[:2]
+        process_log.add("Error", f"Failed to calculate seconds diff between '{time_str1}' and '{time_str2}': '{errno}' : '{value}'")
+        seconds_difference = 0
+    return seconds_difference

@@ -7163,16 +7163,20 @@ def integrate_print_reply(status, is_async_io, is_subset, is_reply_msg, io_buff_
 # The data is returned as a list or a dictionary
 # =======================================================================================================================
 def get_data_struct_from_job(status, job_id, unique_job_id):
+    reply = ""
     j_instance = job_scheduler.get_job(job_id)
     j_instance.data_mutex_aquire(None, 'W')  # Write Mutex
     # test thread did not timeout - or a previous process terminated the task
     if j_instance.is_job_active() and j_instance.get_unique_job_id() == unique_job_id:
         j_handle = j_instance.get_job_handle()
         assignment = j_handle.get_assignment()  # If with value - results are assigned to the assignment key
-        is_dict = assignment[-2] == '{'  # Flag if output is set in a dictionary or as a list
-        out_obj = j_instance.get_nodes_reply_object(is_dict)
+        if assignment and isinstance(assignment,str):
+            is_dict = assignment[-2] == '{'  # Flag if output is set in a dictionary or as a list
+            out_obj = j_instance.get_nodes_reply_object(is_dict)
+            if out_obj:
+                reply = utils_json.to_string(out_obj)
     j_instance.data_mutex_release(None, 'W')  # release the mutex that prevents conflict with the rest thread
-    return utils_json.to_string(out_obj)
+    return reply
 # =======================================================================================================================
 # Assign values to variables - when a script is processe, assign the values provided with the scripts
 # Variables are declared with the keyword variables followed by variable names in parenthesis, example:
@@ -14165,38 +14169,51 @@ def _set_trace(status, io_buff_in, cmd_words, trace):
                 for command in commands.keys():
                     commands[command]['trace'] = trace_level
             else:
-                command = utils_data.get_str_from_array(words_array, 4, 0)
-                if command in commands:
-                    commands[command]['trace'] = trace_level
-                elif command == "tcp":
-                        # This will enable trace on IP and ports used
-                        # command: trace level = 1 tcp
-                        net_utils.set_tcp_debug(trace_level)
-                elif command[:11] == "sql command":
-                    # This will enable trace with SQL stmt
-                    # command: trace level = 1 sql command
-                    if len(command) > 11:
-                        trace_command = command[11:].lower().strip()
+                if cmd_words[4] == "insert":
+                    # trace the number of inserts
+                    # Example: trace level = 1 inserts 2000 --> Report every 2000
+                    # By default report every 1000
+                    if not trace_level:
+                        inserts_threshold = 0
                     else:
-                        trace_command = ""      # All commands
-                    utils_sql.set_trace_level(trace_level, trace_command)
-                elif trace_func.is_traced(command):
-                    # Enables trace on functions
-                    # For example: when source data is mapped in mapping_policy.apply_policy_schema()
-                    # command: trace level = 1 mapping
-                    trace_func.set_trace_level(command, trace_level)
+                        if len(cmd_words) >= 6 and cmd_words[5].isdigit():
+                            inserts_threshold = int(words_array[5])
+                        else:
+                            inserts_threshold = 1000
+                    db_info.set_insert_threshold(inserts_threshold)
                 else:
-                    # test sub command
-                    command_list = command.split(' ',1)
-                    if len(command_list) == 2 and command_list[0] in commands and 'methods' in commands[command_list[0]]:
-                        # get the subcommand
-                        subcommands = commands[command_list[0]]['methods']
-                        if command_list[1] in subcommands:
-                            subcommands[command_list[1]]['trace'] = trace_level
+                    command = utils_data.get_str_from_array(words_array, 4, 0)
+                    if command in commands:
+                        commands[command]['trace'] = trace_level
+                    elif command == "tcp":
+                            # This will enable trace on IP and ports used
+                            # command: trace level = 1 tcp
+                            net_utils.set_tcp_debug(trace_level)
+                    elif command[:11] == "sql command":
+                        # This will enable trace with SQL stmt
+                        # command: trace level = 1 sql command
+                        if len(command) > 11:
+                            trace_command = command[11:].lower().strip()
+                        else:
+                            trace_command = ""      # All commands
+                        utils_sql.set_trace_level(trace_level, trace_command)
+                    elif trace_func.is_traced(command):
+                        # Enables trace on functions
+                        # For example: when source data is mapped in mapping_policy.apply_policy_schema()
+                        # command: trace level = 1 mapping
+                        trace_func.set_trace_level(command, trace_level)
+                    else:
+                        # test sub command
+                        command_list = command.split(' ',1)
+                        if len(command_list) == 2 and command_list[0] in commands and 'methods' in commands[command_list[0]]:
+                            # get the subcommand
+                            subcommands = commands[command_list[0]]['methods']
+                            if command_list[1] in subcommands:
+                                subcommands[command_list[1]]['trace'] = trace_level
+                            else:
+                                ret_val = process_status.ERR_command_struct
                         else:
                             ret_val = process_status.ERR_command_struct
-                    else:
-                        ret_val = process_status.ERR_command_struct
 
     else:
         ret_val = process_status.ERR_command_struct
@@ -16491,7 +16508,7 @@ def reset_echo_queue(status, io_buff_in, cmd_words, trace):
     return ret_val
 
 # --------------------------------------------------------------
-# Set the size of the threaads supporting a query
+# Set the size of the threads supporting a query
 # --------------------------------------------------------------
 def set_query_pool(status, io_buff_in, cmd_words, trace):
 
@@ -17275,6 +17292,7 @@ _set_methods = {
                            'usage': "set query pool [n]",
                            'example': "set query pool 5",
                            'text': "Sets the number of threads supporting queries (the default value is 3).",
+                           'link' : 'blob/master/node%20configuration.md#configuring-the-size-of-the-query-pool',
                            'keywords' : ["query", "profiling"],
                         }
                     },
@@ -18279,6 +18297,7 @@ _get_methods = {
                                     "get system threads where pool = query\n"
                                     "get system threads where pool = rest and details = true",
                          'text': "Get the list of system threads and their status.",
+                         'link' : "blob/master/node%20configuration.md#threads-configuration-and-monitoring",
                          'keywords': ["node info", "configuration", "monitor"],
                      }
                      },
@@ -18494,7 +18513,7 @@ _get_methods = {
                     'usage': "get query pool",
                     'example': "get query pool",
                     'text': "Status of query threads assigned by the command 'set threads pool [n]'.",
-                    'link' : 'blob/master/anylog%20commands.md#get-pool-info',
+                    'link' : 'blob/master/node%20configuration.md#threads-configuration-and-monitoring',
                     'keywords' : ["query", "node info", "configuration"],
                     }
                 },
@@ -18504,7 +18523,7 @@ _get_methods = {
                      'usage': "get tcp pool",
                      'example': "get tcp pool",
                      'text': "Status of TCP threads.",
-                     'link' : 'blob/master/anylog%20commands.md#get-pool-info',
+                     'link' : 'blob/master/node%20configuration.md#threads-configuration-and-monitoring',
                      'keywords' : ["data", "node info", "configuration"],
                  }
                  },
@@ -18515,7 +18534,7 @@ _get_methods = {
                             'usage': "get rest pool",
                             'example': "get rest pool",
                             'text': "Status of REST threads.",
-                            'link' : 'blob/master/anylog%20commands.md#get-pool-info',
+                            'link' : 'blob/master/node%20configuration.md#threads-configuration-and-monitoring',
                             'keywords' : ["streaming", "node info", "configuration"],
                             }
                         },
@@ -18525,7 +18544,7 @@ _get_methods = {
                       'usage': "get msg pool",
                       'example': "get msg pool",
                       'text': "Status of Message Server threads.",
-                      'link' : 'blob/master/anylog%20commands.md#get-pool-info',
+                      'link' : 'blob/master/node%20configuration.md#threads-configuration-and-monitoring',
                       'keywords' : ["streaming", "node info", "configuration"],
                   }
                   },
