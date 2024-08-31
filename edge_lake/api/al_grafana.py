@@ -273,7 +273,7 @@ class AlQueryParams:
 
                     if len(interval) > 5:
                         if interval == "dashboard" and self.grafana_interval_unit:
-                            # Take the interval from Grafana's dashborad
+                            # Take the interval from Grafana's dashboard
                             self.interval_time = int(self.grafana_interval_time)
                             self.interval_unit = self.grafana_interval_unit
                         else:
@@ -1794,18 +1794,16 @@ def update_increments_stmt(status, user_stmt, interval_unit, interval_time, time
 
     if interval_unit:
         # Grafana values for increment (otherwise AnyLog will optimize)
-        offset = user_stmt.find(')', 18)         # Find the end of the increment statement in the user_stmt
+        offset = sql_stmt.find(')', 18)         # Find the end of the increment statement in the user_stmt
         if offset == -1:
             status.add_error("Grafana API: Failed to generate an 'increment query' - missing parentheses in user provided SQL stmt")
             return None
-        offset = user_stmt.find(',', offset+1)  # Find the comman after the increment function
+        offset = sql_stmt.find(',', offset+1)  # Find the comma after the increment function
         if offset == -1:
             status.add_error("Grafana API: Failed to generate an 'increment query' - missing comma in user provided SQL stmt")
             return None
 
-        sql_prefix = f"SELECT increments({interval_unit},{interval_time},{time_column}), " + user_stmt[offset+1:]
-
-    # sql_stmt = sql_prefix + f" where {time_column} >= '{start_time}' and {time_column} <= '{end_time}' limit {limit};"
+        sql_stmt = f"SELECT increments({interval_unit},{interval_time},{time_column}), " + sql_stmt[offset+1:]
 
     return sql_stmt
 

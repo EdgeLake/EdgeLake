@@ -421,7 +421,7 @@ def test_one_value(conditions, key, test_value):
 # =======================================================================================================================
 def test_values(status, conditions:dict, key:str, allowed_values:dict):
     '''
-    conditions - the disctionary with keys and values
+    conditions - the dictionary with keys and values
     key - the key to test
     allowed_values - test that the values assigned to the key are allowed values
     '''

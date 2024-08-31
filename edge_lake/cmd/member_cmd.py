@@ -306,7 +306,7 @@ def _connect_dbms(status, io_buff_in, cmd_words, trace):
 
 
     db_usr = interpreter.get_one_value_or_default(conditions, "user", "")
-    password = interpreter.get_one_value_or_default(conditions, "password", "")
+    password = interpreter.get_one_value_or_default(conditions, "password", None)
     host = interpreter.get_one_value_or_default(conditions, "ip", "")
     port = interpreter.get_one_value_or_default(conditions, "port", "")
 
