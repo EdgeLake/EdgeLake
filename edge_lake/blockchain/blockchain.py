@@ -715,17 +715,31 @@ def __validate_value_pair(json_description, value_pair):
                 value = test_value.lower()
 
                 if child_key:
+                    if len(child_key) <= 2 or child_key[0] != '[' or child_key[-1] != ']':
+                        ret_val = False     # Is not a pull from a dictionary
+                        break
+                    pull_key = child_key[1:-1]
                     # Test for a nested dictionary
-                    if len(child_key) <= 2 or child_key[0] != '[' or child_key[-1] != ']' or \
-                        not isinstance(json_value, dict) or not child_key[1:-1] in json_value:
+                    if isinstance(json_value, list):
+                        # Go over all list entries
+                        ret_val = False
+                        for entry in json_value:
+                            if isinstance(entry, dict) and pull_key in entry:
+                                nested_value = entry[pull_key]
+                                ret_val = True
+                                break       # Found a match
+                        if not ret_val:
+                            break   # No such key
+                    elif not isinstance(json_value, dict) or not pull_key in json_value:
                         ret_val = False
                         break
                     else:
                         # Pull the value from the nested dictionary and compare to user provided "value"
-                        nested_value = json_value[child_key[1:-1]]
-                        if not isinstance(nested_value, str) or nested_value.lower() != value:
-                            ret_val = False
-                            break
+                        nested_value = json_value[pull_key]
+
+                    if not isinstance(nested_value, str) or nested_value.lower() != value:
+                        ret_val = False
+                        break
                 elif isinstance(json_value, str):
                     # Blockchain value is a string - Change to lower case
                     if json_value != '*':

@@ -9,6 +9,7 @@ cryptography>=0.0
 # jwt>=0.0 # in alpine we install py3-jwt
 pyOpenSSL>=0.0
 psutil>=0.0
+orjson>=0.0
 
 # Datetime
 python-dateutil>=0.0

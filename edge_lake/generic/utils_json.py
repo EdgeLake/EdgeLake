@@ -5,6 +5,7 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 """
 
 import json
+import orjson
 import re
 import sys
 
@@ -52,6 +53,11 @@ bring_types_ = {
 }
 
 pattern_bring = re.compile('[ []{}:"]')  # Find any of these occurrences - to void the bring
+
+pattern_any_ = re.compile(r'[{}"\'\n\t\r]')  # Find any of these occurrences
+pattern_include_comma_ = re.compile(r'[{}"\'\n\t\r,]')  # Find any of these occurrences
+pattern_single_ = re.compile(r'[\'\n\t\r]')  # Single queotation
+pattern_double_ = re.compile(r'["\n\t\r]')  # Single queotation
 
 
 # =======================================================================================================================
@@ -169,45 +175,49 @@ def str_to_list(data: str):
 # JSON requires double quotes for its strings -  there are no single quotes in a JSON string
 # =======================================================================================================================
 def str_to_json(data: str):
-    fix_json = False
+
     try:
-        json_object = json.loads(data, strict=False)
-    except ValueError as error:
-        if not data:
-            err_msg = "Empty data string provided as JSON data"
-            process_log.add("Error", err_msg)  # Log Error
-            json_object = None
-        else:
-            err_msg = "JSON value error (line and column are of the JSON struct): " + str(error)
-            fix_json = True
-            json_object = None
-    except TypeError as error:
-        err_msg = "JSON type error (line and column are of the JSON struct): " + str(error)
-        process_log.add("Error", err_msg)  # Log Error
-        json_object = None
+        json_object = orjson.loads(data)    # fast process
     except:
         fix_json = False
-        err_msg = "Error", "Failed to map string to JSON"
-        process_log.add("Error", err_msg)  # Log Error
-        json_object = None
-
-    if fix_json:
-        modified = change_json_data(data)
-        modified = utils_data.replace_string_chars(True, modified, None, True)
         try:
-            json_object = json.loads(modified, strict=False)
+            json_object = json.loads(data, strict=False)
         except ValueError as error:
+            if not data:
+                err_msg = "Empty data string provided as JSON data"
+                process_log.add("Error", err_msg)  # Log Error
+                json_object = None
+            else:
+                err_msg = "JSON value error (line and column are of the JSON struct): " + str(error)
+                fix_json = True
+                json_object = None
+        except TypeError as error:
+            err_msg = "JSON type error (line and column are of the JSON struct): " + str(error)
             process_log.add("Error", err_msg)  # Log Error
-            err_msg = utils_data.get_str_to_json_error(err_msg, data)
-            if err_msg:
-                process_log.add("Error", err_msg)
             json_object = None
         except:
+            fix_json = False
+            err_msg = "Error", "Failed to map string to JSON"
             process_log.add("Error", err_msg)  # Log Error
-            err_msg = utils_data.get_str_to_json_error(err_msg, data)
-            if err_msg:
-                process_log.add("Error", err_msg)
             json_object = None
+
+        if fix_json:
+            modified = change_json_data(data)
+            modified = utils_data.replace_string_chars(True, modified, None, True)
+            try:
+                json_object = json.loads(modified, strict=False)
+            except ValueError as error:
+                process_log.add("Error", err_msg)  # Log Error
+                err_msg = utils_data.get_str_to_json_error(err_msg, data)
+                if err_msg:
+                    process_log.add("Error", err_msg)
+                json_object = None
+            except:
+                process_log.add("Error", err_msg)  # Log Error
+                err_msg = utils_data.get_str_to_json_error(err_msg, data)
+                if err_msg:
+                    process_log.add("Error", err_msg)
+                json_object = None
 
     return json_object
 
@@ -861,7 +871,7 @@ def make_pull_keys(word_str):
                 key_string += "[\"%s\"]" % entry[2:-1]
             else:
                 # Include spaces in the re,search test
-                if re.search("[ {}:]", entry):
+                if re.search("[{}:]", entry):
                     is_key = False  # wrong CHAR SET used
                     break
                 # Add quortation if not an index to a table
@@ -1063,16 +1073,47 @@ def get_policy_value(policy, policy_type, attr_name, default_val):
 # Make JSON rows - organize JSON data as rows - each JSON unit is a string with a single '\n' at the end of the string
 # ======================================================================================================================
 def make_json_rows(status, source_data):
-    pattern_any = re.compile('[{}"\'\n\t\r]')  # Find any of these occurrences
-    pattern_include_comma = re.compile('[{}"\'\n\t\r,]')  # Find any of these occurrences
-    pattern_single = re.compile('[\'\n\t\r]')  # Single queotation
-    pattern_double = re.compile('["\n\t\r]')  # Single queotation
 
+    ret_val = process_status.ERR_wrong_json_structure
+    err_value = ""
+    if not source_data:
+        updated_data = []
+        row_counter = 0
+    else:
+        # Step 1: Parse the JSON string into a Python list of dictionaries
+        json_object = str_to_json(source_data)
+        if json_object:
+            if isinstance(json_object, dict):
+                # dictionary:
+                updated_data = source_data    # 1 JSON entry
+                row_counter = 1
+                ret_val = process_status.SUCCESS
+            else:
+                row_counter = len(json_object)
+                try:
+                    # Step 2: Convert each dictionary to a JSON string with a newline at the end
+                    json_strings = [json.dumps(item) + '\n' for item in json_object]
+                except:
+                    errno, err_value = sys.exc_info()[:2]
+                else:
+                    updated_data = ''.join(json_strings)
+                    ret_val = process_status.SUCCESS
+
+        if ret_val:
+            # Failed - try different way
+            ret_val, updated_data, row_counter = make_row_by_row(status, source_data)
+
+    return [ret_val, updated_data, row_counter]
+
+# ======================================================================================================================
+# Make JSON rows - organize JSON data as rows - each JSON unit is a string with a single '\n' at the end of the string
+# ======================================================================================================================
+def make_row_by_row(status, source_data):
     row_counter = 0
     add_new_line = False
     paren_counter = 0
     copied_offset = 0
-    updated_data = ""
+    updated_data = []
     ret_val = process_status.SUCCESS
 
     offset = 0
@@ -1096,74 +1137,57 @@ def make_json_rows(status, source_data):
                     length += 1
 
         while offset < length:
+            # Select pattern based on whether a new line is needed
+            pattern = pattern_include_comma_ if add_new_line else pattern_any_
+            match = pattern.search(source_data, offset)
 
-            if add_new_line:
-                obj = pattern_include_comma.search(source_data, offset)
-            else:
-                obj = pattern_any.search(source_data, offset)
-            if not obj:
+            if not match:
                 break
-            ch = obj.group()
-            offset = obj.start()
 
-            if ch == '\n' or ch == '\t' or ch == '\r' or ch == ',':
-                # replace with space
+            ch = match.group()
+            start = match.start()
+            if ch in ('\n', '\t', '\r', ','):
                 if ch == '\n' and add_new_line:
-                    # Found as needed - a new line at the end of the row
                     add_new_line = False
                 else:
-                    updated_data += (source_data[copied_offset: offset] + ' ')
-                    copied_offset = offset + 1
+                    updated_data.append(source_data[copied_offset:start] + ' ')
+                    copied_offset = start + 1
             elif ch == '{':
                 if add_new_line:
-                    updated_data += (source_data[copied_offset: offset] + '\n{')
-                    copied_offset = offset + 1
+                    updated_data.append(source_data[copied_offset:start] + '\n{')
+                    copied_offset = start + 1
                     add_new_line = False
                 paren_counter += 1
             elif ch == '}':
-                if not paren_counter:
-                    status.add_keep_error(
-                        "Missing parenthesis of type '}' in the JSON structure at offset: %u" % obj.start())
+                if paren_counter == 0:
+                    status.add_keep_error(f"Missing parenthesis of type '}}' in the JSON structure at offset: {start}")
                     ret_val = process_status.ERR_wrong_json_structure
                     break
                 row_counter += 1
                 paren_counter -= 1
-                if not paren_counter:
-                    # New row - need to fine a new line (or add a new line
+                if paren_counter == 0:
                     add_new_line = True
             elif ch == '\'':
-                # find matching up to '\n' or '\r'
-                obj = pattern_single.search(source_data, offset + 1)
-                if not obj:
-                    status.add_keep_error("Missing single quotation in the JSON structure at offset: %u" % (offset + 1))
+                match = pattern_single_.search(source_data, start + 1)
+                if not match or match.group() != '\'':
+                    status.add_keep_error(f"Missing single quotation in the JSON structure at offset: {start + 1}")
                     ret_val = process_status.ERR_wrong_json_structure
                     break
-                ch = obj.group()
-                if ch != '\'':
-                    status.add_keep_error("Missing single quotation in the JSON structure at offset: %u" % obj.start())
-                    ret_val = process_status.ERR_wrong_json_structure
-                    break
-                offset = obj.start()
+                start = match.start()
             elif ch == '"':
-                # find matching up to '\n' or '\r'
-                obj = pattern_double.search(source_data, offset + 1)
-                if not obj:
-                    status.add_keep_error("Missing double quotation in the JSON structure at offset: %u" % (offset + 1))
+                match = pattern_double_.search(source_data, start + 1)
+                if not match or match.group() != '"':
+                    status.add_keep_error(f"Missing double quotation in the JSON structure at offset: {start + 1}")
                     ret_val = process_status.ERR_wrong_json_structure
                     break
-                ch = obj.group()
-                if ch != '"':
-                    status.add_keep_error("Missing double quotation in the JSON structure at offset: %u" % obj.start())
-                    ret_val = process_status.ERR_wrong_json_structure
-                    break
-                offset = obj.start()
-            offset += 1
+                start = match.start()
+
+            offset = start + 1
 
     if not ret_val:
-        if not copied_offset:
-            updated_data = source_data  # Source data was set as needed
-        elif copied_offset < offset:
-            updated_data += source_data[copied_offset: offset]
+        if copied_offset:
+            updated_data.append(source_data[copied_offset:offset])
+        updated_data = ''.join(updated_data)
 
     return [ret_val, updated_data, row_counter]
 
@@ -1185,9 +1209,12 @@ def get_policy_val(status, json_obj, policy_id, key, data_type, add_type_err, ad
         value = json_obj[key]
         if data_type:
             if not isinstance(value, data_type):
-                if add_type_err:
-                    status.add_error("The value for the key '%s' in JSON object (associated to policy '%s') is not of type %s" % (key, policy_id, str(data_type)))
-                    ret_val = process_status.ERR_wrong_json_structure
+                if not value:
+                    value = "null"    # Replace empty string with "null" for all data types
+                else:
+                    if add_type_err:
+                        status.add_error("The value for the key '%s' in JSON object (associated to policy '%s') is not of type %s" % (key, policy_id, str(data_type)))
+                        ret_val = process_status.ERR_wrong_json_structure
     elif add_value_err:
         value = None
         status.add_error("The key '%s' (derived from policy '%s') is missing in JSON object" % (key, policy_id))

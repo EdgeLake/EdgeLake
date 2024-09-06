@@ -8,6 +8,7 @@ import sys
 import time
 import pytz
 import operator
+import re
 
 from datetime import date, datetime, timedelta, timezone
 from dateutil import parser, tz
@@ -16,16 +17,60 @@ import edge_lake.generic.process_log as process_log
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_data as utils_data
 
+pattern_func_ = re.compile(r'\[(.*?)\]')    # Pull keys in casting
 
-cast_to_type_ = {        # Map casting name to data type
-
-    "float" : "float",
-    "int"   : "int",
-    "ljust" : "str",
-    "rjust" : "str"
+name_to_instance_ = {
+    "str" : str,
+    "string" : str,
+    "int" : int,
+    "bigint": int,
+    "integer" : int,
+    "float" : float,
+    "timestamp" : str,
+    "date" : str,
+    "time" : str,
+    "varchar" : str,
+    "bool" : bool,
 }
 
+def get_instance_by_name(instance_name):
+    '''
+    If instance name in the dictionary, return instance
+    '''
+    if isinstance(instance_name, str):
+        instance = name_to_instance_[instance_name] if instance_name in name_to_instance_ else None
+    else:
+        instance = None
+    return instance
+
+
 tz_list = {}
+
+#datetime_pattern_ = r"'([\d-]+\s[\d:.]+)'" # using re - captures the datetime string in the format 'YYYY-MM-DD HH:MM:SS.ffffff'.
+# captures fixed datetimes with optional hours, minutes, and seconds. Support - '2024-07-10T12:34:56.789Z'", and "'2024-07-10T12:34:56'",
+datetime_pattern_ = r"'(\d{4}-\d{2}-\d{2})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?)?(?:Z)?'"
+
+interval_pattern_ = r'(\d+)\s*(minute|hour|day|week|month|year)s?' # captures the interval value and the unit, allowing for plural forms.
+
+# Map units to timedelta arguments
+unit_to_timedelta_ = {
+    'minute': 'minutes',
+    'hour': 'hours',
+    'day': 'days',
+    'week': 'weeks',
+    'month': 'days',  # approximate month as 30 days
+    'year': 'days'  # approximate year as 365 days
+}
+
+second_conversions_ = [
+    ("year", 31536000),
+    ("month", 259200),
+    ("day", 86400),
+    ("hour", 3600),
+    ("minute", 60),
+]
+
+
 # =======================================================================================================================
 # Get a timezone object, if not exists - create a new timezone instance
 # =======================================================================================================================
@@ -64,6 +109,7 @@ utc_diff = 0
 TIME_FORMAT_STR = "%Y-%m-%d %H:%M:%S.%f"
 TIME_FORMAT_STR_NO_MS = "%Y-%m-%d %H:%M:%S"     # Without milliseconds
 UTC_TIME_FORMAT_STR = "%Y-%m-%dT%H:%M:%S.%fZ"
+UTC_NO_Z = '%Y-%m-%dT%H:%M:%S.%f'
 UTC_TIME_FORMAT_STR_NO_MS = "%Y-%m-%dT%H:%M:%S" # Without milliseconds
 
 trunc_str = {
@@ -1130,7 +1176,7 @@ def transform_by_data_type(value, target_data_type):
 
 
 # =======================================================================================================================
-# Given a date string, return number of seconds since epoch
+# Given a date string, return number of seconds since epoch -  -- ASSUMES INPUT TIME IS IN LOCAL TIME
 # =======================================================================================================================
 def get_time_in_seconds(date_time):
     date_str = unify_date_time(date_time)
@@ -1143,7 +1189,7 @@ def get_time_in_seconds(date_time):
 
     try:
         date_obj = time.strptime(date_str_no_seconds[:19], TIME_FORMAT_STR_NO_MS)
-        timestamp = time.mktime(date_obj)
+        timestamp = time.mktime(date_obj)   #  -- ASSUMES INPUT TIME IS IN LOCAL TIME
     except ValueError as e:
         process_log.add("Error", "Failed to process date string: %s" % date_time)
         timestamp = 0
@@ -1156,6 +1202,55 @@ def get_time_in_seconds(date_time):
 
     return timestamp
 
+# =======================================================================================================================
+# UTC to Milliseconds -  -- ASSUMES INPUT TIME IS IN UTC
+# =======================================================================================================================
+def get_utc_to_ms(utc_time_str):
+
+    try:
+        if utc_time_str[10] == 'T':
+            date_format = "%Y-%m-%dT%H:%M:%S.%fZ" if utc_time_str[-1] == 'Z' else "%Y-%m-%dT%H:%M:%S.%f"
+        else:
+            # No T no Z
+            date_format = "%Y-%m-%d %H:%M:%S.%f"
+        # Parse the UTC time string into a datetime object
+        utc_dt = datetime.strptime(utc_time_str, date_format)
+
+        # Convert the datetime object to seconds since the epoch
+        epoch_time = (utc_dt - datetime(1970, 1, 1)).total_seconds()
+
+        # Convert seconds to milliseconds
+        epoch_time_ms = int(epoch_time * 1000)
+    except:
+        errno, value = sys.exc_info()[:2]
+        process_log.add("Error", f"Failed date conversion (get_utc_to_ms) on '{utc_time_str}' with error: {errno}: {value}")
+        epoch_time_ms = -1
+
+    return epoch_time_ms
+
+# =======================================================================================================================
+# UTC to Milliseconds
+# =======================================================================================================================
+def get_ms_from_date_time(date_string):
+
+    try:
+        if date_string[10] == 'T':
+            date_format = "%Y-%m-%dT%H:%M:%S.%fZ" if date_string[-1] == 'Z' else "%Y-%m-%dT%H:%M:%S.%f"
+        else:
+            # No T no Z
+            date_format = "%Y-%m-%d %H:%M:%S.%f"
+        # Parse the UTC time string into a datetime object
+        date_object = datetime.strptime(date_string, date_format)
+        # Convert the datetime object to a timestamp
+        timestamp = date_object.timestamp()
+        # Convert the timestamp (in float) to milliseconds
+        milliseconds = int(timestamp * 1000)
+    except:
+        errno, value = sys.exc_info()[:2]
+        process_log.add("Error", f"Failed date conversion (get_ms_from_date_time) on '{date_string}' with error: {errno}: {value}")
+        milliseconds = -1
+
+    return milliseconds
 
 # =======================================================================================================================
 # Given a date string in a format YYYY-MM-DD, return date object
@@ -1520,8 +1615,7 @@ def change_columns_values(status, timezone, time_columns, casting_columns,  cast
                     format_string = TIME_FORMAT_STR
                 if format_string:
                     # The data is flagged as UTC - or force conversion by specifying timezone is "local"
-                    row[key] = utc_to_timezone(row[key], format_string, timezone)
-
+                    row[key] = utc_to_timezone(date_value, format_string, timezone)
 
         for index, key in enumerate(casting_columns):
 
@@ -1535,7 +1629,7 @@ def change_columns_values(status, timezone, time_columns, casting_columns,  cast
                 col_castings = casting_list[index]      # Get the custing to apply om the column
                 column_val = row[column_name]
 
-                ret_val, row[column_name] = cast_column(status, col_castings, column_val)
+                ret_val, row[column_name] = cast_column(status, row, col_castings, column_val)
                 if ret_val:
                     break
 
@@ -1550,7 +1644,7 @@ def change_columns_values(status, timezone, time_columns, casting_columns,  cast
 # =======================================================================================================================
 # cast to int
 # =======================================================================================================================
-def cast_to_int(status, casting_str, value ):
+def cast_to_int(status, row, casting_str, value ):
     try:
         casted_value = int(value)
     except:
@@ -1562,13 +1656,24 @@ def cast_to_int(status, casting_str, value ):
 # =======================================================================================================================
 # cast to String
 # =======================================================================================================================
-def cast_to_str(status, casting_str, value):
+def cast_to_str(status, row, casting_str, value):
     return str(value)
+
+# =======================================================================================================================
+# do lstrip
+# =======================================================================================================================
+def cast_lstrip(status, row, casting_str, value):
+    return str(value).lstrip()
+# =======================================================================================================================
+# do rstrip
+# =======================================================================================================================
+def cast_rstrip(status, row, casting_str, value):
+    return str(value).rstrip()
 
 # =======================================================================================================================
 # cast to float
 # =======================================================================================================================
-def cast_to_float(status, casting_str, value):
+def cast_to_float(status, row, casting_str, value):
 
     ret_val = True
     if casting_str[:6] == "float(" and casting_str[-1] == ')':
@@ -1624,7 +1729,7 @@ def cast_to_float(status, casting_str, value):
 # =======================================================================================================================
 # cast to left or right justified
 # =======================================================================================================================
-def cast_to_just(status, casting_str, value):
+def cast_to_just(status, row, casting_str, value):
 
     if casting_str[:6] == "ljust(" or casting_str[:6] == "rjust(":
         # returns a left-justified string of a given width
@@ -1659,7 +1764,7 @@ def cast_to_just(status, casting_str, value):
 # =======================================================================================================================
 # cast with format
 # =======================================================================================================================
-def cast_with_format(status, casting_str, value):
+def cast_with_format(status, row, casting_str, value):
 
     if casting_str[:7] == "format(" and casting_str[-1] == ')':
         casting_key = casting_str[7:-1]
@@ -1672,6 +1777,74 @@ def cast_with_format(status, casting_str, value):
         casted_value = None
     return casted_value
 
+# =======================================================================================================================
+# cast by function
+# =======================================================================================================================
+def cast_by_function(status, row, casting_str, value):
+
+    if casting_str[:9] == "function(" and casting_str[-1] == ')':
+        try:
+            str_function = casting_str[9:-1]
+
+            # Function to replace each match with the corresponding value from the dictionary
+            def replace_match(match):
+                key = match.group(1)
+                return str(row.get(key, match.group(0)))  # Keep the placeholder if key not found
+
+            new_string = pattern_func_.sub(replace_match, str_function)
+
+            casted_value = eval(new_string)
+
+        except:
+            status.add_error(f"Casting using function '{casting_str}' failed")
+            casted_value = None
+    else:
+        casted_value = None
+
+    return casted_value
+
+# =======================================================================================================================
+# cast by function
+# =======================================================================================================================
+def ret_time_diff(status, row, casting_str, value):
+
+    seconds_diff =  get_date_time_diff(casting_str[10:-2], value)
+    if not seconds_diff:
+        time_diff = "00:00:00.0"
+    else:
+        ms_diff =  int((seconds_diff - int(seconds_diff)) * 100000)
+        hours_time, minutes_time, seconds_time = utils_data.seconds_to_hms(seconds_diff)
+        time_diff = "%02u:%02u:%02u.%u" % (hours_time, minutes_time, seconds_time, ms_diff)
+
+    return time_diff
+# =======================================================================================================================
+# cast to date_time
+# Return second or minute or hour or day or month or year
+# =======================================================================================================================
+def cast_to_date_time(status, row, casting_str, value):
+
+    try:
+        # Step 1: Parse the datetime string
+        dt = datetime.strptime(value[:26], '%Y-%m-%d %H:%M:%S.%f')  # the microseconds can be with an extra char which leads to an error
+    except:
+        status.add_error(f"Casting failed to apply: datetime.strptime({value}, '%Y-%m-%d %H:%M:%S.%f') ")
+        casted_value = None
+    else:
+       if casting_str[:9] != "datetime(" or  casting_str[-1] != ')':
+           casted_value = None
+           status.add_error(f"Casting of datetime is not well defined: {casting_str}")
+       else:
+            info_type = casting_str[9:-1]
+            if len(info_type) > 2 and info_type[0] == "'" and info_type[-1] == "'":
+                info_type = info_type[1:-1]     # The quotations were used to maintain capital letters -
+
+            try:
+                casted_value =  dt.strftime(info_type)      # for example info_type = %m-%Y' will return month and year
+            except:
+                casted_value = None
+                status.add_error(f"Casting failed in extracting value using the string: {info_type}")
+
+    return casted_value
 
 casting_methods_ = {
     'in': cast_to_int,
@@ -1680,11 +1853,16 @@ casting_methods_ = {
     'lj' : cast_to_just,
     'rj' : cast_to_just,
     'fo' : cast_with_format,
+    'da' : cast_to_date_time,
+    'fu' : cast_by_function,
+    'ls' : cast_lstrip,
+    'rs' : cast_rstrip,
+    'ti' : ret_time_diff,   # return time diff
 }
 # =======================================================================================================================
 # Apply casting on a column
 # =======================================================================================================================
-def cast_column(status, col_castings, column_val):
+def cast_column(status, row, col_castings, column_val):
     '''
     col_custing - the list of casting to apply on the column: i.e. int::format(":,")
     '''
@@ -1701,7 +1879,7 @@ def cast_column(status, col_castings, column_val):
 
         method_index = casting_str[0:2]
         if method_index in casting_methods_:
-            casted_value = casting_methods_[method_index](status, casting_str, casted_value)
+            casted_value = casting_methods_[method_index](status, row, casting_str, casted_value)
             if casted_value == None:
                 # Casting failed
                 ret_val = process_status.CASTING_FAILURE
@@ -1713,32 +1891,6 @@ def cast_column(status, col_castings, column_val):
 
 
     return [ret_val,casted_value]
-
-# =======================================================================================================================
-# Return the data type by the cast string
-# =======================================================================================================================
-def cast_key_to_type(casting_per_column):
-
-    global cast_to_type_        # a Mapping dict from casting to data type
-
-    casting_str = casting_per_column[-1]       # Could be multiple casting for a column, take the last one
-
-    if casting_str[-1] == ')':
-        index = casting_str.rfind('(')
-        if index > 0:
-            key = casting_str[:index]
-            if key in cast_to_type_:
-                data_type = cast_to_type_[key]
-            else:
-                data_type = None
-        else:
-            data_type = None
-    elif casting_str in cast_to_type_:
-        data_type = cast_to_type_[casting_str]
-    else:
-        data_type = None
-
-    return data_type
 
 # =======================================================================================================================
 # Validate a date string
@@ -2122,3 +2274,193 @@ def format_syslog_date(syslog_format, dest_format = UTC_TIME_FORMAT_STR):
         formatted_date = None
 
     return formatted_date
+
+# -----------------------------------------------------------------------------------------------
+# String to timediff - Convert a string to a time diff
+# Example: 'timestamp >= now() - 10 hours and timestamp < now() - 5 hours and id = 2'
+# Example: 'timestamp >= '2024-07-09 01:59:55.856588' - 10 hours and timestamp < now() - 5 hours and id = 2'
+'''
+Use cases to test
+
+where timestamp >= NOW() - 10 hours and timestamp < now()
+where timestamp >= '2024-05-09'
+
+timestamp >= '2024-05-09'
+timestamp >= '2024-05-09 01:59:55.856588' - 10 hours
+timestamp <= now()  and timestamp > now() - 5 hours
+timestamp >= '2024-07-09 01:59:55.856588' - 10 hours and timestamp < '2024-07-09'
+'''
+# -----------------------------------------------------------------------------------------------
+def str_to_timediff(query):
+    '''
+    query - the string to parse Given string
+    '''
+
+    global datetime_pattern_
+    global interval_pattern_
+
+    query_segments = query.split("and")
+
+    datetime_matches = []       # Fixed dates - like 2024-07-06 01:59:55.856588
+    interval_matches = []       # like - now() - 5 days
+    for entry in query_segments:
+        # Consider each part of the query to get the relevant date:
+
+        # Extract the specific datetime - captures the datetime string in the format 'YYYY-MM-DD HH:MM:SS.ffffff'.
+        datetime_match = re.search(datetime_pattern_, entry)
+
+        # Extract intervals using regular expressions
+        interval_match = re.findall(interval_pattern_, entry) # captures the interval value and the unit, allowing for plural forms.
+
+        # Add in pairs:
+        if datetime_match or interval_match:
+            datetime_matches.append(datetime_match)
+            interval_matches.append(interval_match[0] if interval_match else None)
+
+
+    counter_date_values = len(datetime_matches)
+
+    # Ensure intervals are extracted correctly
+    if not counter_date_values:
+        process_log.add("Error", "Failed to calculate time diff from: '%s'" % query)
+        return None         # return an error - time was not identified
+
+    if counter_date_values > 2:
+        process_log.add("Error", "Failed to calculate time diff using more than 2 date/time references: '%s'" % query)
+        return None
+
+    if datetime_matches[0]:
+        specific_datetime = get_unified_date_time(datetime_matches[0])
+        if not specific_datetime:
+            return None
+    else:
+        specific_datetime = datetime.now()
+
+    if interval_matches[0]:
+        time1 = specific_datetime - calculate_timedelta(*interval_matches[0])
+    else:
+        time1 = specific_datetime
+
+    if counter_date_values >= 2:
+        if datetime_matches[1]:
+            specific_datetime = get_unified_date_time(datetime_matches[1])
+            if not specific_datetime:
+                return None
+        else:
+            specific_datetime = datetime.now()
+
+        if interval_matches[1]:
+            time2 = specific_datetime - calculate_timedelta(*interval_matches[1])
+        else:
+            time2 = specific_datetime
+    else:
+        time2 = datetime.now()
+
+    time_difference = abs(time1 - time2)
+
+    return time_difference
+
+
+# -----------------------------------------------------------------------------------------------
+# Calculate the time delta
+# -----------------------------------------------------------------------------------------------
+def calculate_timedelta(value_str, unit):
+    """Helper function to calculate timedelta based on value and unit."""
+    try:
+        value = int(value_str)
+
+        if unit in ['month', 'year']:
+            days = value * (30 if unit == 'month' else 365)
+            delta_time = timedelta(days=days)
+        else:
+            delta_time = timedelta(**{unit_to_timedelta_[unit]: value})
+    except:
+        process_log.add("Error", f"Failed to calculate time diff using '{value_str} and {unit}")
+        delta_time = None
+
+    return delta_time
+
+# -----------------------------------------------------------------------------------------------
+# Unify the date time to '%Y-%m-%d %H:%M:%S.%f'
+# -----------------------------------------------------------------------------------------------
+def get_unified_date_time(datetime_matches):
+
+    try:
+        date_str, hour_str, minute_str, seconds_str = datetime_matches.groups()
+        if seconds_str:
+            # all Info is available
+            updated_datetime = f"{date_str} {hour_str}:{minute_str}:{seconds_str}"
+            specific_datetime = datetime.strptime(updated_datetime, '%Y-%m-%d %H:%M:%S.%f')
+        else:
+
+            updated_datetime = date_str + " 00:00:00"
+
+            specific_datetime = datetime.strptime(updated_datetime, '%Y-%m-%d %H:%M:%S')
+    except:
+        errno, value = sys.exc_info()[:2]
+        process_log.add("Error", f"Failed to extract date: '{errno}' : '{value}'")
+        specific_datetime = None
+
+    return specific_datetime
+
+# -----------------------------------------------------------------------------------------------
+# seconds since the epoch for the provided date string.
+# -----------------------------------------------------------------------------------------------
+def string_to_seconds(date_string, date_format):
+
+    try:
+        if not date_format:
+            # take the default:
+            date_format = '%Y-%m-%dT%H:%M:%S.%fZ' if date_string[-1] == 'Z' else '%Y-%m-%d %H:%M:%S.%f'
+
+        # Parse the date string into a datetime object
+        dt_object = datetime.strptime(date_string, date_format)
+
+        # Convert the datetime object to seconds since the epoch
+        seconds_since_epoch = dt_object.timestamp()
+    except:
+        seconds_since_epoch = 0
+
+    return seconds_since_epoch
+
+
+# -----------------------------------------------------------------------------------------------
+# Convert seconds of time to  seconds, minutes, hours, days, months and years
+# -----------------------------------------------------------------------------------------------
+def seconds_to_time(seconds):
+    # Return time and unit (i.e. 3 days)
+
+    if seconds < 60:
+        return [seconds, "second"]
+
+    for entry in second_conversions_:
+        if seconds >= entry[1]:
+            return [seconds / entry[1], entry[0]]
+
+# -----------------------------------------------------------------------------------------------
+# Get date time difference in seconds
+# -----------------------------------------------------------------------------------------------
+def get_date_time_diff(time_str1, time_str2):
+    try:
+        # Parse the time strings into datetime objects
+        if time_str1[10] == ' ':
+            time_format = TIME_FORMAT_STR
+        else:
+            time_format = UTC_TIME_FORMAT_STR if time_str1[-1] == 'Z' else UTC_NO_Z
+
+        time1 = datetime.strptime(time_str1, time_format)
+
+        if time_str2[10] == ' ':
+            time_format = TIME_FORMAT_STR
+        else:
+            time_format = UTC_TIME_FORMAT_STR if time_str2[-1] == 'Z' else UTC_NO_Z
+
+        time2 = datetime.strptime(time_str2, time_format)
+
+        # Get the difference in seconds
+        seconds_difference = abs((time2 - time1).total_seconds())
+    except:
+        errno, value = sys.exc_info()[:2]
+        process_log.add("Error", f"Failed to calculate seconds diff between '{time_str1}' and '{time_str2}': '{errno}' : '{value}'")
+        seconds_difference = 0
+    return seconds_difference

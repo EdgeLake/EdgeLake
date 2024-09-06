@@ -30,10 +30,11 @@ from edge_lake.generic.utils_data import seconds_to_hms
 from edge_lake.generic.utils_columns import get_current_time
 import edge_lake.cmd.member_cmd as member_cmd
 import edge_lake.api.al_kafka as al_kafka
+import edge_lake.tcpip.html_reply as html_reply
 
 class OutputManager():
 
-    def __init__(self, conditions, rest_socket, add_stat, nodes_count):
+    def __init__(self, conditions, rest_socket, output_into, add_stat, nodes_count):
         '''
         conditions = a dictionary with the following:
             destination - where output data is directed: stdout / REST
@@ -44,6 +45,7 @@ class OutputManager():
             test - a bool value to determine if output is using a test format - (Header section, Output section and Stat section)
             option - different comparison options
         rest_socket - the REST socket if used
+        output_into - if organized as HTML
         add_stat - Bool val to add statistics info
         nodes_count - number of nodes participating in the query process
         '''
@@ -96,6 +98,8 @@ class OutputManager():
         else:
             self.options = None
 
+        self.output_into = output_into      # HTML structure to generate for the output
+
         self.format_type = format_type      # JSON / Table
         self.assign_key = assign_key        # Assign buffer to this dictionary key
         self.topic = topic                  # If the query data is send to a broker, use this topic
@@ -117,6 +121,7 @@ class OutputManager():
         self.data_types_list = None     # The projected data types
         self.dbms_name = None           # The database name
         self.kafka_producer = None      # Used to transfer the data to Kafka
+        self.result_set = ""             # Maintain the result set, for example, in the case of HTML
 
 
     # --------------------------------------------------------------------------------------
@@ -285,7 +290,7 @@ class OutputManager():
                 status.add_error("Failed to write process output file: %s" % self.file_name)
                 ret_val = process_status.File_write_failed
         elif out_dest == "rest":
-           ret_val = utils_io.write_to_stream(status, self.rest_socket, info_str, True, is_last)
+           ret_val = self.rest_write(status, self.rest_socket, info_str, True, is_last, self.output_into)
         elif out_dest == "buffer":
             self.output_str += info_str
         elif out_dest == "kafka":
@@ -314,7 +319,7 @@ class OutputManager():
 
         if self.format_type == "table":
             # use a table format
-            self.out_list_counter += process_table_list(self.out_list, rows_data, json_data, self.out_list_counter + 1)
+            self.out_list_counter += process_table_list(self.data_types_list, self.out_list, rows_data, json_data, self.out_list_counter + 1)
             if self.out_list_counter >= 25:
                 ret_val = self.output_table_entries(status, is_mutex, False)
         else:
@@ -366,7 +371,7 @@ class OutputManager():
                             ret_val = process_status.File_write_failed
 
                 elif self.destination == "rest":
-                    ret_val = utils_io.write_to_stream(status, self.rest_socket, str_info, True, False)
+                    ret_val = self.rest_write(status, self.rest_socket, str_info, True, False, self.output_into)
 
                 elif self.destination == "kafka":
                     ret_val = al_kafka.send_data(status, self.kafka_producer, self.topic, str_info)
@@ -403,7 +408,7 @@ class OutputManager():
                 if not rows_data:
                     # Data is not organized as a string
                     out_data = utils_sql.make_output_row(1, self.title_list, self.data_types_list, json_data)
-                    # not rhe first row - add comma to seperate between the JSON entries
+                    # not rhe first row - add comma to separate between the JSON entries
                     rows_str = out_data[offset_row:]
                     offset_parenthesis = 10
                 else:
@@ -425,7 +430,7 @@ class OutputManager():
                             status.add_error("Query process failed to write to output file: %s" % self.file_name)
                             ret_val = process_status.File_write_failed
                 elif self.destination == "rest":
-                    ret_val = utils_io.write_to_stream(status, self.rest_socket, separator + rows_str, True, False)
+                    ret_val = self.rest_write(status, self.rest_socket, separator + rows_str, True, False, self.output_into)
                 else:
                     # STDOUT
                     if is_mutex:
@@ -556,7 +561,7 @@ class OutputManager():
                         end_struct = ""
 
                     if self.destination == "rest":
-                        ret_val = utils_io.write_to_stream(status, self.rest_socket, end_struct, True, True)
+                        ret_val = self.rest_write(status, self.rest_socket, end_struct, True, True, self.output_into)
                     elif self.destination == "stdout":
                         utils_print.output(end_struct, False)
 
@@ -694,11 +699,46 @@ class OutputManager():
 
         return ret_val
 
+    # =======================================================================================================================
+    # Return True if result sets are maintained in a buffer - for example in the case of HTML
+    # =======================================================================================================================
+    def is_with_result_set(self):
+        return True if self.output_into else False
+    # =======================================================================================================================
+    # Return the result sets (if maintained in a buffer, for example if output is HTML)
+    # =======================================================================================================================
+    def get_result_set(self):
+        return self.result_set
+    # =======================================================================================================================
+    # Reply via rest = there are 2 options:
+    # 1) ALl writes are of user data
+    # 2) With HTML - wrapping in an HTML doc and modifing the strings to HTM format
+    # =======================================================================================================================
+    def rest_write(self, status, io_stream, send_data, transfer_encoding, transfer_final, output_into):
+        '''
+        status - thread status object
+        io_stream - io handle
+        send_data - the database returned data
+        transfer_encoding - true with messages with undetermined size: self.send_header('Transfer-Encoding', 'chunked') # https://en.wikipedia.org/wiki/Chunked_transfer_encoding
+        transfer_final - true for last output to stream
+        output_into - html form
+        '''
+        if output_into:
+
+            self.result_set += send_data  # Maintain the output for HTML
+            ret_val = process_status.SUCCESS
+
+        else:
+            ret_val = utils_io.write_to_stream(status, io_stream, send_data, transfer_encoding, transfer_final)
+
+        return ret_val
+
+
 # =======================================================================================================================
 # Update a list with the row information. After Max Rows - Print the list
 # location starts at 1 as location 0 maintains the title
 # =======================================================================================================================
-def process_table_list(table_list, rows_data, json_data, location):
+def process_table_list(data_types_list, table_list, rows_data, json_data, location):
     '''
     Add rows to the table_list
     table_list - a list to contain the data organized as a table
@@ -723,17 +763,31 @@ def process_table_list(table_list, rows_data, json_data, location):
             if (location + rows_counter) >= len(table_list[0]):
                 # add new list
                 for index, column_val in enumerate(row.values()):
-                    table_list[index].append(str(column_val))
+                    print_val = str(column_val)
+                    if not print_val:
+                        print_val = "null"
+                    elif data_types_list and data_types_list[index][:4] == "bool":
+                        if print_val == "0":
+                            print_val = "false"
+                        else:
+                            print_val = "true"
+                    table_list[index].append(print_val)
             else:
                 for index, column_val in enumerate(row.values()):
                     # reuse existing list
-                    table_list[index][location + rows_counter] = (str(column_val))
+                    print_val = str(column_val)
+                    if not print_val:
+                        print_val = "null"
+                    elif data_types_list and data_types_list[index][:4] == "bool":
+                        if print_val == "0":
+                            print_val = "false"
+                        else:
+                            print_val = "true"
+                    table_list[index][location + rows_counter] = (print_val)
             rows_counter += 1
     else:
         rows_counter += 1
     return rows_counter  # return number of rows added to the table
-
-
 
 
 

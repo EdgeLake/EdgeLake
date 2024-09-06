@@ -111,7 +111,7 @@ def select_dbms(status: process_status, db_type: str, connect_str: str, port: in
 # ==================================================================
 def connect_dbms(status, dbms_name, db_type, user, passwd, host, port, in_ram, engine_string, conditions):
     # connect DBMS
-    db_type_name = db_type.lower()
+    db_type_name = db_type.lower().strip()
     if db_type_name == "psql":
         dbms = PSQL()
     #   elif db_type_name == "pi":
@@ -141,7 +141,7 @@ def connect_dbms(status, dbms_name, db_type, user, passwd, host, port, in_ram, e
     else:
         port_val = port
 
-    if not dbms.connect_to_db(status, user, passwd, host, port_val, dbms_name, conditions):
+    if not dbms.connect_to_db(status, user, passwd, host, port_val, dbms_name.strip(), conditions):
         dbms = None
 
     return dbms

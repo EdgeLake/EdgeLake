@@ -667,8 +667,18 @@ def continuous_monitoring(status, io_buff_in, cmd_words, trace):
     global continuous_status_
 
     if not continuous_status_:
+        if cmd_words[1].isdigit():
+            # User time - optional - in seconds
+            continuous_time = int(cmd_words[1])
+            if len(cmd_words) <= 2:
+                return process_status.ERR_command_struct
+            cmd_offset = 2  # User command is after continuous time
+        else:
+            continuous_time = 5  # Wait 5 seconds - default
+            cmd_offset = 1       # User command is after continuous
+
         # Start a thread to continuous (if not already running)
-        t = threading.Thread(target=continuous_visualizing, args=("dummy", cmd_words), name="Visualizer")
+        t = threading.Thread(target=continuous_visualizing, args=("dummy", cmd_words, cmd_offset, continuous_time), name="Visualizer")
         t.start()
     else:
         utils_print.output("\n\rWait for termination of continuous process before initiating a new process", True)
@@ -678,11 +688,14 @@ def continuous_monitoring(status, io_buff_in, cmd_words, trace):
 # ----------------------------------------------------------------
 # Provide Continuous monitoring using a dedicated thread, until enter is entered
 # ----------------------------------------------------------------
-def continuous_visualizing(dummy, cmd_words):
+def continuous_visualizing(dummy, cmd_words, cmd_offset, continuous_time):
 
     global continuous_status_
 
     continuous_status_ = True       # Set true if continuous is running
+    size = params.get_param("io_buff_size")
+    buff_size = int(size)
+    data_buffer = bytearray(buff_size)
 
     status = process_status.ProcessStat()
     enter_counter = get_enter_counter()
@@ -695,7 +708,7 @@ def continuous_visualizing(dummy, cmd_words):
 
     exit_loop = False
 
-    command_list = ' '.join(cmd_words[1:]).split(',')
+    command_list = ' '.join(cmd_words[cmd_offset:]).split(',')
 
     while (enter_counter == get_enter_counter() ):
 
@@ -703,8 +716,10 @@ def continuous_visualizing(dummy, cmd_words):
             break       # Exit node was called
 
         print_str = ""
+        listed_cmds = False
         for command in command_list:
             # Get the monitored functions
+            listed_cmds = True
             sub_cmd_words = command.split()
             if sub_cmd_words[0] == "cpu":
                 cmd_key = "cpu"
@@ -720,23 +735,35 @@ def continuous_visualizing(dummy, cmd_words):
                     exit_loop = True
                     break
             else:
-                utils_print.output(f"Continuous does not support the command: '{command}'", True)
-                exit_loop = True
+                # exec a single command continuously
+                listed_cmds = False
+                command = ' '.join(cmd_words[cmd_offset:])
+                utils_print.output(f"\r\ncontinuous [{continuous_time} sec] {command}", True)
+                ret_val = member_cmd.process_cmd(status, command, False, None, None, data_buffer)
                 break
 
 
         if exit_loop or enter_counter != get_enter_counter():
             break
 
+        if listed_cmds:
+            utils_print.move_lines_up(lines_diff, True)     # And delete each line
+            utils_print.output(print_str, False)
+            lines_diff = print_str.count('\n')  # Count new lines to revert to the same starting place
 
-        utils_print.move_lines_up(lines_diff, True)     # And delete each line
-
-
-        utils_print.output(print_str, False)
-
-        lines_diff = print_str.count('\n')  # Count new lines to revert to the same starting place
-
-        time.sleep(5)
+        sleep_time = continuous_time
+        # Avoid long sleep without exit by breaking to 10 seconds
+        while sleep_time:
+            if sleep_time <= 10:
+                time.sleep(sleep_time)
+                sleep_time = 0
+            else:
+                time.sleep(10)
+                sleep_time -= 10
+            if enter_counter != get_enter_counter():
+                break
+        if sleep_time:
+            break
 
     continuous_status_ = False  # continuous not running
     utils_print.output("\n\rExit Continuous Monitoring", True)

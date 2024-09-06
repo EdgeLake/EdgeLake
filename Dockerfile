@@ -1,14 +1,20 @@
-FROM python:3.10-alpine as base
+FROM python:3.11-alpine as base
 
 # declare params
-#ENV EDGELAKE_PATH=/app \
-#    EDGELAKE_HOME=/app/EdgeLake \
-#    BLOCKCHAIN_DIR=/app/EdgeLake/blockchain \
-#    DATA_DIR=/app/EdgeLake/data \
-#    LOCAL_SCRIPTS=/app/deployment-scripts/node-deployment \
-#    TEST_DIR=/app/deployment-scripts/test \
-#    DEBIAN_FRONTEND=noninteractive \
-#    NODE_TYPE=generic
+ENV PYTHONPATH=/app/EdgeLake/ \
+    EDGELAKE_PATH=/app \
+    EDGELAKE_HOME=/app/EdgeLake \
+    BLOCKCHAIN_DIR=/app/EdgeLake/blockchain \
+    DATA_DIR=/app/EdgeLake/data \
+    LOCAL_SCRIPTS=/app/deployment-scripts/node-deployment \
+    TEST_DIR=/app/deployment-scripts/test \
+    DEBIAN_FRONTEND=noninteractive \
+    NODE_TYPE=generic \
+    NODE_NAME=edgelake-node \
+    COMPANY_NAME="New Company" \
+    ANYLOG_SERVER_PORT=32548 \
+    ANYLOG_REST_PORT=32549 \
+    LEDGER_CONN=127.0.0.1:32049
 
 WORKDIR /app
 
@@ -19,21 +25,18 @@ COPY README.md /app
 
 EXPOSE $ANYLOG_SERVER_PORT $ANYLOG_REST_PORT $ANYLOG_BROKER_PORT
 
-RUN apk update && \
-    apk upgrade && \
-    apk add --no-cache bash git openssh-client gcc python3-dev musl-dev && \
-    apk add bash python3 python3-dev py3-pip wget build-base libffi-dev py3-psutil && \
-    apk add --no-cache bash git openssh-client gcc python3-dev build-base libffi-dev musl-dev && \
+# Install dependencies
+RUN apk update && apk upgrade && \
+    apk add bash git gcc openssh-client python3 python3-dev py3-pip musl-dev build-base libffi-dev py3-psutil && \
     python3 -m pip install --upgrade pip && \
     python3 -m pip install --upgrade -r /app/EdgeLake/requirements.txt && \
-    python3 -m pip install --upgrade pip wheel pyinstaller cython && \
-    python3 /app/EdgeLake/setup.py install && \
-    git clone https://github.com/EdgeLake/deployment-scripts/ && \
-    rm -rf  *.spec build/ EdgeLake && mkdir EdgeLake && \
-    mv /app/setup.cfg /app/EdgeLake/setup.cfg && \
-    mv /app/LICENSE /app/EdgeLake/LICENSE && \
-    mv /app/README.md /app/EdgeLake/README.md
-
+    git clone https://github.com/AnyLog-co/deployment-scripts
 
 FROM base AS deployment
-ENTRYPOINT /app/dist/edgelake process /app/deployment-scripts/node-deployment/main.al
+
+# Make sure to set the EDGELAKE_HOME environment variable for Python explicitly
+ENV EDGELAKE_HOME=/app/EdgeLake
+
+# Use exec form of ENTRYPOINT to ensure the environment variables are passed correctly
+# ENTRYPOINT ["/bin/sh"]
+ENTRYPOINT python3 /app/EdgeLake/edge_lake/edgelake.py process /app/deployment-scripts/node-deployment/main.al

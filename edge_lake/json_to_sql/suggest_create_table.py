@@ -57,7 +57,13 @@ def get_column_types(status: process_status, data: list):
                 status.add_error("Json data in line #%u is not formatted correctly" % index)
                 return None  # failed to create a JSON
             for key in jdata:
-                set_column_name_type(status, columns, key, jdata[key])
+                column_name = utils_data.reset_str_chars(key.strip())   # Change the column name to lower case
+                set_column_name_type(status, columns, column_name, jdata[key])
+
+        for column_name, column_type in columns.items():
+            if column_type == "":
+                # Only NULL value provided
+                columns[column_name] = "VARCHAR"    # Set as varchar
 
     return columns
 
@@ -74,15 +80,19 @@ def set_column_name_type(status, columns, column_name, column_value):
 
     if isinstance(column_name, str) and len(column_name):
 
-        data_type = get_column_type_by_value(column_name, column_value)  # send the columndata from the row to determine the data type
-
-        if existing_type:
-            if existing_type != data_type:
-                resolved_type = resolve_data_type(existing_type, data_type)
-                if resolved_type != existing_type:
-                    columns[column_name] = resolved_type  # change data type (because of a value that does not fit the existing type)
+        if column_value == None:
+            if not existing_type:
+                columns[column_name] = ""   # Not known type
         else:
-            columns[column_name] = data_type
+            data_type = get_column_type_by_value(column_name, column_value)  # send the columndata from the row to determine the data type
+
+            if existing_type:
+                if existing_type != data_type:
+                    resolved_type = resolve_data_type(existing_type, data_type)
+                    if resolved_type != existing_type:
+                        columns[column_name] = resolved_type  # change data type (because of a value that does not fit the existing type)
+            else:
+                columns[column_name] = data_type
 
 
 # ==================================================================

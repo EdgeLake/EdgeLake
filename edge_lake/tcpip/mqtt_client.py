@@ -17,7 +17,7 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 # _MQTT_TOPIC = f"/devices/{DEVICE_ID}/events"
 
 # Cloud MQTT Example - https://github.com/CloudMQTT/python-mqtt-example
-
+import re
 import sys
 import threading
 import copy
@@ -586,7 +586,7 @@ def get_subscriptions_info(client_id, is_detailed, broker_ip_port, topic_request
 # ----------------------------------------------------------------------
 def get_cmd_policies( policies, is_id_list ):
 
-    command = "blockchain get mapping where"
+    command = "blockchain get (mapping,transform) where"
     for index, policy in enumerate(policies):
         if index:
             command += " or"
@@ -596,7 +596,7 @@ def get_cmd_policies( policies, is_id_list ):
         else:
             # Get the ids from the policies
             try:
-                policy_id = policy["mapping"]["id"]
+                policy_id = policy["mapping"]["id"] if "mapping" in policy else policy["transform"]["id"]
             except:
                 command += " [Failed to identify ID in policy]"
                 break
@@ -805,16 +805,13 @@ def process_message( topic, user_id, user_msg):
                 # Stat per broker
                 ip_port = client_sbscr.get_ip_port()
                 topics_dict = broker_to_topic[ip_port]      # List of topics for this broker
-                if not topic in topics_dict:
-                    status.add_error("Received message without subscriotion on topic: '%s'" % topic)
-                    if '#' in topics_dict:
-                        # Generic - get all topic
-                        topic_info = topics_dict['#']
-                    else:
-                        topic_info = None
-                    ret_val = process_status.MQTT_non_subscribed_err
-                else:
+                if topic in topics_dict:
                     topic_info = topics_dict[topic]
+                else:
+                    topic, topic_info = get_partial_match_topic(topics_dict, topic)
+                    if not topic_info:
+                        status.add_error("Received message without subscription on topic: '%s'" % topic)
+                        ret_val = process_status.MQTT_non_subscribed_err
 
                 if topic_info:
                     topic_info[1] += 1      # Counter messages
@@ -844,6 +841,34 @@ def process_message( topic, user_id, user_msg):
         subscript_mutex[user_id].release_read()
 
     return ret_val
+
+
+# ----------------------------------------------------------------------
+# Get a topic by comparison up to the hashtag (if exists)
+# ----------------------------------------------------------------------
+def get_partial_match_topic(topics_dict, topic):
+    """
+    topics_dict - the dictionary with info as f(topic). these topics can include hashtag
+    topic - the topic published withhou the hashtag
+    """
+
+    # Find if topics with partial match
+    topic_info = None
+    updated_topic = topic
+    for key in topics_dict:
+        if key[-1] == '#':
+            # Match prefix
+            key_len = len(key)
+            if key_len == 1:
+                topic_info = topics_dict[key]  # MAP All topics
+                updated_topic = key            # The topic with the hashtag
+                break
+            elif key[:-1] == topic[:key_len - 1]:
+                topic_info = topics_dict[key]  # Prefix match
+                updated_topic = key
+                break
+
+    return [updated_topic, topic_info]
 
 # ----------------------------------------------------------------------
 # Process a message using the bring command
@@ -922,21 +947,119 @@ def process_using_policies(status, topic_info, topic, json_msg, prep_dir, watch_
     policies = topic_info[4]        # The mapping policies
 
     for policy in policies:
-        policy_inner = policy["mapping"]
-        policy_id = policy_inner["id"] # no need to validate as this is the select criteria
-        is_apply = True  # If with script - validate that skip event is not returned
-        if "script" in policy_inner:
-            # Get the condition if the policy applies
-            reply_code, info_if = mapping_policy.process_if_code(status, policy_inner, policy_id, "condition", json_msg)
-            if reply_code == process_status.IGNORE_EVENT:
-                # Skip this entry
-                is_apply = False
-        if is_apply:    # 1 value means if returned true
-            # condition satisfied
-            ret_val = process_policy(status, policy_inner, policy_id, json_msg, prep_dir, watch_dir, bwatch_dir, err_dir, blobs_dir)
+        if "mapping" in policy:
+            # Map the policy to a single table
+            ret_val = process_mapping(status, policy, json_msg, prep_dir, watch_dir, bwatch_dir, err_dir, blobs_dir)
+        elif "transform" in policy:
+            ret_val = process_transform(status, policy, json_msg, prep_dir, watch_dir, bwatch_dir, err_dir, blobs_dir)
+        else:
+            status.add_error(f"Wrong mapping/transform policy used with topic: '{topic}'")
+            ret_val = process_status.Wrong_policy_structure
+            break
+
+    return ret_val
+#----------------------------------------------------------------------
+# Process a transform a policy (used to map a PLC with many readings that are broken to tables
+#----------------------------------------------------------------------
+def process_transform(status, policy, json_msg, prep_dir, watch_dir, bwatch_dir, err_dir, blobs_dir):
+
+    ret_val = process_status.SUCCESS
+    policy_inner = policy["transform"]
+    policy_id = policy_inner["id"] if "id" in policy_inner else "Not provided"
+
+    policy_inner["__new_rows_from_plc__"] = {}  # This is a dictionary to all the rows created from the PLC reading
+
+    re_compiled_pattern = None
+    if "re_match" in policy_inner:
+        raw_pattern = fr"{policy_inner['re_match']}"    # Raw string ignore backslash chars
+
+        try:
+            re_compiled_pattern = re.compile(raw_pattern) # the r treats backslashes (\) as literal characters
+        except:
+            pass
+
+    current_time = utils_columns.get_current_time_in_sec()
+
+    for attr_name, attr_val in json_msg.items():
+        # Go over the PLC data
+        # For each reading:
+        # Get the DBMS from the PLC attr name
+        if re_compiled_pattern:
+            re_match = re.match(re_compiled_pattern, attr_name)
+
+        dbms_name = mapping_policy.get_re_match_value(status, re_match, policy_inner["dbms"])
+        if not dbms_name:
+            #status.add_error(f"Failed to derive DBMS Name using {policy_inner['dbms']} from Transform policy: {policy_id}")
+            #ret_val = process_status.Wrong_policy_structure
+            continue    # Ignore this attribute
+        dbms_name = utils_data.reset_str_chars(dbms_name.strip())
+
+        table_name = mapping_policy.get_re_match_value(status, re_match, policy_inner["table"])
+        if not table_name:
+            # status.add_error(f"Failed to derive Table Name using {policy_inner['table']} from Transform policy: {policy_id}")
+            # ret_val = process_status.Wrong_policy_structure
+            continue    # Ignore this attribute
+        table_name = utils_data.reset_str_chars(table_name.strip())
+
+        # Add the static rows to the table if not added in a previous attr_val
+        ret_val, row_to_update = mapping_policy.get_new_row(status, current_time, dbms_name, table_name, policy_inner, policy_id, json_msg, re_match)
+        if ret_val:
+            break
+
+        # Add new column
+        column_name = mapping_policy.get_re_match_value(status, re_match, policy_inner["column"])
+        if not column_name:
+            #status.add_error(f"Failed to derive Column Name using {policy_inner['column']} from Transform policy: {policy_id}")
+            #ret_val = process_status.Wrong_policy_structure
+            continue    # Ignore this attribute
+
+        column_name = utils_data.reset_str_chars(column_name.strip())
+
+        row_to_update[column_name] = attr_val        # Update the PLC value in the needed table
+
+    data_source = "0"       # The ID of the PLC generating the data
+
+    rows_dict = policy_inner["__new_rows_from_plc__"]
+    for dbms_table, mapped_row_dict in rows_dict.items():
+        dbms_table_list = dbms_table.split('.')
+        dbms_name = dbms_table_list[0]
+        table_name = dbms_table_list[1]
+        mapped_row = utils_json.to_string(mapped_row_dict)
+        if not mapped_row:
+            status.add_error("Failed to generate rows in policy Transform process with policy: %s" % policy_id)
+            ret_val = process_status.ERR_process_failure
+            break
+
+        ret_val, hash_value = streaming_data.add_data(status, "streaming", 1, prep_dir, watch_dir, err_dir,
+                                                      dbms_name, table_name, data_source, policy_id, 'json', mapped_row)
+        if ret_val:
+            break
 
 
     return ret_val
+
+#----------------------------------------------------------------------
+# Process a mapping policy
+#----------------------------------------------------------------------
+def process_mapping(status, policy, json_msg, prep_dir, watch_dir, bwatch_dir, err_dir, blobs_dir):
+
+    ret_val = process_status.SUCCESS
+    policy_inner = policy["mapping"]
+    policy_id = policy_inner["id"]  # no need to validate as this is the select criteria
+    is_apply = True  # If with script - validate that skip event is not returned
+    if "script" in policy_inner:
+        # Get the condition if the policy applies
+        reply_code, info_if = mapping_policy.process_if_code(status, policy_inner, policy_id, "condition", json_msg)
+        if reply_code == process_status.IGNORE_EVENT:
+            # Script instruction - Skip this entry
+            is_apply = False
+
+    if is_apply:  # 1 value means if returned true
+        # condition satisfied
+        ret_val = process_policy(status, policy_inner, policy_id, json_msg, prep_dir, watch_dir, bwatch_dir, err_dir, blobs_dir)
+
+    return ret_val
+
 #----------------------------------------------------------------------
 # Process a policy against the JSON data
 # Get the dbms name and table name from the policy, then apply the policy logic on the data
@@ -1121,7 +1244,7 @@ def get_dest_name(status, topic, object_bring, message, object_type):
 
     if not ret_val:
         # To lower case and replace space with underscore
-        object_name = object_name.lower()
+        object_name = object_name.strip().lower()
         object_name = utils_data.reset_str_chars(object_name)
 
 
@@ -1612,6 +1735,8 @@ def register(status, conditions):
 
     client_topics = conditions["topic"]  # ALl the subscribed topics of this client
 
+    topics_dict = {}        # Collect the topics that were configured such that it can be undone in a failure
+
     for topic in client_topics:
 
         with_policies = "policy" in topic
@@ -1627,7 +1752,6 @@ def register(status, conditions):
                 status.add_error("Wrong msg client declaration for topic: %s" % str(topic))
                 ret_val = process_status.MQTT_info_err
                 break
-
 
             if not "policy" in topic or not isinstance(topic["policy"], list):
                 status.add_error("Missing policies for topic: %s" % str(topic))
@@ -1653,6 +1777,7 @@ def register(status, conditions):
             ret_val = resister_by_broker(status, ip_port, name, client_sbscr)  # Register the topic as f(broker)
             if ret_val:
                 break
+            topics_dict[name] = 1  # Keep the (registered) topic name to allow undo
 
             policies_copy = copy.deepcopy(policies_info) # Make a copy of the policy as it may be changed using compile_ in Mapping_policy.apply_policy_schema()
             client_sbscr.add_topic(name, None, None, qos, None, policies_copy, False)  # Add topics to list
@@ -1670,6 +1795,7 @@ def register(status, conditions):
             ret_val = resister_by_broker(status, ip_port, name, client_sbscr) # Register the topic as f(broker)
             if ret_val:
                 break
+            topics_dict[name] = 1  # Keep the (registered) topic name to allow undo
 
             client_sbscr.add_topic(name, None, None, qos, None, None, False)     # Add topics to list
         else:
@@ -1786,6 +1912,7 @@ def register(status, conditions):
             ret_val = resister_by_broker(status, ip_port, name, client_sbscr) # Register the topic as f(broker)
             if ret_val:
                 break
+            topics_dict[name] = 1  # Keep the (registered) topic name to allow undo
 
             client_sbscr.add_topic(name, dbms, table, qos, mapping, None, persist)     # Update the subscription info for this client
 
@@ -1800,6 +1927,8 @@ def register(status, conditions):
 
         client_id = client_sbscr.get_client_id()
     else:
+        if len(topics_dict):
+            remove_topics(ip_port, topics_dict) # Undo the assignments before the failure
         client_id = 0
 
     return [ret_val, client_id]

@@ -85,6 +85,18 @@ class JobHandle:
         return self.job_id
 
     # =======================================================================================================================
+    # Save a result set in an output buffer
+    # =======================================================================================================================
+    def set_outpu_buff(self, result):
+        self.output_buff = result
+
+    # =======================================================================================================================
+    # Get a result set
+    # =======================================================================================================================
+    def get_output_buff(self):
+        return self.output_buff
+
+    # =======================================================================================================================
     # Save a result set
     # =======================================================================================================================
     def set_result_set(self, result):
@@ -211,6 +223,17 @@ class JobHandle:
         else:
             self.conditions = conditions.copy()
 
+    # =======================================================================================================================
+    # Can be an HTML form
+    # =======================================================================================================================
+    def set_output_into(self, into_output):
+        self.output_into = into_output
+
+    # =======================================================================================================================
+    # Can be an HTML form
+    # =======================================================================================================================
+    def get_output_into(self):
+        return self.output_into
     # =======================================================================================================================
     # Set the ouput socket for a REST call
     # =======================================================================================================================
@@ -365,7 +388,8 @@ class JobHandle:
     # Reset output info
     # =======================================================================================================================
     def reset(self):
-        self.result_set = ""  # Used to transfer a result set between the thread that issued the command and the thread that got the resulr
+        self.result_set = ""  # Used to transfer a result set between the thread that issued the command and the thread that got the result
+        self.output_buff = "" # A buffer used for aggregating results (for example in the case of HTML output)
         self.print_status = True  # A False value is set to suppress prints to stdout of replied data from peers
         self.logical_dbms = ""
         self.table_name = ""
@@ -375,6 +399,7 @@ class JobHandle:
         self.operator_error_txt = ""  # text returned by the operator
         self.process_error = 0  # error on the processing node
         self.output_socket = None  # output socket for a REST call
+        self.output_into = None    # can indicate to translate output to HTML
         self.stream_file = None     # the name of the file that is streamed to a browser or an app in a REST call
         self.rest_caller = False
         self.results_set = []    # An array with query result

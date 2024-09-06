@@ -49,7 +49,7 @@ def al_auth_symetric_decryption(status, f_object, data):
     return None
 
 def al_auth_validate_basic_auth(status, user_name, password):
-    return False
+    return True         # Assunme authenticated
 
 def al_auth_validate_user(status, user_key, test_expiration):
     return False

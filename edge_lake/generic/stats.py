@@ -66,8 +66,10 @@ statistics_ = {
             "total rows": 0,  # Since started
             "total errors": 0,  # Since started
             "operator timestamp": 0,  # The timestamp when the operator process started
+            "first_file_time"    : 0,   # the timestamp of the first file that was processed
             "last_file_time"    : 0,   # the timestamp of the last file that was processed
-
+            "query timestamp"   : 0,     # The time of the last call for statistics
+            "processing_seconds"  : 0     # last file time - first file time
         },
 
         "prep_config": (
@@ -83,14 +85,17 @@ statistics_ = {
 
         "prep_summary" :    (
                                 # Dictionary Key to update       Operation    Dictionary   operand 1        Dictionary  2perand 2
-                                ("summary", "node name",           'M',        None,       get_node_name,   None,       None),             # Update the node name using a method
-                                ("summary", "elapsed time",        'T',        "summary",  "query timestamp",   None,       None ),      # Time from last call for stat
-                                ("summary", "query timestamp",     'M',        None,       utils_columns.get_current_time_in_sec,   None,       None),  # Update current timestamp
-                                ("summary", "operational time",    'T',        "summary",  "start timestamp",   None,       None),  # Time from last call for stat
-                                ("summary", "new rows",          'D',        "prep_info","total rows",   "summary",  "total rows"),  # new rows
-                                ("summary", "total rows",        'E',        "prep_info","total rows",   None, None),  # Move value from prep to summary
-                                ("summary", "new errors",          'D',      "prep_info","total errors",   "summary",  "total errors"),
-                                ("summary", "total errors",        'E',      "prep_info", "total errors", None, None),
+            ("summary", "node name",           'M',        None,       get_node_name,   None,       None),  # Update the node name using a method
+            ("summary", "elapsed time",        'T',        "prep_info",  "query timestamp",   None,       None ),  # Time from last call for stat
+            ("prep_info", "query timestamp",   'M',        None, utils_columns.get_current_time_in_sec, None, None),  # Set query time in variable
+            ("summary", "operational time",    'T',       "prep_info",  "operator timestamp",   None,       None),  # Time from last call for stat
+            ("summary", "processing time",     'T',       "prep_info",  "last_file_time",    "prep_info",  "first_file_time"),  # Time from first to last file
+            ("summary", "new rows",            'D',       "prep_info","total rows",   "summary",  "total rows"),  # new rows
+            ("summary", "total rows",          'E',       "prep_info","total rows",   None, None),  # Move value from prep to summary
+            ("summary", "new errors",          'D',      "prep_info","total errors",   "summary",  "total errors"),
+            ("summary", "total errors",        'E',      "prep_info", "total errors", None, None),
+            ("prep_info", "processing_seconds",'D',      "prep_info", "last_file_time", "prep_info", "first_file_time"),           # Subtraction
+            ("summary", "avg. rows/sec",       '%',      "summary", "total rows", "prep_info", "processing_seconds"),    #  Division
                             ),
 
 
@@ -98,14 +103,14 @@ statistics_ = {
         "summary" : {
             "node name": "",
             "status": "Not Active",
-            "start timestamp": 0,  # The date and time operator started
             "operational time": "",  # HH:MM:SS of operations
-            "query timestamp" : 0,     # Query timestamp
+            "processing time" : 0,     # the time from first file to last file
             "elapsed time": "",  # Time from last call for stat
             "new rows": 0,  # Since last call
             "total rows": 0,  # Since started
             "new errors": 0,  # Since last call
             "total errors": 0,  # Since started
+            "avg. rows/sec" : 0,   # number of rows / processing time
 
         },
 
@@ -139,7 +144,7 @@ statistics_ = {
 
         "attr_name_sql" : ["files", "immediate", "timestamp", "elapsed_time"],
         "attr_name_json" : ["files", "immediate", "timestamp", "elapsed_time"],
-        "attr_name_inserts" : ["first timestamp", "last timestamp", "first insert", "last insert", "Batch inserts", "Immediate inserts"],
+        "attr_name_inserts" : ["first timestamp\t-", "last timestamp\t-", "first insert", "last insert", "Batch inserts", "Immediate inserts", "DBMS Seconds\t{:,.3f}"],
 
         "prep_sql": (
             # Dictionary Key to update       Operation    Dictionary   operand 1        Dictionary  2perand 2
@@ -183,10 +188,7 @@ statistics_ = {
             # Dictionary Key to update       Operation    Dictionary   operand 1        Dictionary  2perand 2
             ("summary", "node name", 'M', None, get_node_name, None, None),  # Update the node name using a method
             ("summary", "elapsed time", 'T', "summary", "query timestamp", None, None),  # Time from last call for stat
-            ("summary", "query timestamp", 'M', None, utils_columns.get_current_time_in_sec, None, None),
-            # Update current timestamp
-            ("summary", "operational time", 'T', "summary", "start timestamp", None, None),
-            # Time from last call for stat
+            ("summary", "query timestamp", 'M', None, utils_columns.get_current_time_in_sec, None, None), # Update current timestamp
             ("summary", "new files", 'D', "prep_info", "total files", "summary", "total files"),  # new rows
             ("summary", "total files", 'E', "prep_info", "total files", None, None),  # Move value from prep to summary
             ("summary", "new errors", 'D', "prep_info", "total errors", "summary", "total errors"),
@@ -196,7 +198,6 @@ statistics_ = {
         "summary": {
             "node name": "",
             "status": "Not Active",
-            "start timestamp": 0,  # The date and time operator started
             "operational time": "",  # HH:MM:SS of operations
             "query timestamp": 0,  # Query timestamp
             "elapsed time": "",  # Time from last call for stat
@@ -286,6 +287,18 @@ def set_table_entry(service_name, topic_name, dbms_name, table_name, attr_name, 
 
     table_entry = get_table_entry(service_name, topic_name, dbms_name, table_name)
     table_entry[attr_name] = attr_value
+
+# ---------------------------------------------------------------------------------------------
+# Reset the operator stats in the "get operator summary" command
+# ---------------------------------------------------------------------------------------------
+def reset_operator_summary():
+
+    statistics_["operator"]["prep_info"]["total rows"] = 0
+    statistics_["operator"]["prep_info"]["total errors"] = 0
+    statistics_["operator"]["prep_info"]["first_file_time"] = 0
+    statistics_["operator"]["prep_info"]["last_file_time"] = 0
+    statistics_["operator"]["prep_info"]["processing_seconds"] = 0
+
 
 # ---------------------------------------------------------------------------------------------
 # Reset Statistics
@@ -515,7 +528,7 @@ def prepare_stats(service, topic, prep_key):
         target_dict, stats_key, operation, operand1_dict, operand1, operand2_dict, operand2 = entry
 
         if operation == 'M':
-            # apply a menthod that returns a value to a dictionary entry
+            # apply a method that returns a value to a dictionary entry
             stats_dict[target_dict][stats_key] = operand1()        # Source is a function
         elif operation == 'P':
             # apply a process that does not return a value
@@ -527,35 +540,52 @@ def prepare_stats(service, topic, prep_key):
             if isinstance(stats_info,list):
                 # Go over all list objects
                 for entry in stats_info:
-                    set_time_diff(entry, stats_key, current_time, entry, operand1)
+                    set_time_diff(entry, stats_key, current_time, entry, operand1, None, None)
             else:
-                set_time_diff(stats_dict[target_dict], stats_key, current_time, stats_dict[operand1_dict], operand1)
+               # get the time difference - time1 - time2
+               second_operand_dict = None if not operand2_dict else stats_dict[operand2_dict]
+               set_time_diff(stats_dict[target_dict], stats_key, current_time, stats_dict[operand1_dict], operand1, second_operand_dict, operand2)
+
 
         elif operation == 'D':
-            # Difference netween valies
+            # Difference between values
             stats_dict[target_dict][stats_key] = stats_dict[operand1_dict][operand1] - stats_dict[operand2_dict][operand2]
         elif operation == 'E':
             # Equals - move a value from one place to another
             stats_dict[target_dict][stats_key] = stats_dict[operand1_dict][operand1]
+        elif operation == '%':
+            # Division, i.e. rows / second
+            if not stats_dict[operand2_dict][operand2] or not stats_dict[operand1_dict][operand1]:
+                stats_dict[target_dict][stats_key] = 0
+            else:
+                number = (stats_dict[operand1_dict][operand1] / stats_dict[operand2_dict][operand2])
+                stats_dict[target_dict][stats_key] = f"{number:,.2f}"
 
 
 # ---------------------------------------------------------------------------------------------
 # Calculate the time difference between now and an event
+# if subtract_dict, subtract_key are provided - calculate the difference to the time represnted by these values ignore current time)
 # ---------------------------------------------------------------------------------------------
-def set_time_diff(target_dict, target_key, current_time, source_dict, source_key):
+def set_time_diff(target_dict, target_key, current_time, source_dict, source_key, subtract_dict, subtract_key):
     '''
     target_dict - the dictionary to update (like operator errors sql)
     target_key - the key in the dictionary
     current_time - timestamp now()
     source_dict - dictionary with previous time
     source_key - the key with the source timestamp
+    subtract_dict - if not null - find the time diff to this time
+    subtract_key - if not null - represents a key to a time - find the time diff to this time
     '''
 
-    previous_time = source_dict[source_key]
-    if not previous_time or previous_time >= current_time:
+
+    first_time = source_dict[source_key]
+
+    second_time = current_time if not subtract_dict else subtract_dict[subtract_key]
+
+    if not first_time or not second_time:
         target_dict[target_key] = "00:00:00"
     else:
-        hours_time, minutes_time, seconds_time = utils_data.seconds_to_hms(current_time - previous_time)
+        hours_time, minutes_time, seconds_time = utils_data.seconds_to_hms( abs(first_time - second_time) )
         time_diff = "%02u:%02u:%02u" % (hours_time, minutes_time, seconds_time)
         target_dict[target_key] = time_diff
 
@@ -603,22 +633,39 @@ def operator_update_stats(topic_name, dbms_name, table_name, write_immediate, ts
     current_time = utils_columns.get_current_time_in_sec()
     table_entry[2] = current_time
 
-    statistics_["operator"]["prep_info"]["last_file_time"] = current_time # replacing last_file_time_
+    if not statistics_["operator"]["prep_info"]["query timestamp"]:
+        statistics_["operator"]["prep_info"]["query timestamp"] = current_time  # consider as first query time
 
+# -----------------------------------------------------------------
+# update statistic value.
+# For example - operator update first file update and last file update time.
+# Example: update_stat_value("operator", "prep_info", "first_file_time", None, True, True)
+# -----------------------------------------------------------------
+def update_stat_value(service_name, topic_name, value_name, value, is_current_time, is_0_value):
+
+    if is_0_value and statistics_[service_name][topic_name][value_name]:
+        # Update only if the value is 0
+            return      # Not 0, exit
+
+    new_value = utils_columns.get_current_time_in_sec() if is_current_time else value
+
+    statistics_[service_name][topic_name][value_name] = new_value
 
 # -----------------------------------------------------------------
 # operator - update statistics on rows inserted
 # -----------------------------------------------------------------
-def operator_update_inserts(dbms_name, table_name, rows_updated, is_immediate):
+def operator_update_inserts(dbms_name, table_name, rows_updated, is_immediate, dbms_process_time):
     '''
     dbms_name
     table_name
     rows_updated - the number of rows
     is_immediate - True means every entry was updated when arrived (no need to update the current dbms)
+    The DBMS process time in milliseconds
+    dbms_process_time = the time spend in the physical DBMS
     '''
     table_entry = get_table_entry("operator", "inserts", dbms_name, table_name)
     if table_entry == None:
-        table_entry = new_table_entry("operator", "inserts", dbms_name, table_name, [0,0,0,0,0,0])
+        table_entry = new_table_entry("operator", "inserts", dbms_name, table_name, [0,0,0,0,0,0,0])
         # The entries as a f(table):
         # 0) timestamp - timestamp of first insert
         # 1) timestamp - timestamp of last insert
@@ -626,18 +673,24 @@ def operator_update_inserts(dbms_name, table_name, rows_updated, is_immediate):
         # 3) last inserts - the time elapsed since last insert
         # 4) new inserts added in batch
         # 5) new inserts from write immediate
+        # 6) Time spend in the DBMS
+
     if is_immediate:
         table_entry[5] += rows_updated
     else:
         table_entry[4] += rows_updated
 
+    table_entry[6] += dbms_process_time     # The time in the physical dbms
 
     current_time = utils_columns.get_current_time_in_sec()
     if not table_entry[0]:
         table_entry[0] = current_time       # Time of first insert
     table_entry[1] = current_time
 
-    statistics_["operator"]["prep_info"]["last_file_time"] = current_time # replacing last_file_time_
+    update_stat_value("operator", "prep_info", "last_file_time", None, True, False)  # Update operator last SQL file to be processes
+
+    if not statistics_["operator"]["prep_info"]["query timestamp"]:
+        statistics_["operator"]["prep_info"]["query timestamp"] = current_time  # consider as first query time
 
 
 # -----------------------------------------------------------------
@@ -677,4 +730,5 @@ def publisher_stats(service_name, topic_name, dbms_name, table_name, destination
 
     if err_message:
         table_entry[2] = err_message
+
 

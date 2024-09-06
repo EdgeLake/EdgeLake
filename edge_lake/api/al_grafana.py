@@ -17,6 +17,7 @@ import edge_lake.generic.utils_columns as utils_columns
 import edge_lake.generic.utils_sql as utils_sql
 import edge_lake.generic.utils_print as utils_print
 import edge_lake.generic.process_status as process_status
+import edge_lake.generic.trace_func as trace_func
 import edge_lake.cmd.native_api as native_api
 
 # -----------------------------------------------------------------------------------
@@ -66,6 +67,7 @@ class AlQueryParams:
         self.instructions = ""
         self.timeseries = False
         self.request_type = ""
+        self.provided_sql = False       # Set to True if SQL is provided from the Grafana Payload
         self.members = None
         self.sql_query = False
         self.with_time_range = True
@@ -77,8 +79,25 @@ class AlQueryParams:
         self.nodes_info = []  # An array to maintain info on nodes in the network
         self.metric = []
         self.attribute = []
-        self.trace_level = 0
-        self.timezone = "utc"
+        self.trace_level = trace_func.get_func_trace_level("grafana")   # Could change by a dashboard's panel info
+        self.timezone = None    # Timezone from Grafana
+        self.fixed_points = False  # Use fixed data points in increment function to show fixed intervals
+        self.grafana_start_ms = 0
+        self.grafana_end_ms = 0
+        self.grafana_interval_ms = 0
+        if "scopedVars" in body_info and "__interval_ms" in body_info["scopedVars"] and 'value' in body_info["scopedVars"]["__interval_ms"]:
+            self.grafana_interval_ms =  body_info["scopedVars"]["__interval_ms"]["value"]
+            grafana_seconds = self.grafana_interval_ms / 1000
+            if grafana_seconds < 1:
+                # Smallest supported
+                self.grafana_interval_time = 1
+                self.grafana_interval_unit = "second"
+            else:
+                self.grafana_interval_time, self.grafana_interval_unit = utils_columns.seconds_to_time(grafana_seconds)
+
+        else:
+            self.grafana_interval_time = None
+            self.grafana_interval_unit = None
 
         # time interval for the query
         if "interval" in body_info.keys():
@@ -122,12 +141,19 @@ class AlQueryParams:
             else:
                 self.time_start = utils_columns.get_current_time()
 
+            #self.grafana_start_ms = utils_columns.get_ms_from_date_time(self.time_start)
+            self.grafana_start_ms = utils_columns.get_utc_to_ms(self.time_start)
+
             if 'to' in time_range.keys():
                 self.time_end = time_range['to']
                 # if self.time_end[-1] == 'Z':   # Zero time
                 # self.time_end = utils_columns.utc_to_local(self.time_end)
             else:
                 self.time_end = utils_columns.get_current_time()
+
+            #self.grafana_end_ms = utils_columns.get_ms_from_date_time(self.time_end)
+            self.grafana_end_ms = utils_columns.get_utc_to_ms(self.time_end)
+
         else:
             self.time_start = "Not provided"
             self.time_end = "Not provided"
@@ -159,6 +185,9 @@ class AlQueryParams:
     # =======================================================================================================================
     def set_target_info(self, status, target_id):
 
+        ret_val = process_status.SUCCESS
+
+        err_msg = ""
         self.servers = ""
         self.details = ""
         self.default_query = False
@@ -180,8 +209,17 @@ class AlQueryParams:
             elif "payload" in gr_struct.keys():
                 # In version 9.5.2 of Grafana
                 al_data = gr_struct['payload']
+                if al_data and not isinstance(al_data, dict):
+                    al_data = None  # not usable
+                    err_msg = "Data Source info is not in JSON format"
+                    ret_val = process_status.Err_grafana_payload
             else:
                 al_data = None
+                err_msg = "Missing Data Source info"
+                ret_val = process_status.Err_grafana_payload
+
+            if ret_val:
+                return [ret_val, err_msg]
 
             if not target_id:
                 # THe type of presentation is determined by the first query
@@ -202,20 +240,43 @@ class AlQueryParams:
                         self.timeseries = False
 
             if al_data:
-                if isinstance(al_data, dict):
-                    if "dbms" in al_data.keys():
-                        self.dbms_name = str(al_data["dbms"])  # DBMS name mention explicitly in the JSON
-                    if "table" in al_data.keys():
-                        self.table_name = str(al_data["table"])  # Table name mention explicitly in the JSON
-                        table_provided = True
-                    else:
-                        table_provided = False
 
-                    if "interval" in al_data:
-                        # Overwrite Grafana interval
-                        interval = al_data["interval"].strip()
+                if "timezone" in al_data:
+                    self.timezone = al_data["timezone"]
 
-                        if len(interval) > 5:
+                if "dbms" in al_data.keys():
+                    self.dbms_name = str(al_data["dbms"])  # DBMS name mention explicitly in the JSON
+                if "table" in al_data.keys():
+                    self.table_name = str(al_data["table"])  # Table name mention explicitly in the JSON
+                    table_provided = True
+                else:
+                    table_provided = False
+
+                if "type" in al_data.keys():
+                    self.request_type = str(al_data["type"])
+                    if self.request_type == "period":
+                        self.default_query = True
+                        self.sql_query = True
+                    elif self.request_type == "increments":
+                        self.default_query = True
+                        self.sql_query = True
+                        # Engine will set intervals
+                        self.interval_unit = None
+                        self.interval_time = -1
+                        if "grafana" in al_data and "data_points" in al_data["grafana"] and al_data["grafana"]["data_points"] == "fixed":
+                            # Grafana is configured: data_points" : "fixed"
+                            self.fixed_points = True # Use fixed data points in increment function
+
+                if "interval" in al_data and al_data["interval"] != "optimize":
+                    # Overwrite the interval optimized/default intervals provided by AnyLog
+                    interval = al_data["interval"].strip()
+
+                    if len(interval) > 5:
+                        if interval == "dashboard" and self.grafana_interval_unit:
+                            # Take the interval from Grafana's dashboard
+                            self.interval_time = int(self.grafana_interval_time)
+                            self.interval_unit = self.grafana_interval_unit
+                        else:
                             if interval[-1] == 's':
                                 # remove plural
                                 interval = interval[:-1]
@@ -228,87 +289,94 @@ class AlQueryParams:
                                         self.interval_time = int(interval[:index])
 
 
-                    if "sql" in al_data.keys():
-                        self.request_type = "sql"
-                        self.sql_query = True
-                        self.sql_stmt = str(al_data["sql"])
-                        if self.sql_stmt:
-                            self.sql_stmt = self.sql_stmt.strip()  # remove leading and trailing spaces
-                            if self.sql_stmt[-1] == ';':
-                                self.sql_stmt = self.sql_stmt[
-                                                :-1]  # remove the end of stmt comma as the stmt can be extended
-                        self.default_query = False
-                        # get the table name in lower case to find the table name location and the WHERE location
-                        sql_lower = self.sql_stmt.lower()  # Can not change self.sql_stmt to lower - some values needs to be in capital letters
-                        if not table_provided:
-                            # get the table name from the sql statement
-                            self.table_name = utils_sql.get_select_table_name(
-                                sql_lower)  # Table name mention explicitly in the SQL
-                        else:
-                            # change the table name pn the SQL using the table name in the JSON
-                            offset_start, offset_end = utils_sql.get_offsets_table_name(sql_lower)
-                            if offset_start > 0 and offset_end > 0:
-                                self.sql_stmt = self.sql_stmt[:offset_start] + self.table_name + self.sql_stmt[
-                                                                                                 offset_end:]
+                if "sql" in al_data.keys():
+                    self.provided_sql = True        # SQL provided from the dashboards - process reply as increment or period
+                    if not self.request_type:
+                        # can be set on increment or period
+                        self.request_type = "sql"   # Process reply as a SQL query
 
-                        self.offset_where = sql_lower.find(" where ")  # offset to the where condition
-                        if self.offset_where > -1:
-                            self.offset_where += 7  # to the first word after the where
-                        else:
-                            # Get offset for adding a where condition
-                            self.offset_for_where = utils_sql.get_offset_after_table_name(sql_lower)
-                        if self.interval_time > 0:
-                            self.increment_offset = sql_lower.find("increments(),")  # increment without data
-                    elif "type" in al_data.keys():
-                        self.request_type = str(al_data["type"])
-                        if self.request_type == "increments" or self.request_type == "period":
-                            self.default_query = True
-                            self.sql_query = True
-                    if "member" in al_data.keys():
-                        # A list, each entry is a member
-                        self.members = al_data["member"]
-                    if "metric" in al_data.keys():
-                        # A list, each entry is a number representing a color on the map
-                        if isinstance(al_data["metric"], list):
-                            if all(isinstance(x,int) for x in al_data["metric"]):
-                                self.metric = al_data["metric"]
-                    if "attribute" in al_data.keys():
-                        if isinstance(al_data["attribute"], list):
-                            if all(isinstance(x, str) for x in al_data["attribute"]):
-                                self.attribute = al_data["attribute"]
-                    if "where" in al_data.keys():
-                        self.where_cond = str(al_data["where"])
-                    if "functions" in al_data.keys() and isinstance(al_data["functions"],list):
-                        if len(al_data["functions"]):
-                            self.functions = []
-                            for function in al_data["functions"]:       # Specify Min, Max etc. to overwrite the default
-                                self.functions.append(function.lower())
-                    if "time_column" in al_data.keys():
-                        self.column_time = str(al_data["time_column"])
-                    if "value_column" in al_data.keys():
-                        self.column_value = str(al_data["value_column"])
-                    if "servers" in al_data.keys():
-                        self.servers = str(al_data["servers"])
-                    if "instructions" in al_data.keys():
-                        self.instructions = str(al_data["instructions"])
-                    if "time_range" in al_data.keys():
-                        if isinstance(al_data["time_range"], bool):
-                            self.with_time_range = al_data["time_range"]
-                    if "trace_level" in al_data.keys():
-                        if isinstance(al_data["trace_level"], int):
-                            self.trace_level = al_data["trace_level"]
-                    if "timezone" in al_data.keys():
-                        if isinstance(al_data["timezone"], str):
-                            timezone = al_data["timezone"]
-                            if timezone == "local":
-                                self.timezone = "local"     # default is utc
+                    self.sql_query = True
+                    self.sql_stmt = str(al_data["sql"]).strip()
 
-                    if self.request_type == "info" and "details" in al_data.keys():
-                        self.details = str(al_data["details"])
-                        self.timeseries = False  # The info is data from the network
+                    if len(self.sql_stmt) < 10:
+                        return [process_status.Failed_to_parse_sql, "Error in SQL stmt format"]
+
+                    if self.sql_stmt[-1] == ';':
+                        self.sql_stmt = self.sql_stmt[:-1]  # remove the end of stmt comma as the stmt can be extended
+
+                    # get the table name in lower case to find the table name location and the WHERE location
+                    sql_lower = self.sql_stmt.lower()  # Can not change self.sql_stmt to lower - some values needs to be in capital letters
+                    if sql_lower[:7] != "select ":
+                        return [process_status.Failed_to_parse_sql, "Failed to identify 'select' in SQL stmt"]
+
+                    # Test if increments
+                    if not self.default_query:
+                        # User did nit specify "type" : "increment" in the payload
+                        for index in range(7, len(sql_lower)):
+                            if sql_lower[index] != ' ':
+                                if sql_lower[index:index+10] == "increments":
+                                    self.default_query = True
+                                    self.request_type = "increments"
+                                break
+
+                    if not table_provided:
+                        # get the table name from the sql statement
+                        self.table_name = utils_sql.get_select_table_name(sql_lower)  # Table name mention explicitly in the SQL
+                    else:
+                        # change the table name pn the SQL using the table name in the JSON
+                        offset_start, offset_end = utils_sql.get_offsets_table_name(sql_lower)
+                        if offset_start > 0 and offset_end > 0:
+                            self.sql_stmt = self.sql_stmt[:offset_start] + self.table_name + self.sql_stmt[
+                                                                                             offset_end:]
+
+                    self.offset_where = sql_lower.find(" where ")  # offset to the where condition
+                    if self.offset_where > -1:
+                        self.offset_where += 7  # to the first word after the where
+                    else:
+                        # Get offset for adding a where condition
+                        self.offset_for_where = utils_sql.get_offset_after_table_name(sql_lower)
+                    if self.interval_time > 0:
+                        self.increment_offset = sql_lower.find("increments(),")  # increment without data
+                if "member" in al_data.keys():
+                    # A list, each entry is a member
+                    self.members = al_data["member"]
+                if "metric" in al_data.keys():
+                    # A list, each entry is a number representing a color on the map
+                    if isinstance(al_data["metric"], list):
+                        if all(isinstance(x,int) for x in al_data["metric"]):
+                            self.metric = al_data["metric"]
+                if "attribute" in al_data.keys():
+                    if isinstance(al_data["attribute"], list):
+                        if all(isinstance(x, str) for x in al_data["attribute"]):
+                            self.attribute = al_data["attribute"]
+                if "where" in al_data.keys():
+                    self.where_cond = str(al_data["where"])
+                if "functions" in al_data.keys() and isinstance(al_data["functions"],list):
+                    if len(al_data["functions"]):
+                        self.functions = []
+                        for function in al_data["functions"]:       # Specify Min, Max etc. to overwrite the default
+                            self.functions.append(function.lower())
+                if "time_column" in al_data.keys():
+                    self.column_time = str(al_data["time_column"])
+                if "value_column" in al_data.keys():
+                    self.column_value = str(al_data["value_column"])
+                if "servers" in al_data.keys():
+                    self.servers = str(al_data["servers"])
+                if "instructions" in al_data.keys():
+                    self.instructions = str(al_data["instructions"])
+                if "time_range" in al_data.keys():
+                    if isinstance(al_data["time_range"], bool):
+                        self.with_time_range = al_data["time_range"]
+                if "trace_level" in al_data.keys():
+                    if isinstance(al_data["trace_level"], int):
+                        self.trace_level = al_data["trace_level"]
+
+
+                if self.request_type == "info" and "details" in al_data.keys():
+                    self.details = str(al_data["details"])
+                    self.timeseries = False  # The info is data from the network
 
         # If column names not provided - try best guess
-        ret_val = process_status.SUCCESS
         if not self.column_time or (not self.column_value and not self.sql_stmt):
             if self.dbms_name and self.table_name:
                 ret_val, self.column_time, self.column_value = member_cmd.get_time_value_columns(status, self.dbms_name,
@@ -317,19 +385,13 @@ class AlQueryParams:
                                                                                                  self.column_value,
                                                                                                  self.trace_level)
 
-        return ret_val
+        return [ret_val, err_msg]
 
     # =======================================================================================================================
     # Return True for time series data
     # =======================================================================================================================
     def is_tsd(self):
         return self.timeseries
-
-    # =======================================================================================================================
-    # Return True for default query
-    # =======================================================================================================================
-    def is_default_query(self):
-        return self.default_query
 
     # =======================================================================================================================
     # Return True for default query
@@ -354,6 +416,12 @@ class AlQueryParams:
     # =======================================================================================================================
     def get_interval_info(self):
         return [self.interval_unit, self.interval_time]
+
+    # =======================================================================================================================
+    # For an increment query - the info for fixed points display
+    # =======================================================================================================================
+    def get_fixed_points_info(self):
+        return [self.fixed_points, self.grafana_start_ms, self.grafana_end_ms, self.grafana_interval_ms]    # Used in increments if Grafana is configured: data_points" : "fixed"
 
     # =======================================================================================================================
     # For a Time Series Query - Return the name of the time and value columns
@@ -413,6 +481,12 @@ class AlQueryParams:
         return self.request_type
 
     # =======================================================================================================================
+    # Test if the SQL was provided from the Grafana JSON Payload
+    # =======================================================================================================================
+    def is_provided_sql(self):
+        return self.provided_sql
+
+    # =======================================================================================================================
     # Return the offset of the where condition
     # =======================================================================================================================
     def get_offset_where(self):
@@ -451,7 +525,8 @@ class AlQueryParams:
     # Get the timezone
     # =======================================================================================================================
     def get_timezone(self):
-        return self.timezone
+        return "utc"            # return self.timezone
+
 
     # =======================================================================================================================
     # Return True for SQL query over the user data
@@ -557,17 +632,33 @@ def grafana_post(status, request_handler, decode_body, timeout):
         # RETURN DATA
         dbms_name = get_info_from_headers(request_handler.headers._headers, "al.dbms.")
 
-        data_str = process_queries(status, dbms_name, request_handler, decode_body, timeout)  # process one or more queries
+        ret_val, data_str = process_queries(status, dbms_name, request_handler, decode_body, timeout)  # process one or more queries
+
+        if ret_val:
+            # Return an error message - data_str is the error message
+            status_txt = process_status.get_status_text(ret_val)
+            data_str = f'{{"message": "{data_str}", "status": "{status_txt} ({ret_val})"}}'
 
         ret_val = stream_data_to_grafana(status, request_handler, data_str)
 
     else:
-        status.add_error("[Grafana API Error] [Unrecognized key provided by Grafana to POST request: '%s']" % request_handler.path)
-        ret_val = process_status.REST_call_err
+        grafana_request = utils_json.str_to_json(decode_body)
+        if isinstance(grafana_request,dict) and "payload" in grafana_request:
+            ret_val, data_str = process_other_request(status, grafana_request)
+
+            if ret_val:
+                status_txt = process_status.get_status_text(ret_val)
+                data_str = f'{{"message": "{data_str}", "status": "{status_txt} ({ret_val})"}}'
+
+            ret_val = stream_data_to_grafana(status, request_handler, data_str)
+
+        else:
+            ret_val = process_status.REST_call_err
+
+        if ret_val:
+            status.add_error("[Grafana API Error] [Unrecognized key provided by Grafana to POST request: '%s']" % request_handler.path)
 
     return ret_val
-
-
 # -----------------------------------------------------------------------------------
 # Get the list of tables for all database
 # -----------------------------------------------------------------------------------
@@ -603,6 +694,7 @@ def stream_data_to_grafana(status, request_handler, data_str):
     data_encoded = data_str.encode('iso-8859-1')
 
     headers = 'Content-Type: application/json\r\nContent-Length: %u\r\n\r\n' % len(data_encoded)
+
     headers_encoded = headers.encode('iso-8859-1')
 
     # send headers with length
@@ -612,6 +704,7 @@ def stream_data_to_grafana(status, request_handler, data_str):
         ret_val = utils_io.write_encoded_to_stream(status, request_handler.wfile, data_encoded)
 
     return ret_val
+
 
 
 # -----------------------------------------------------------------------------------
@@ -704,6 +797,7 @@ def set_timeseries_struct(status, dbms_name, table_name, query_params, reply_dat
         grafana_data_types.append(get_grafana_data_type(entry))
 
     base_column_id = -1  # The ID of the time column, or ID of a column used for the X Axies
+    is_time = False
 
     # Identify the base column - time column, or without the time column, the x column
 
@@ -717,6 +811,7 @@ def set_timeseries_struct(status, dbms_name, table_name, query_params, reply_dat
                 # with time column that can be graphed
                 base_column_name = column_name
                 base_column_id = index
+                is_time = True  # X axis is time value
                 break
 
 
@@ -754,11 +849,15 @@ def set_timeseries_struct(status, dbms_name, table_name, query_params, reply_dat
                 for index, column_name in enumerate(title_list):
                     if index == base_column_id:
                         # Ignore this colummn as it is the X axis (time, or base)
-                        if first:
-                            targets.append(None)       # This entry is the base (time or X axis) - not in use
+                        #if first:
+                        targets.append(None)       # This entry is the base (time or X axis) - not in use
                         continue
 
                     column_value = row[column_name]
+                    if isinstance(column_value,bool):
+                        column_value = "1" if column_value else "0"     # change bool to 0 / 1
+                    elif isinstance(column_value,str):
+                        column_value = "0" if (not column_value or column_value == "False") else "1"
                     grafana_dt = grafana_data_types[index]
                     if grafana_dt == "string":
                         column_value = f"\"{column_value}\""
@@ -806,7 +905,15 @@ def set_grafana_error(dbms_name, table_name, error_msg):
 # Example: data_str = '[{"target": "series B", "datapoints": [[-0.5799358614273129, 1598992658000], [-0.9281617508387254, 1599014215647], [0.18279045401831143, 1599014236823]]}]'
 # Explained here - https://grafana.com/grafana/plugins/simpod-json-datasource
 # =======================================================================================================================
-def set_default_timeseries_struct(table_name, reply_data, functions, trace_level):
+def set_default_timeseries_struct(table_name, reply_data, functions, is_fixed_points, grafana_start_time, grafana_end_time, interval_time, trace_level):
+    '''
+    table_name - the table to process
+    reply_data - the data returned by the dbms
+    functions - the functions returned to grafana
+    is_fixed_points - if "data_points" are set to "fixed" in the grafana JSON - using the grafana points vs. AnyLog points
+    grafana_start_time - the start time by grafana
+    interval_time - the interval time by grafana
+    '''
 
     if not functions:
         # The default: Min Max Avg
@@ -833,14 +940,42 @@ def set_default_timeseries_struct(table_name, reply_data, functions, trace_level
     if with_count:
         gr_count = '{"target": "%s", "datapoints": [' % (table_name + "<count>")  # Count values string
 
-
+    grafana_time = grafana_start_time
     reply_json = utils_json.str_to_json(reply_data)
 
     if reply_json:
         rows = reply_json["Query"]
+        index = -1  # Needed for the trace command below if no data returned
+
+        comma = ""      # No comma with first entries
         for index, entry in enumerate(rows):
             attr_time = entry["timestamp"]
-            attr_ms = int(utils_columns.get_time_in_sec(attr_time, False) * 1000)
+            # attr_ms = utils_columns.get_ms_from_date_time(attr_time)
+
+            attr_ms = utils_columns.get_utc_to_ms(attr_time)
+
+            if is_fixed_points:
+                # return fixed points - regardless if dbms includes the data or not
+                while (grafana_time + interval_time) <= attr_ms:
+                    # return nulls for missing info
+                    if comma:
+                        if with_avg:
+                            gr_avg += f"{comma}[null,{grafana_time}]"
+                        if with_min:
+                            gr_min += f"{comma}[null,{grafana_time}]"
+                        if with_max:
+                            gr_max += f"{comma}[null,{grafana_time}]"
+                        if with_range:
+                            gr_range += f"{comma}[null,{grafana_time}]"
+                        if with_count:
+                            gr_count += f"{comma}[null,{grafana_time}]"
+
+                    grafana_time += interval_time
+
+
+                attr_ms = grafana_time      # use the grafana time
+                grafana_time += interval_time
+
 
             if with_avg:
                 attr_avg = entry["avg_val"]
@@ -853,31 +988,23 @@ def set_default_timeseries_struct(table_name, reply_data, functions, trace_level
             if with_count:
                 attr_count = entry["count_val"]
 
-            if index:
-                if with_avg:
-                    gr_avg += ", [%s, %u]" % (attr_avg, attr_ms)
-                if with_min:
-                    gr_min += ", [%s, %u]" % (attr_min, attr_ms)
-                if with_max:
-                    gr_max += ", [%s, %u]" % (attr_max, attr_ms)
-                if with_range:
-                    gr_range += ", [%s, %u]" % (attr_range, attr_ms)
-                if with_count:
-                    gr_count += ", [%s, %u]" % (attr_count, attr_ms)
-            else:
-                if with_avg:
-                    gr_avg += "[%s, %u]" % (attr_avg, attr_ms)
-                if with_min:
-                    gr_min += "[%s, %u]" % (attr_min, attr_ms)
-                if with_max:
-                    gr_max += "[%s, %u]" % (attr_max, attr_ms)
-                if with_range:
-                    gr_range += "[%s, %u]" % (attr_range, attr_ms)
-                if with_count:
-                    gr_count += "[%s, %u]" % (attr_count, attr_ms)
+            if with_avg:
+                gr_avg += f"{comma}[{attr_avg},{attr_ms}]"
+            if with_min:
+                gr_min += f"{comma}[{attr_min},{attr_ms}]"
+            if with_max:
+                gr_max += f"{comma}[{attr_max},{attr_ms}]"
+            if with_range:
+                gr_range += f"{comma}[{attr_range},{attr_ms}]"
+            if with_count:
+                gr_count += f"{comma}[{attr_count},{attr_ms}]"
 
-        if trace_level:
-            utils_print.output("\r\n[Grafana] [increments returned %u rows]" % index, True)
+            if not index:
+                comma = ", "
+
+
+        if trace_level > 1:
+            utils_print.output("\r\n[Grafana] [increments returned %u rows]" % (index + 1), True)
 
     if with_avg:
         gr_str = gr_avg + "]},"
@@ -894,7 +1021,93 @@ def set_default_timeseries_struct(table_name, reply_data, functions, trace_level
     else:
         gr_str = gr_str[:-1]    # Remove suffix comma
 
-    return gr_str  # return syting in grafana format
+    return gr_str  # return string in grafana format
+# =======================================================================================================================
+# Organize the reply data (to the default query) in the Grafana format to time series view
+# Example: data_str = '[{"target": "series B", "datapoints": [[-0.5799358614273129, 1598992658000], [-0.9281617508387254, 1599014215647], [0.18279045401831143, 1599014236823]]}]'
+# Explained here - https://grafana.com/grafana/plugins/simpod-json-datasource
+
+# THIS IS AN Increment function specified by the user in a "SQL" attribute in the Grafana Payload
+# =======================================================================================================================
+def set_sql_timeseries_struct(status, table_name, reply_data, is_fixed_points, grafana_start_time, grafana_end_time, interval_time, trace_level):
+    '''
+    table_name - the table to process
+    reply_data - the data returned by the dbms
+    time_column - the time column name
+    is_fixed_points - if "data_points" are set to "fixed" in the grafana JSON - using the grafana points vs. AnyLog points
+    grafana_start_time - the start time by grafana
+    interval_time - the interval time by grafana
+    '''
+
+
+    grafana_time = grafana_start_time
+    reply_json = utils_json.str_to_json(reply_data)
+    response = []
+
+    if reply_json:
+        rows = reply_json["Query"]
+        if len(rows):
+            # With data
+            first_row = rows[0]
+            if len(first_row) < 2:
+                status.add_error(f"Missing columns in 'increments' query projection list (at least time column and one value column are required)")
+                return ""
+
+            for index, col_name in enumerate(first_row):
+                # Go over the columns which are not the timestamp
+                if not index:
+                    time_column = col_name
+                    continue    # Skip the time column
+                response.append({
+                    "target" : f"{col_name}",
+                    "datapoints": []
+                })
+
+
+            # Go over all rows
+            for index, entry in enumerate(rows):
+                attr_time = entry[time_column]
+                attr_ms = utils_columns.get_utc_to_ms(attr_time)
+
+                target_id = 0
+                for col_name, col_val in entry.items():
+                    # Go over the columns returned
+                    if col_name == time_column:
+                        continue
+                    response_points = response[target_id]["datapoints"]
+                    target_id+= 1
+
+                    if is_fixed_points:
+                        # return fixed points - regardless if dbms includes the data or not
+                        # Option: "data_points" : "fixed"  In the Payload
+                        while (grafana_time + interval_time) <= attr_ms:
+                            response_points.append(["null", grafana_time])
+                            grafana_time += interval_time
+
+                        attr_ms = grafana_time  # use the grafana time
+                        grafana_time += interval_time
+
+                    if isinstance(col_val,str):
+                        try:
+                            if '.' in col_val:
+                                value =  float(col_val)
+                            else:
+                                value = int(col_val)
+                        except:
+                            value = col_val
+                    else:
+                        value = col_val
+
+
+                    response_points.append([value, attr_ms])
+
+
+        if trace_level > 1:
+            utils_print.output("\r\n[Grafana] [increments returned %u rows]" % (len(rows)), True)
+
+    gr_str = utils_json.to_string(response)
+
+    return gr_str[1:-1]  # return syting in grafana format
 
 # =======================================================================================================================
 # Map the query data to the Grafana structure
@@ -930,13 +1143,13 @@ def set_sql_table_struct(status, dbms_name, table_name, reply_data):
             row_str = ""
             for index2, value in enumerate(entry.values()):
                 if index2:
-                    row_str += ',\"' + value + '\"'
+                    row_str += f',\"{value}\"'
                 else:
-                    row_str += '\"' + value + '\"'
+                    row_str += f'\"{value}\"'
             if index1:
-                gr_reply += ',[' + row_str + ']'
+                gr_reply += f',[{row_str}]'
             else:
-                gr_reply += '[' + row_str + ']'
+                gr_reply += f'[{row_str}]'
 
     gr_reply += '], "type":"table"}]'
 
@@ -1001,9 +1214,9 @@ def json_to_grafana_table(status, command, reply_data):
                         row_str = ""
                     if row_str:
                         if index:
-                            gr_reply += ',[' + row_str + ']'
+                            gr_reply += f',[{row_str}]'
                         else:
-                            gr_reply += '[' + row_str + ']'
+                            gr_reply += f'[{row_str}]'
 
         gr_reply += '], "type":"table"}]'
     else:
@@ -1014,7 +1227,7 @@ def json_to_grafana_table(status, command, reply_data):
 
 
 # =======================================================================================================================
-# Transfor a dictionary structure to a Row structure
+# Transform a dictionary structure to a Row structure
 # =======================================================================================================================
 def get_row_from_dict(status, al_object, title_list):
     row_str = ""
@@ -1120,7 +1333,7 @@ def set_default_table_struct(table_name, user_functions, reply_data):
         rows = reply_json["Query"]
         for index, entry in enumerate(rows):
             attr_time = entry["timestamp"]
-            attr_ms = int(utils_columns.get_time_in_sec(attr_time, False) * 1000)
+            attr_ms = int(utils_columns.string_to_seconds(attr_time, None) * 1000)
 
             if defaults:    # Avg + Min + Max
                 attr_avg = entry["avg_val"]
@@ -1157,6 +1370,9 @@ def set_empty_reply():
 # 2 tpes of queries: a) Time Series b) Table
 # =======================================================================================================================
 def process_queries(status, dbms_name, request_handler, decode_body, timeout):
+
+
+    ret_val = process_status.SUCCESS
     body_info = utils_json.str_to_json(decode_body)
     data_str = ""
 
@@ -1168,8 +1384,13 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
 
         for target_id in range(queries_count):  # Execute one or more queries on the Grafana Panel
 
-            ret_val = query_params.set_target_info(status, target_id)  # Get the query info
+            ret_val, err_msg = query_params.set_target_info(status, target_id)  # Get the query info
             if ret_val:
+                if queries_count == 1:
+                    data_str = err_msg
+                    break  # With a single query - return the error message
+
+                ret_val = process_status.SUCCESS    # ignore the error
                 continue        # Error - try next query
 
             servers = query_params.get_destination_servers()  # Get the IP and Port of specific destination servers to use
@@ -1181,9 +1402,17 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                 # User SQL or INCREMENTS or period PERIOD
 
                 statement = make_anylog_query(status, query_params)
+                if not statement:
+                    data_str = "Failed to create SQL stmt from Payload data"
+                    status.add_error(data_str)
+                    ret_val = process_status.Failed_to_parse_sql
+                    break
+
                 dbms_name = query_params.get_dbms_name()
                 if not dbms_name:
-                    status.add_error("DBMS name not provided by Grafana to POST request: '%s'" % request_handler.path)
+                    data_str = "DBMS name not provided by Grafana to POST request: '%s'" % request_handler.path
+                    status.add_error(data_str)
+                    ret_val = process_status.Missing_dbms_name
                     break
 
                 if not query_params.new_statement(statement):
@@ -1192,45 +1421,78 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                 trace_level = query_params.get_trace_level()
 
                 timezone = query_params.get_timezone()
-                if trace_level:
-                    utils_print.output("\r\n[Grafana] [run client (%s)] [sql %s timezone = %s] [%s]" % (servers, dbms_name, timezone, statement), True)
-
+                if not timezone or timezone == "browser":
+                    data_str = "Timezone not provided by Grafana POST request" if not timezone else "Timezone 'Browser' not supported, select timezone"
+                    status.add_error(data_str)
+                    ret_val = process_status.ERR_timezone
+                    break
 
                 # Set pass_throgh to False because result set is manipulated by this API
-                conditions = "timezone = %s and pass_through = false" % timezone
+                conditions = f"timezone = {timezone} and pass_through = false"
 
                 # Execute and wait for completion
                 ret_val = native_api.exec_sql_stmt(status, servers, dbms_name, conditions, statement, timeout)
 
                 if ret_val:
                     err_msg = f"[Grafana] [Query Process Error] [DBMS: {dbms_name}] [Table: {query_params.get_table_name()}] [Error: {process_status.get_status_text(ret_val)}] [Query: {statement}]"
-
-                    if trace_level:
-                        utils_print.output("\r\n" + err_msg, True)
                     status.add_error(err_msg)
 
+                    if trace_level:
+                        show_grafana_process(status, query_params, trace_level, decode_body, "query", ret_val, -1, servers, timezone, dbms_name, statement)
+
+                    if queries_count == 1:
+                        data_str = err_msg
+                        break       # With a single query - return the error message
+
                     if target_id:
-                        data_str += ","     # Not the first query
+                        data_str += ","  # Not the first query
+
                     # Add an error msg
-                    data_str += set_grafana_error(dbms_name, query_params.get_table_name(),f"[Error: {process_status.get_status_text(ret_val)}]")
+                    data_str += set_grafana_error(dbms_name, query_params.get_table_name(), f"[Error: {process_status.get_status_text(ret_val)}]")
+                    ret_val = process_status.SUCCESS  # ignore the error
                     continue
 
-                ret_val, reply_data = native_api.get_sql_reply_data(status, dbms_name, None)
+                ret_val, reply_data, rows_counter = native_api.get_sql_reply_data(status, dbms_name, None)
+
+                if trace_level:
+                    show_grafana_process(status, query_params, trace_level, decode_body, "query", ret_val, rows_counter, servers, timezone, dbms_name, statement)
+
                 if ret_val:
+                    if queries_count == 1:
+                        data_str = "Grafana-EdgeLake API failed to process query reply: %s" % statement
+                        break       # With a single query - return the error message
+
+                    ret_val = process_status.SUCCESS  # ignore the error
                     continue  # Ignore this query and get to the next
 
                 data_str = map_sql_replies(status, query_params, target_id, data_str, reply_data, trace_level)
+                if not data_str:
+                    if queries_count == 1:
+                        data_str = "Filed to map Data Source returned data to Grafana"
+                        ret_val = process_status.Mapping_to_garafana_Error
+                        break  # With a single query - return the error message
+
 
             elif query_params.get_request_type() == "info":
+
                 # AnyLog command
                 statement = query_params.get_details()
                 if not query_params.new_statement(statement):
                     continue  # This query was executed
 
+                trace_level = query_params.get_trace_level()
+
                 # Run the AnyLog COMMAND
-                ret_val = native_api.exec_native_cmd(status, servers, statement)
+                ret_val = native_api.exec_native_cmd(status, servers, statement, timeout)
+
+                if trace_level:
+                    show_grafana_process(status, query_params, trace_level, decode_body, "info", ret_val, 0, servers, None, None, statement)
 
                 if ret_val:
+                    if queries_count == 1:
+                        data_str = "Grafana-EdgeLake API failed to process info request: %s" % statement
+                        break  # With a single query - return the error message
+                    ret_val = process_status.SUCCESS  # ignore the error
                     continue
 
                 # Non SQL command - AnyLog Native Command
@@ -1247,18 +1509,70 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                 nodes_attribute = query_params.get_nodes_attr()
                 ret_val = get_map_info(status, members_types, nodes_attribute, nodes_metric, nodes_info, query_params.get_trace_level())
                 if ret_val:
+                    ret_val = process_status.SUCCESS  # ignore the error
                     continue
                 data_str += grafana_world_map(nodes_info)  # TEMPORARY CODE
 
-    if data_str:
-        if query_params.is_tsd():
-            # Time series view needs completion, table view has all returned data
-            data_str = '[' + data_str + ']'
+            else:
+                trace_level = trace_func.get_func_trace_level("grafana")
+                if trace_level:
+                    show_grafana_process(status, query_params, trace_level, decode_body, "not-recognized", ret_val, 0, 0, None, None, None)
+                if queries_count == 1:
+                    data_str = "Unrecognized request from Grafana JSON Payload to the data source"
+                    ret_val = process_status.ERR_wrong_json_structure
+                    break  # With a single query - return the error message
+
+    if not ret_val:
+        # No error
+        if data_str:
+            if query_params.is_tsd():
+                # Time series view needs completion, table view has all returned data
+                data_str = '[' + data_str + ']'
+        else:
+            data_str = set_empty_reply()
+
+    return [ret_val, data_str]
+
+# =======================================================================================================================
+# Debug Queries - needs to set debug level.
+# Either in Grafana: trace_level : 1
+# Or as a command: trace level = 1 grafana
+# =======================================================================================================================
+def show_grafana_process(status, query_params,  trace_level, decode_body, call_type, ret_val, rows_returned, servers, timezone, dbms_name, statement ):
+    '''
+    call_type is query, command or map
+    '''
+
+    if trace_level > 1:
+        # show the Grafana structure
+        utils_print.output("\rGrafana JSON:\r\n" + decode_body +"\r\nNetwork Call:", True)
+
+
+    msg_text = process_status.get_status_text(ret_val)
+
+    if call_type == "query":
+        if query_params.get_request_type() == "increments":
+            # add query details
+            j_handle = status.get_active_job_handle()
+            if j_handle.get_select_parsed():
+                details = j_handle.get_select_parsed().get_increment_info()
+            else:
+                details = ""
+        else:
+            details = ""
+
+        al_cmd = f"run client ({servers}) sql {dbms_name} timezone = {timezone} {statement}"
+
+        print_msg = f"\rProcess: [{ret_val}:{msg_text}] Rows: [{rows_returned}] Details: [{details}]\r\nStmt: [{al_cmd}]"
+
+        utils_print.output(print_msg, True)
+    elif call_type == "info":
+        al_cmd = f"run client ({servers}) {statement}"
+        print_msg = f"\rProcess: [{ret_val}:{msg_text}] Stmt: [{al_cmd}]"
+        utils_print.output(print_msg, True)
     else:
-        data_str = set_empty_reply()
-
-    return data_str
-
+        print_msg = f"\rUnrecognized Grafana Call"
+        utils_print.output(print_msg, True)
 
 # =======================================================================================================================
 # Get the info on the members which are presented on the map
@@ -1303,7 +1617,7 @@ def get_node_info(status, member, attribute, metric, map_data, trace_level):
 
     ret_val, nodes_str = member_cmd.blockchain_get(status, get_cmd.split(), "", True)
 
-    if trace_level:
+    if trace_level > 1:
         if ret_val:
             result = "Error: %s" % process_status.get_status_text(ret_val)
         elif not nodes_str or not len(nodes_str):
@@ -1341,13 +1655,19 @@ def map_sql_replies(status, query_params, target_id, data_str, reply_data, trace
             data_str += ","
         if query_params.is_default_query():
             functions = query_params.get_functions()    # Get the SQL functions
-            data_str += set_default_timeseries_struct(table_name, reply_data, functions, trace_level)  # Organize in the grafana format
+            is_fixed_points, start_time_ms, end_time_ms, interval_time_ms = query_params.get_fixed_points_info()
+            if query_params.is_provided_sql():
+                # Using the user SQL query (in the PayLoad)
+                data_str += set_sql_timeseries_struct(status, table_name, reply_data, is_fixed_points, start_time_ms, end_time_ms, interval_time_ms, trace_level)  # Organize in the grafana format
+            else:
+                # SQL was created by the JSON Payload
+                data_str += set_default_timeseries_struct(table_name, reply_data, functions, is_fixed_points, start_time_ms, end_time_ms, interval_time_ms, trace_level)  # Organize in the grafana format
         else:
             data_str += set_timeseries_struct(status, dbms_name, table_name, query_params,
                                               reply_data)  # Organize in the grafana format
     else:
-        if query_params.is_default_query():
-            functions = query_params.get_functions()
+        functions = query_params.get_functions()
+        if functions and query_params.is_default_query():
             data_str = set_default_table_struct(table_name, functions, reply_data)  # Organize in the grafana format
         else:
             data_str = set_sql_table_struct(status, dbms_name, table_name, reply_data)
@@ -1379,10 +1699,17 @@ def make_anylog_query(status, query_params):
 
     if query_params.is_default_query():
         if query_params.get_request_type() == "period":
-            sql_stmt = get_period_timeseries_stmt(interval_unit, interval_time, time_column, value_column, table_name,
+            user_stmt = query_params.get_user_stmt()
+            sql_stmt = get_period_timeseries_stmt(status, user_stmt, interval_unit, interval_time, time_column, value_column, table_name,
                                                   start_time, end_time, where_cond, functions, limit)
         elif query_params.get_request_type() == "increments":
-            sql_stmt = get_increments_timeseries_stmt(interval_unit, interval_time, time_column, value_column,
+            if query_params.is_provided_sql():
+                # Update the user provided SQL stmt
+                user_stmt = query_params.get_user_stmt()
+                sql_stmt = update_increments_stmt(status, user_stmt, interval_unit, interval_time, time_column, table_name, start_time, end_time, limit, offset_where, offset_for_where)
+            else:
+                # Create a SQL stmt from the Grafana payload
+                sql_stmt = get_increments_timeseries_stmt(interval_unit, interval_time, time_column, value_column,
                                                       table_name, start_time, end_time, where_cond, functions, limit)
     else:
         increment_offset = query_params.get_increment_offset()
@@ -1400,9 +1727,16 @@ def make_anylog_query(status, query_params):
 def get_increments_timeseries_stmt(interval_unit, interval_time, time_column, value_column, table_name, start_time,
                                    end_time, where_cond, functions, limit):
 
+    if not interval_unit:
+        # AnyLog will set optimized values
+        sql_prefix = f"SELECT increments({time_column}), "
+    else:
+        # Predefined or Grafana values
+        sql_prefix = f"SELECT increments({interval_unit},{interval_time},{time_column}), "
+
     if functions:
         # User detailed functions
-        source_stmt = "SELECT increments(%s, %u, %s), max(%s) as timestamp "
+        source_stmt = "%smax(%s) as timestamp "
         for func_name in functions:
             source_stmt += ", %s(%s) as %s_val " % (func_name, value_column, func_name)
         source_stmt +=  "from %s " \
@@ -1410,7 +1744,7 @@ def get_increments_timeseries_stmt(interval_unit, interval_time, time_column, va
                         "%s" \
                         "limit %u;"
     else:
-        source_stmt = "SELECT increments(%s, %u, %s)," \
+        source_stmt = "%s" \
                       "max(%s) as timestamp, " \
                       "avg(%s) as avg_val, " \
                       "min(%s) as min_val, " \
@@ -1427,21 +1761,57 @@ def get_increments_timeseries_stmt(interval_unit, interval_time, time_column, va
 
     if functions:
         sql_stmt = source_stmt % (
-        interval_unit, interval_time, time_column, time_column, table_name,
+        sql_prefix, time_column, table_name,
         start_time, end_time, where_stmt, limit)
     else:
         sql_stmt = source_stmt % (
-        interval_unit, interval_time, time_column, time_column, value_column, value_column, value_column, table_name,
+        sql_prefix, time_column, value_column, value_column, value_column, table_name,
         start_time, end_time, where_stmt, limit)
 
     return sql_stmt
 
+# =======================================================================================================================
+# Update a user provided increment stmt
+# =======================================================================================================================
+def update_increments_stmt(status, user_stmt, interval_unit, interval_time, time_column, table_name, start_time, end_time, limit, offset_where, offset_for_where):
+    """
+    offset_where - The offset to the WHERE CLAUSE in the user sql (or -1 with no where condition)
+    offset_for_where - The offset after the table name - where WHERE condition can be added
+    """
+
+    if offset_where != -1:
+        # Add to existing where
+        sql_stmt = user_stmt[:offset_where] + f"{time_column} >= '{start_time}' and {time_column} <= '{end_time}' and {user_stmt[offset_where:]} limit {limit};"
+    else:
+        # add where condition
+        if len(user_stmt) > offset_for_where:
+            sql_prefix = user_stmt[offset_for_where:]
+        else:
+            sql_prefix = ""
+        sql_stmt = user_stmt[: offset_for_where] + f" where {time_column} >= '{start_time}' and {time_column} <= '{end_time}' {sql_prefix} limit {limit};"
+
+
+
+    if interval_unit:
+        # Grafana values for increment (otherwise AnyLog will optimize)
+        offset = sql_stmt.find(')', 18)         # Find the end of the increment statement in the user_stmt
+        if offset == -1:
+            status.add_error("Grafana API: Failed to generate an 'increment query' - missing parentheses in user provided SQL stmt")
+            return None
+        offset = sql_stmt.find(',', offset+1)  # Find the comma after the increment function
+        if offset == -1:
+            status.add_error("Grafana API: Failed to generate an 'increment query' - missing comma in user provided SQL stmt")
+            return None
+
+        sql_stmt = f"SELECT increments({interval_unit},{interval_time},{time_column}), " + sql_stmt[offset+1:]
+
+    return sql_stmt
 
 # =======================================================================================================================
 # Make a timeseries SQL statement to pull the last data provided
 # SELECT MIN(value) AS min, AVG(value) AS avg, MAX(value) AS max FROM ping_sensor WHERE period(day, 1, now(), timestamp) AND device_name = '${device_name}'
 # =======================================================================================================================
-def get_period_timeseries_stmt(interval_unit, interval_time, time_column, value_column, table_name, start_time,
+def get_period_timeseries_stmt(status, user_stmt, interval_unit, interval_time, time_column, value_column, table_name, start_time,
                                end_time, where_cond, functions, limit):
 
     if where_cond:
@@ -1449,8 +1819,24 @@ def get_period_timeseries_stmt(interval_unit, interval_time, time_column, value_
     else:
         where_stmt = ""
 
+    if user_stmt:
+        # User specifies the SQL
+        """
+        {
+          "type": "period",
+          "sql": "select max(insert_timestamp) as insert_timestamp, avg(hw_influent) as hw_influent from wwp_analog",
+          "time_column": "insert_timestamp",
+          "grafana": {
+            "format_as": "table"
+          },
+          "trace_level" : 1
+        }
+        """
+        period_func = f" where period({interval_unit}, {interval_time}, '{end_time}',{time_column} {where_stmt});"
 
-    if functions:
+        sql_stmt = user_stmt + period_func
+
+    elif functions:
         source_stmt = "SELECT max(%s) as timestamp"
         for func_name in functions:
             source_stmt += ", %s(%s) as %s_val" % (func_name, value_column, func_name)
@@ -1458,6 +1844,7 @@ def get_period_timeseries_stmt(interval_unit, interval_time, time_column, value_
         source_stmt += " from %s where period(%s, %u, '%s', %s %s);"
 
         sql_stmt = source_stmt % (time_column, table_name, interval_unit, interval_time, end_time, time_column, where_stmt)
+
 
     else:
         source_stmt = "SELECT " \
@@ -1534,6 +1921,21 @@ def is_graphed_data_type(data_type):
     return False
 
 # =======================================================================================================================
+# Value to data type
+# =======================================================================================================================
+def val_to_data_type(data_val):
+
+    if isinstance(data_val, int):
+        data_type = "number"
+    elif isinstance(data_val, float):
+        data_type = "number"
+    else:
+        data_type = "string"
+
+
+    return data_type
+
+# =======================================================================================================================
 # Replace AnyLog data type with grafana data type
 # =======================================================================================================================
 def get_grafana_data_type(source_data_type):
@@ -1549,3 +1951,30 @@ def get_grafana_data_type(source_data_type):
     else:
         data_type = source_data_type
     return data_type
+
+# =======================================================================================================================
+# Grafana Other Request
+# =======================================================================================================================
+def process_other_request(status, grafana_request):
+
+    ret_val = process_status.Err_grafana_payload
+    gr_reply = None
+
+    if "target" in grafana_request["payload"]:
+        statement = grafana_request["payload"]["target"]
+        if isinstance(statement, str):
+            # Execute and wait for completion
+            ret_val = native_api.exec_al_cmd(status, statement, None, None, 5)
+            if ret_val:
+                gr_reply = f"Failed to execute '{statement}'"
+            else:
+                j_handle = status.get_active_job_handle()  # Need to be done after the execution of the commands
+                result_set = j_handle.get_result_set()
+
+                #gr_reply = '[{ "text": "Server 1", "value": "server1" }, { "text": "Server 2", "value": "server2" }]'
+
+                gr_reply = result_set.replace("'",'"')
+    else:
+        gr_reply = "Missing Target in Grafana Payload"
+
+    return [ret_val, gr_reply]

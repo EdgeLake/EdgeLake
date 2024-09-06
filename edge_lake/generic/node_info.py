@@ -13,12 +13,16 @@ import edge_lake.generic.process_status as process_status
 import edge_lake.tcpip.tcpip_server as tcpip_server
 import edge_lake.tcpip.net_utils as net_utils
 
+from edge_lake.generic.git_id import git_commit_id as git_info
 try:
     CONFIG_FILE = os.path.expandvars(os.path.expanduser(os.path.join('$EDGELAKE_HOME', 'setup.cfg')))
     SOURCE_CONFIG_FILE = os.path.join(os.path.abspath(__file__).split("edge_lake")[0],  'setup.cfg')
 except:
     CONFIG_FILE = None
     SOURCE_CONFIG_FILE = None
+
+
+anylog_version_ = 0
 
 copyright_notice_ =  "\n\r* (c) 2021-2023 AnyLog Inc.\r\n*\n"
 license_eval_notice_ =    \
@@ -213,39 +217,45 @@ def get_version(status):
        CONFIG_FILE:str - path for Docker image
        SOURCE_CONFIG_FILE:str - path for source deployment
        DEFAULT_VERSION:str - default version
-    :params:
-        anylog_version:str - AnyLog version
     :return:
         AnyLog version either from setup.cfg or default
     """
-    anylog_version = None
-    config = configparser.ConfigParser()
 
-    if os.path.isfile(CONFIG_FILE):
-        file_name = CONFIG_FILE
-        try:
-            config.read(CONFIG_FILE)
-            anylog_version = config['metadata']['version']
-        except:
-            errno, errval = sys.exc_info()[:2]
+    global anylog_version_
 
-    elif os.path.isfile(SOURCE_CONFIG_FILE):
-        file_name = SOURCE_CONFIG_FILE
-        try:
-            config.read(SOURCE_CONFIG_FILE)
-            anylog_version = config['metadata']['version']
-        except:
-            errno, errval = sys.exc_info()[:2]
-    else:
-        file_name = ""
-        errno = 0
-        errval = ""
+    if not anylog_version_:
 
-    if anylog_version is None:
-        anylog_version = 0
-        status.add_error(f"Failed to retrieve version from file at: '{file_name}' errno: {errno} errval: {errval}")
+        version = 0
 
-    return anylog_version
+        config = configparser.ConfigParser()
+
+        if os.path.isfile(CONFIG_FILE):
+            file_name = CONFIG_FILE
+            try:
+                config.read(CONFIG_FILE)
+                version = config['metadata']['version']
+            except:
+                errno, errval = sys.exc_info()[:2]
+
+        elif os.path.isfile(SOURCE_CONFIG_FILE):
+            file_name = SOURCE_CONFIG_FILE
+            try:
+                config.read(SOURCE_CONFIG_FILE)
+                version = config['metadata']['version']
+            except:
+                errno, errval = sys.exc_info()[:2]
+        else:
+            file_name = ""
+            errno = 0
+            errval = ""
+
+        if not version:
+            status.add_error(f"Failed to retrieve version from file at: '{file_name}' errno: {errno} errval: {errval}")
+
+        anylog_version_ = f"{version} {git_info}"
+
+    return anylog_version_
+
 # ----------------------------------------------------------------------
 # Get license Message
 # ----------------------------------------------------------------------

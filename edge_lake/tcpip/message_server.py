@@ -498,8 +498,10 @@ class MQTT_MESSAGES(SESSION):
                 # Move the published data to the streamer through the MQTT Client on_message process
                 self.userdata = mqtt_topics_[self.topic_name]
             else:
-                self.userdata = 0
-                ret_val = process_status.Unrecognized_mqtt_topic
+                self.topic_name, self.userdata = mqtt_client.get_partial_match_topic(mqtt_topics_, self.topic_name)
+                if not self.userdata:
+                    self.userdata = None
+                    ret_val = process_status.Unrecognized_mqtt_topic
         if not ret_val:
             # Respond to the PUBLISH packet:
             # If QoS is 0 - None
@@ -1015,7 +1017,7 @@ def is_mqtt(mem_view):
     protocol_name_length = msg_get_int(mem_view, 2, 2)
     if protocol_name_length < 20:
         protocol_name = msg_get_bytes(mem_view, 4, protocol_name_length).lower()
-        if protocol_name and (protocol_name == "mqtt" or protocol_name == "mqisdp'"):
+        if protocol_name and (protocol_name == "mqtt" or protocol_name == "mqisdp"):
             # In MQTT 3.1 the protocol name is "MQISDP". In MQTT 3.1.1 the protocol name is represented as "MQTT".
             # https://www.oasis-open.org/committees/download.php/55095/mqtt-diffs-v1.0-wd01.doc
             ret_val = True

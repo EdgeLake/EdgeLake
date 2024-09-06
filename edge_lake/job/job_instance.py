@@ -27,6 +27,9 @@ import edge_lake.generic.params as params
 
 query_log_time = -1  # if the value is 0 or greater, log the queries that show execution time greater or equal to query_log_time
 
+# A struct to debug mutex order
+debug_mutex_ = {
+}
 
 class QueryMonitor:
     def __init__(self, entries, time_unit):
@@ -467,21 +470,48 @@ class JobInstance:
     # Mutex to prevent pushing data to local database or to the REST client while the rest thread is in a timeout
     # mutex_type can be 'R' for read and 'W' for write
     # =======================================================================================================================
-    def data_mutex_aquire(self, mutex_type):
+    def data_mutex_aquire(self, status, mutex_type):
+
         if mutex_type == 'R':
+            # utils_threads.print_thread_message("R+ ...")
+            # test_mutex_order("R+")
+
             self.data_mutex.acquire_read()
+
+            # utils_threads.print_thread_message("R+ ... +")
         else:
+            # utils_threads.print_thread_message("W+ ...")
+            # test_mutex_order("W+")
+
             self.data_mutex.acquire_write()
+
+            # utils_threads.print_thread_message("W+ ... +")
+        if status:
+            status.flag_mutex(mutex_type + '+')
 
     # =======================================================================================================================
     # Release data mutex
     # mutex_type can be 'R' for read and 'W' for write
     # =======================================================================================================================
-    def data_mutex_release(self, mutex_type):
+    def data_mutex_release(self, status, mutex_type):
+
+        if status:
+            status.flag_mutex(mutex_type + '-')
+
         if mutex_type == 'R':
+            # utils_threads.print_thread_message("R- ...")
+            # test_mutex_order("R-")
+
             self.data_mutex.release_read()
+
+            # utils_threads.print_thread_message("R- ... -")
         else:
+            # utils_threads.print_thread_message("W- ...")
+            # test_mutex_order("W-")
+
             self.data_mutex.release_write()
+
+            #utils_threads.print_thread_message("W- ... -")
 
 
     # =======================================================================================================================
@@ -610,10 +640,11 @@ class JobInstance:
 
         select_parsed = self.job_info.get_select_parsed()
 
-        if self.j_handle.is_output_to_table() or self.is_input_job():
+        if self.j_handle.is_output_to_table() or self.is_input_job() or self.j_handle.get_output_into():
             # j_handle.is_output_to_table - user selected a database table that is to be updated
             # is_input_job - the data of this query updates a second query
             # Force update of the system or user dbms with the result set
+            # self.j_handle.get_output_into() has a value if data goes into an HTML doc
             select_parsed.set_pass_through(False)
 
         local_dbms = db_info.get_db_type("system_query")  # the dbms used to manage queries
@@ -1209,7 +1240,7 @@ class JobInstance:
                             status = "Error: %s" % (process_status.get_status_text(returned_code))
                 else:
                     if self.job_status == "Delivered":
-                        status = "Received"  # message that does not need a reply
+                        status = "Delivered"  # message that does not need a reply
                     else:
                         if self.members[x][y].is_last_block() == False:
                             status = "Processing"
@@ -1284,6 +1315,8 @@ class JobInstance:
             data.append(["Local Create", self.job_info.select_parsed.local_create])
         if self.job_info.select_parsed.local_query != "":  # the SQL to provide the unified result
             data.append(["Local Query", self.job_info.select_parsed.local_query])
+        if self.job_info.select_parsed.get_increment_info():  # the SQL to provide the unified result
+            data.append(["Increment Info", self.job_info.select_parsed.get_increment_info()])
 
 
         output_txt += utils_print.output_nested_lists(data, "", None, True)
@@ -1481,13 +1514,17 @@ class JobInstance:
     # =======================================================================================================================
     # End Job Instance if active - and signal REST caller (if needed)
     # =======================================================================================================================
-    def end_job_instance(self, unique_job_id, is_reply_msg, is_subset):
+    def end_job_instance(self, status, unique_job_id, is_reply_msg, is_subset):
         '''
         unique_job_id - the id of the job_instance - to make sure it was not modified
         is_reply_msg - True value will update the counter showing number of nodes replied
         '''
         is_done = True      # The default - representing Job Instance is not used with this unique_job_id
-        self.data_mutex_aquire('W')  # Write Mutex
+        if not status.is_mutexed():
+            mutexed_in_method = True
+            self.data_mutex_aquire(status, 'W')  # Write Mutex
+        else:
+            mutexed_in_method = False
         # test thread did not timeout - or a previous process terminated the task
         if self.is_job_active() and self.get_unique_job_id() == unique_job_id:
             if is_reply_msg:
@@ -1521,7 +1558,8 @@ class JobInstance:
                     self.set_job_status("Completed")
                     self.j_handle.signal_wait_event()  # signal the REST thread that output is ready
 
-        self.data_mutex_release('W')  # release the mutex that prevents conflict with the rest thread
+        if mutexed_in_method:
+            self.data_mutex_release(status, 'W')  # release the mutex that prevents conflict with the rest thread
         return is_done
 # =======================================================================================================================
 # Reset the query timer - set 0 in counters and set current time
@@ -1537,3 +1575,51 @@ def reset_query_timer(status, io_buff_in, cmd_words, trace):
 def get_query_stats(is_json):
     global query_monitor
     return query_monitor.get_stats(is_json)
+
+# =======================================================================================================================
+# Get the query log time that was set using "set query log" or "set query log profile [n] seconds"
+# =======================================================================================================================
+def get_query_log_time():
+    return query_log_time
+
+# =======================================================================================================================
+# Get the query monitor
+# =======================================================================================================================
+def get_query_monitor():
+    return query_monitor
+# =======================================================================================================================
+# Test Mutex Order by thread name
+# =======================================================================================================================
+def test_mutex_order(mutex_type):
+    global debug_mutex_
+    error_flag = False
+    thread_name = utils_threads.get_thread_name()
+
+    if thread_name.startswith("rest"):
+        pass
+
+    if mutex_type == "R+" or mutex_type == "W+":
+        # read_lock
+        if thread_name in debug_mutex_:
+            error_flag = True
+            utils_print.output(f"Wrong mutex {mutex_type} error", True)
+        else:
+            debug_mutex_[thread_name] = mutex_type
+    elif not thread_name in debug_mutex_:
+        error_flag = True
+        utils_print.output(f"Wrong mutex {mutex_type} without prior lock", True)
+    elif mutex_type == "R-":
+        if debug_mutex_[thread_name] != "R+":
+            error_flag = True
+            utils_print.output(f"Wrong R- without prior lock", True)
+        else:
+            del debug_mutex_[thread_name]
+    else:
+        if debug_mutex_[thread_name] != "W+":
+            error_flag = True
+            utils_print.output(f"Wrong W- without prior lock", True)
+        else:
+            del debug_mutex_[thread_name]
+
+    if error_flag:
+        utils_print.output("Error mutex", True)

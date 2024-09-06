@@ -249,7 +249,7 @@ def get_param(key):
     except:
         if key in job_process_:
             # Get the data from the Job Handle
-            value = member_cmd.get_data_struct_from_job(job_process_[key][0],job_process_[key][1] )
+            value = member_cmd.get_data_struct_from_job(None, job_process_[key][0],job_process_[key][1] )
         else:
             value = ""
 
@@ -585,7 +585,7 @@ def analyze_if(status, cmd_words, offset_start, conditions_list):
                 break
 
         if need_end_or and not and_or_word:
-            status.add_error("Failed to parse in \"if\" stmt, missing end\or\else: %s" % ' '.join(cmd_words[offset_start:]))
+            status.add_error(f"Failed to parse in \"if\" stmt, missing end or else: {' '.join(cmd_words[offset_start:])}")
             ret_val = process_status.Failed_to_parse_if
             break
 

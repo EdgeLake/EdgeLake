@@ -95,7 +95,12 @@ mapping_attr = [
     ("import",      dict,   None,                   None,   False,  False,  None),
 ]
 
-
+transform_attr = [
+    # attr name * attr type * child attributes * default value * must exists *  is-unique
+    ("dbms",        str,    None,                   None,   True,   False,  None),
+    ("table",       str,    None,                   None,   True,   False,  None),
+    ("column",      str,    None,                   None,   True,   False,  None),
+]
 
 member_attr = [
     # attr name * attr type * child attributes * default value * must exists *  is unique
@@ -559,6 +564,14 @@ def new_assignment_policy(status, policy_type, policy_obj, blockchain_file):
 
 # =======================================================================================================================
 # Test that the policy has all components and complete missing values
+# This policy is used to Map PLCs to database and tables
+# =======================================================================================================================
+def new_transform_policy(status, policy_type, policy_obj, blockchain_file):
+    ret_val = test_key_val(status, policy_type, policy_obj, transform_attr, blockchain_file)
+
+    return ret_val
+# =======================================================================================================================
+# Test that the policy has all components and complete missing values
 # =======================================================================================================================
 def new_cluster_policy(status, policy_type, policy_obj, blockchain_file):
 
@@ -637,6 +650,7 @@ new_policies = {          # The process to execute when a new policy is added
     "operator" : new_operaor_policy,
     "cluster": new_cluster_policy,
     "mapping" : new_mapping_policy,
+    "transform" : new_transform_policy,
     "member" : new_member_policy,
     "permissions" : new_permission_policy,      # Permission policy determines commands and databases allowed
     "assignment" :  new_assignment_policy,      # Connect member to permissions

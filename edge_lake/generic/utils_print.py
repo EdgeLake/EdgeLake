@@ -125,17 +125,31 @@ def print_unlock():
 
 # =======================================================================================================================
 # Use control chars to move the cursor up
+'''
+import sys
+sys.stdout.write("\033[2J")  # Clear the entire screen (optional test)
+sys.stdout.write("\033[A")   # Move cursor up one line
+sys.stdout.write("\x1b[2K")  # Clear the line
+sys.stdout.write("\r")       # Move cursor back to the start of the line
+sys.stdout.flush()           # Flush the output buffer
+'''
 # =======================================================================================================================
 def move_lines_up(counter_lines, clear_lines):
     print_mutex.acquire()
-    for _ in range (counter_lines):
+    try:
+        for _ in range(counter_lines):
+            if clear_lines:
+                sys.stdout.write("\x1b[2K")  # Clear the entire line
+                sys.stdout.write("\r")  # Return to the beginning of the line
+            sys.stdout.write("\033[A")  # Move cursor up one line
+            sys.stdout.flush()  # Immediately flush output buffer
+
+        # Optionally clear the final line
         if clear_lines:
-            sys.stdout.write("\x1b[2K")
-        sys.stdout.write("\033[A")
-    if clear_lines:
-        sys.stdout.write("\x1b[2K")
-    sys.stdout.write("\r")      # goto start of line
-    print_mutex.release()
+            sys.stdout.write("\x1b[2K")  # Clear the line again, if needed
+            sys.stdout.flush()  # Flush to make sure it takes effect
+    finally:
+        print_mutex.release()  # Always release the mutex
 # =======================================================================================================================
 # Print to stdout
 # =======================================================================================================================
@@ -473,21 +487,38 @@ def print_string_prefix(string, substring, is_newLine):
 
 # --------------------------------------------------------------------
 # Print nested lists - first pass - get the field size, second print
+# Controls in column names:
+# \t format - i.e. - "DBMS Seconds\t{:,.3f}"
+# \t-  - Skip
 # --------------------------------------------------------------------
-def output_nested_lists(nested_lists: list, header, title, get_info_str: bool, line_prefix = "", capital_title = False):
+def output_nested_lists(nested_lists: list, header, column_names, get_info_str: bool, line_prefix = "", capital_title = False):
     '''
     capital_title - change first char of title to capital letter
     '''
-    columns_length = []  # maintain the max length for each colum
+    columns_length = []  # maintain the max length for each column
+    format_values = []   # maintain formatting value represented in the tile after a question mark (?)
+    title = []  # Column names without formatting flagged by \t
     ret_str = ""
 
     title1 = None
     title2 = None
 
-    if title:
+    if column_names:
         title_lines = 1
         # Go over the title - an determine if title is one line or 2 lines
-        for index, entry in enumerate(title):
+        for index, source_entry in enumerate(column_names):
+            offset = source_entry.find('\t')
+            if offset > 0:
+                # formatting value represented in the tile after a \t mark
+                # For example, instruction to format numbers like "{:,.2f}"
+                format_str = source_entry[offset + 1:]
+                entry = source_entry[:offset]
+            else:
+                format_str = None
+                entry = source_entry
+            format_values.append(format_str)
+            title.append(entry)
+
             offset = entry.find('\n')
             if offset == -1:
                 if title1:
@@ -522,6 +553,15 @@ def output_nested_lists(nested_lists: list, header, title, get_info_str: bool, l
         for columns in nested_lists:
             if columns:
                 for index, col_data in enumerate(columns):
+                    if column_names and format_values[index]:
+                        # Format instructions after \t mark
+                        if format_values[index] == '-':
+                            continue        # Skip this column
+                        try:
+                            col_data = format_values[index].format(col_data)
+                        except:
+                            pass
+
                     length = len(str(col_data))
                     if length > 100:
                         length = 100
@@ -547,6 +587,8 @@ def output_nested_lists(nested_lists: list, header, title, get_info_str: bool, l
             out_str += ("\r\n" + line_prefix)
             # Go over the title and print title
             for index, entry in enumerate(use_title):
+                if column_names and format_values[index] == '-':
+                    continue  # Skip this column
                 length = columns_length[index]
                 if capital_title and len(entry):
                     # change first char to capital letter
@@ -566,6 +608,8 @@ def output_nested_lists(nested_lists: list, header, title, get_info_str: bool, l
         # Go over the title and print title's underline
 
         for index, entry in enumerate(title):
+            if column_names and format_values[index] == '-':
+                continue  # Skip this column
             length = columns_length[index]
             out_str += "-".ljust(length, '-') + '|'
 
@@ -581,8 +625,17 @@ def output_nested_lists(nested_lists: list, header, title, get_info_str: bool, l
                 out_str = ("\r\n" + line_prefix)
                 prefix = "\r\n"  # prefix is used for a column greater than 100 that is printed in multiple lines
                 for index, col_data in enumerate(columns):
+                    if column_names and format_values[index] == '-':
+                        continue  # Skip this column
                     length = columns_length[index]
                     if col_data != None:
+                        if column_names and format_values[index]:
+                            # Format instructions after \t mark
+                            try:
+                                col_data = format_values[index].format(col_data)
+                            except:
+                                pass
+
                         if isinstance(col_data, bool):
                             out_str += str(col_data).ljust(length) + '|'
                         elif is_right_shift(col_data):
@@ -1062,6 +1115,10 @@ def print_dict_as_table(key, dict_list, info_struct, attr_names, get_info_str, l
                         print_list.append(["" for _ in range(len(attr_names))])
                     print_list[dict_position + index][col_id] = entry
 
+            elif isinstance(col_val, bool):
+                print_list[dict_position][col_id] = col_val
+            elif isinstance(col_val, int) or isinstance(col_val, float):
+                print_list[dict_position][col_id] = "{:,}".format(col_val)
             elif col_val or isinstance(col_val, int):
                 print_list[dict_position][col_id] = col_val
 

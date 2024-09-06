@@ -5,6 +5,7 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 """
 
 import json
+import re
 
 try:
     import base64
@@ -44,24 +45,17 @@ import edge_lake.generic.utils_print as utils_print
 import edge_lake.generic.params as params
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_io as utils_io
+import edge_lake.generic.trace_func as trace_func
 import edge_lake.dbms.partitions as partitions
 import edge_lake.dbms.db_info as db_info
 import edge_lake.cmd.member_cmd as member_cmd
 
-mapping_trace_ = 0      # Updated using the command: trace level = 1 mapping
 
 excluded_defaults_ = {
     "default" : "Reserved word",
 }
 
-# ==================================================================
-# Set the trace level to show the mapping process
-# command: trace level = 1 mapping
-# ==================================================================
-def set_mapping_trace(trace_level):
-    global mapping_trace_
-
-    mapping_trace_ = trace_level
+re_group_pattern_ = r're\.group\((\d+)\)'  # Define the regular expression pattern
 
 # ==================================================================
 #
@@ -165,7 +159,6 @@ def apply_policy_schema(status, source_dbms, source_table, policy_inner, policy_
     '''
 
     global tables_schemas_
-    global mapping_trace_
 
     # Provided by the caller
     dbms_name = source_dbms
@@ -274,7 +267,7 @@ def apply_policy_schema(status, source_dbms, source_table, policy_inner, policy_
             if ret_val != process_status.CHANGE_POLICY:
                 break
 
-    if mapping_trace_:
+    if trace_func.get_func_trace_level("mapping"):
         # Show the process output (the mapped data)
         show_insert_list(ret_val, insert_list)
 
@@ -363,7 +356,7 @@ def process_event(status, readings, policy_inner, policy_id, dbms_name, table_na
                     continue  # Incorrect option, get to the next option
 
                 if not isinstance(column_info, dict):
-                    status.add_error("Schema info is not in a dictionary format in mapping policy '%s'" % (policy_id))
+                    status.add_error("Schema info is not in a dictionary format in Mapping Policy '%s'" % (policy_id))
                     ret_val = process_status.ERR_wrong_json_structure
                     break
 
@@ -690,16 +683,12 @@ def bring_and_default_to_data(status, column_info, policy_id, attr_name, data_en
         ret_val, attr_val = utils_json.pull_info(status, [data_entry], bring_list, None, 0)
         if not ret_val and attr_val == "":
             # Get the default
-            ret_val, attr_val = utils_json.get_policy_val(status, column_info, policy_id, "default", None, True,  False)
+            data_type_name = column_info["type"] if "type" in column_info else None
+            data_type = utils_columns.get_instance_by_name(data_type_name)
+            ret_val, attr_val = utils_json.get_policy_val(status, column_info, policy_id, "default", data_type, True,  True)
             if not ret_val:
-
-                if attr_val == None:
-                    status.add_error(
-                        "Failed to extract value from data and no default value in policy schema, policy id: '%s'" % policy_id)
-                    ret_val = process_status.ERR_wrong_json_structure
-                else:
-                    if isinstance(attr_val, str) and attr_val == "now()":
-                        attr_val = utils_columns.get_current_utc_time()
+                if isinstance(attr_val, str) and attr_val == "now()":
+                    attr_val = utils_columns.get_current_utc_time()
 
     return [ret_val, attr_val]
 # ----------------------------------------------------------------------
@@ -985,5 +974,149 @@ def archive_blob_file(status, dbms_name, table_name, blob_data):
 
     return [ret_val, blob_file_name]
 
+# ------------------------------------------------------------------------------
+# Add columns to the JSON row
+# ------------------------------------------------------------------------------
+def get_new_row(status, current_time, dbms_name, table_name, policy_inner, policy_id, json_data, re_match):
+    '''
+    policy_inner - the policy without the type (mapping or transform)
+    policy_id - the ID of the policy used
+    json_data - the user data (i.e. PLC data)
+    json_row - the new row to update
+    re_match - match used to retrieve the column name
+    '''
+
+    ret_val = process_status.SUCCESS
+    if not "schema" in policy_inner:
+        is_new, row_to_update = get_table_row(status, current_time, policy_inner["__new_rows_from_plc__"], dbms_name, table_name, None)
+    else:
+        schema = policy_inner["schema"]
+        if "id" in schema:
+            # The ID column is tested first as it creates the key that hosts the row
+            # This ID is used to create a row instance when multiple rows of the same table are generated from a plc pannel
+            attr_data = schema["id"]
+            ret_val, not_used, attr_val = get_name_val(status, policy_id, json_data, attr_data, re_match)
+            with_id = True
+        else:
+            attr_val = False
+            with_id = False
+
+        is_new, row_to_update = get_table_row(status, current_time, policy_inner["__new_rows_from_plc__"], dbms_name, table_name, attr_val)
+
+        if is_new:
+            if with_id:
+                row_to_update["id"] = attr_val
+
+            for attr_name, attr_data in schema.items():
+                # Update the columns from the Schema
+                if attr_name == "id":
+                    continue        # Was processed
+
+                ret_val, not_used, attr_val = get_name_val(status, policy_id, json_data, attr_data, re_match)
+
+                if ret_val:
+                    break
+
+                row_to_update[attr_name] = attr_val
 
 
+    return [ret_val, row_to_update]
+#----------------------------------------------------------------------
+# Get the row being updated for this table.
+# The rows are maintained in the policy as f(dbms and table)
+# The structure of the new rows in the policy:
+# "new_rows_from_plc" --> dictionary as f(dbms.table) -> dict to row and time
+#----------------------------------------------------------------------
+def get_table_row(status, current_time, new_rows, dbms_name, table_name, row_id):
+    '''
+    current_time - the current time on the node
+    new_rows - a dict to maintain all new rows as f (dbms and table)
+    dbms_name - dbms assigned to the column considered
+    table_name - table assigned to the column considered
+    row_id - when a PLCs generates multiple rows to the same table - like: generator_1, generator_2 eyc
+    '''
+
+    table_id = f"{dbms_name}.{table_name}.{row_id}" if row_id else f"{dbms_name}.{table_name}"
+
+    if table_id in new_rows:
+        row_to_update = new_rows[table_id]
+        is_new = False      # this row was created in a previous itteration
+    else:
+        # Create a new row
+        row_to_update = {}
+        new_rows[table_id] = row_to_update
+        is_new = True
+
+    return [is_new, row_to_update]
+
+# ------------------------------------------------------------------------------
+# Get Attr name + Attr value from policy and the user data
+# ------------------------------------------------------------------------------
+def get_name_val(status, policy_id, json_data, attr_data, re_match):
+
+    attr_name = None        # The derived name
+    attr_val = None
+
+    if not isinstance(attr_data, dict):
+        status.add_error("Schema info is not in a dictionary format in Transform Policy '%s'" % (policy_id))
+        ret_val = process_status.ERR_wrong_json_structure
+    else:
+
+        ret_val, data_type = get_policy_info(status, attr_data, policy_id, "type", True)
+        if ret_val:
+            status.add_error(f"Failed processing of policy: '{policy_id}' 'type' from attribute: '{attr_name}' returned: '{process_status.get_status_text(ret_val)}")
+            ret_val = process_status.ERR_wrong_json_structure
+        else:
+
+            attr_val = None
+            source_attr_name = attr_name
+            if "value" in attr_data:
+                ret_val, bring_cmd = get_policy_info(status, attr_data, policy_id, "value", True)
+                if ret_val:
+                    status.add_error(f"Failed processing of policy: '{policy_id}' 'value' from attribute: '{attr_name}' returned: '{process_status.get_status_text(ret_val)}")
+                    ret_val = process_status.ERR_wrong_json_structure
+
+                if not ret_val:
+
+                    ret_val, bring_key = get_bring_key(status, bring_cmd, policy_id)
+                    if not ret_val:
+
+                        if bring_key:
+                            # Is a bring command - change source_attr_name
+                            source_attr_name = bring_key
+                        else:
+                            # Get the value from the column name (used to map PLCs)
+                            attr_val = get_re_match_value(status, re_match, bring_cmd)
+
+            if not attr_val:
+                ret_val, attr_val = bring_and_default_to_data(status, attr_data, policy_id, source_attr_name, json_data)
+
+    return [ret_val, attr_name, attr_val]
+
+
+# ------------------------------------------------------------------------------
+# A policy can pull a value from a string using re
+# The value is determined by the re.group(X) command that is expressed as a string in the policy.
+# This method pulls X
+# ------------------------------------------------------------------------------
+def get_re_match_value(status, re_match, key):
+    '''
+    re_match - the object returned to the call:  re_match = re.match(re_compiled_pattern, attr_name)
+    key - the value in the policy
+    '''
+
+    match = re.search(re_group_pattern_, key)  # Search for the pattern in the string
+    if match:
+        # The policy includes re.group(X)
+        try:
+            group_id = int(match.group(1))  # The number X is in Group 1 - Extract and return the number as an integer
+            # Get the value
+            derived_value = re_match.group(group_id)  # the name derived from the attribute name of the plc column
+
+        except:
+            status.add_error(f"Failed to retrieve name using key '{key}' from pattern '{re_group_pattern_}' ")
+            derived_value = None
+    else:
+        derived_value = key
+
+    return derived_value

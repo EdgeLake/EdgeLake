@@ -6,6 +6,7 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import os
 import copy
+import time
 
 import edge_lake.dbms.db_info as db_info
 import edge_lake.dbms.partitions as partitions
@@ -13,6 +14,7 @@ import edge_lake.generic.utils_io as utils_io
 import edge_lake.generic.utils_columns as utils_columns
 import edge_lake.generic.utils_data as utils_data
 import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.stats as stats
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.process_log as process_log
 import edge_lake.cmd.member_cmd as member_cmd
@@ -61,104 +63,98 @@ def map_columns(status: process_status, dbms_name, table_name, tsd_name, tsd_id,
        list of keys that have corresponding columns
     """
 
-    currentt_utc = "\'" + utils_columns.get_current_utc_time() + "\'"
+    current_utc = "\'" + utils_columns.get_current_utc_time() + "\'"
 
     insert_list = []
     attr_names_map = {}  # Map the keys in the JSON entry to lower
 
     for entry in json_data:
-        column_array = []
-        time_presence = False
+
         value_presence = False
-        for index, column_info in enumerate(columns_list):
+        time_presence = True        # Will be set to False if "insert_timestamp" (current_utc) is not used
+
+        column_array = ["DEFAULT", current_utc, tsd_name, tsd_id]
+
+        for column_info in columns_list[4:]:
 
             attribute_name = column_info[1]  # use the column name in the table
             column_type = column_info[2]
-            default_declared = column_info[3]
-            if index < 4:
-                # First 2 columns are row_id and insert_timestamp - they are set with - Default
-                if not index:
-                    column_value = "DEFAULT"  # Row ID
-                elif index == 1:
-                    column_value = currentt_utc  # Current timestamp in utc
-                elif index == 2:
-                    column_value = tsd_name
-                elif index == 3:
-                    column_value = tsd_id
+
+            if isinstance(attribute_name, list):
+                column_value = get_value_by_function(attribute_name, entry, attr_names_map)  # Apply the function in the attribute name to get the column value
             else:
-                if isinstance(attribute_name, list):
-                    column_value = get_value_by_function(attribute_name, entry,
-                                                         attr_names_map)  # Apply the function in the attribute name to get the column value
-                else:
-                    column_value = get_value_ignore_case(entry, attribute_name, attr_names_map)
-                    if column_type == "varchar" and len(column_value) > MAX_COL_LENGTH_:
-                        # Put the blob in file ot a database and replace the column with the ID to the blob
-                        if dbms_name and table_name:
-                            ret_val, blob_file_name = mapping_policy.archive_blob_file(status, dbms_name, table_name, column_value)
-                            if blob_file_name:
-                                column_value = blob_file_name       # Replace the value  with the id of the file
-                            else:
-                                column_value = ""                   # Otherwise the blob data will go to the row
-
-                if isinstance(column_value, str):
-                    if column_value == "":
-                        if default_declared:
-                            if column_type.startswith("timestamp"):
-                                if default_declared == "current_timestamp":
-                                    column_value = currentt_utc
-                                else:
-                                    column_value = "DEFAULT"
-                            else:
-                                column_value = "DEFAULT"
+                column_value = get_value_ignore_case(entry, attribute_name, attr_names_map)
+                if column_type == "varchar" and len(str(column_value)) > MAX_COL_LENGTH_:
+                    # Put the blob in file ot a database and replace the column with the ID to the blob
+                    if dbms_name and table_name:
+                        ret_val, blob_file_name = mapping_policy.archive_blob_file(status, dbms_name, table_name, column_value)
+                        if blob_file_name:
+                            column_value = blob_file_name       # Replace the value  with the id of the file
                         else:
-                            column_value = "NULL"
-                    else:
-                        value_presence = True  # A value which is not set as default
-                        if column_type.startswith("timestamp"):
-                            if column_value.isdigit():
-                                # Unix timestamp, representing the number of seconds that have elapsed since the Unix epoch (January 1, 1970, 00:00:00 UTC).
-                                column_value = "\'" + utils_columns.seconds_to_date(int(column_value)) + "\'"
-                            else:
-                                if len(column_value) > 10:
-                                    if column_value[-6] == '+' or column_value[-6] == '-':
-                                        # Using utcoffset: for example: '2021-11-04T00:05:23+04:00'
-                                        # Details: https://en.wikipedia.org/wiki/UTC_offset
-                                        utcoffset = utils_columns.time_iso_format(column_value)
-                                        if utcoffset:
-                                            column_value = utcoffset
-                                    elif column_value[10] != 'T':
-                                        column_value = utils_columns.local_to_utc(column_value)  # CHANGE to UTC
-                            column_value = "\'" + utils_data.replace_string_chars(True, column_value,
-                                                                                  {'\'': '`', '"': '`'}) + "\'"
-                        else:
-                            # Char and varchar
-                            column_value = "\'" + utils_data.replace_string_chars(True, column_value,
-                                                                                  {'\'': '`', '"': '`'}) + "\'"
-                elif isinstance(column_value, int):
-                    time_presence = True  # This row has time value
-                    if column_type.startswith("timestamp"):
-                        # Assumes seconds and convert to string time
-                        column_value += utils_columns.utc_diff  # Change to UTC
-                        column_value = "\'" + utils_columns.seconds_to_date(column_value) + "\'"
-                elif isinstance(column_value, list) or isinstance(column_value, dict):
-                    column_value = "\'" + utils_data.replace_string_chars(True, str(column_value),
-                                                                          {'\'': '`', '"': '`'}) + "\'"
-                else:
-                    if column_value == None:
-                        column_value = "DEFAULT"
-                    else:
-                        value_presence = True  # for example, integers, floats
+                            column_value = ""                   # Otherwise the blob data will go to the row
 
+            if isinstance(column_value, str):
+                value_presence, column_value = handle_string_column_value(column_value, column_type, column_info[3], current_utc)
+            elif isinstance(column_value, bool):
+                value_presence = True
+            elif isinstance(column_value, int):
+                time_presence = True  # This row has time value
+                if column_type.startswith("timestamp"):
+                    # Assumes seconds and convert to string time
+                    column_value += utils_columns.utc_diff  # Change to UTC
+                    column_value = "\'" + utils_columns.seconds_to_date(column_value) + "\'"
+            elif isinstance(column_value, list) or isinstance(column_value, dict):
+                column_value = "\'" + utils_data.prep_data_string(column_value) + "\'"
+            else:
+                if column_value == None:
+                    column_value = "DEFAULT"
+                else:
+                    value_presence = True  # for example, integers, floats
 
             column_array.append(str(column_value))
 
         if time_presence or value_presence:
             # A minimum of time and value
-            insert_list.append(
-                column_array)  # The insert list is a list of arrays, every entry represent a row as a list of columns
+            insert_list.append(column_array)  # The insert list is a list of arrays, every entry represent a row as a list of columns
 
     return insert_list
-
+# ==================================================================
+# Process String Field
+# ==================================================================
+def handle_string_column_value(column_value, column_type, default_declared, current_utc):
+    if column_value == "":
+        value_presence = False
+        if default_declared:
+            if column_type.startswith("timestamp"):
+                if default_declared == "current_timestamp":
+                    column_value = current_utc
+                else:
+                    column_value = "DEFAULT"
+            else:
+                column_value = "DEFAULT"
+        else:
+            column_value = "NULL"
+    else:
+        value_presence = True  # A value which is not set as default
+        if column_type.startswith("timestamp"):
+            if column_value.isdigit():
+                # Unix timestamp, representing the number of seconds that have elapsed since the Unix epoch (January 1, 1970, 00:00:00 UTC).
+                column_value = "\'" + utils_columns.seconds_to_date(int(column_value)) + "\'"
+            else:
+                if len(column_value) > 10:
+                    if column_value[-6] == '+' or column_value[-6] == '-':
+                        # Using utcoffset: for example: '2021-11-04T00:05:23+04:00'
+                        # Details: https://en.wikipedia.org/wiki/UTC_offset
+                        utcoffset = utils_columns.time_iso_format(column_value)
+                        if utcoffset:
+                            column_value = utcoffset
+                    elif column_value[10] != 'T':
+                        column_value = utils_columns.local_to_utc(column_value)  # CHANGE to UTC
+            column_value = "\'" + utils_data.prep_data_string(column_value) + "\'"
+        else:
+            # Char and varchar
+            column_value = "\'" + utils_data.prep_data_string(column_value) + "\'"
+    return [value_presence, column_value]
 
 # ==================================================================
 # Given a Key - Get value from JSON - ignore Upper Lower Case
@@ -243,11 +239,9 @@ def map_json_file_to_insert(status: process_status, tsd_name, tsd_id, dbms_name,
             ret_val = False
 
     if ret_val:
-        err_msg = ""
         json_file = os.path.expanduser(os.path.expandvars(json_file))
         if not os.path.isfile(json_file):
             status.add_error("Failed to generate INSERT statement - Path to JSON file not recognized: " + json_file)
-            ret_val = False
         else:
 
             sql_dir = sql_dir.replace('\\', '/')
@@ -258,7 +252,6 @@ def map_json_file_to_insert(status: process_status, tsd_name, tsd_id, dbms_name,
             sql_dir = os.path.expanduser(os.path.expandvars(sql_dir))
             if not os.path.isdir(sql_dir):
                 status.add_error("Failed to generate INSERT statement - Invalid SQL dir: %s" % sql_dir)
-                ret_val = False
             else:
                 file_name_offset = json_file.rfind("/")
                 if file_name_offset == -1:
@@ -267,11 +260,19 @@ def map_json_file_to_insert(status: process_status, tsd_name, tsd_id, dbms_name,
                     file_name_offset += 1
                 sql_file_name = json_file[file_name_offset:-5]
 
-                json_data = utils_io.read_json_strings(status, json_file)
+                data_list = utils_io.read_all_lines_in_file(status, json_file)
+
+                json_data = [
+                    json_instance
+                    for entry in data_list
+                    if len(entry) > 2 and (json_instance := utils_json.str_to_json(entry)) is not None
+                ]
+
+                #json_data = utils_io.read_json_strings(status, json_file)
+
                 if not json_data or not len(json_data):
-                    status.add_error(err_msg)
+                    status.add_error(f"Failed to retrieve JSON rows from file: {json_file}")
                     sql_file_list = None
-                    rows_count = 0
                 else:
                     sql_file_list, rows_count = map_json_list_to_sql(status, tsd_name, tsd_id, dbms_name, table_name, insert_size, sql_dir, sql_file_name, instruct, json_data)
                     if rows_count:
@@ -338,9 +339,7 @@ def map_json_list_to_sql(status: process_status, tsd_name, tsd_id, dbms_name, ta
         insert_columns = map_columns(status, dbms_name, table_name, tsd_name, tsd_id, json_data, columns_list)
         rows_count = len(insert_columns)
         if not rows_count:
-            status.add_keep_error(
-                "Failed to map (time and value) from JSON file to database '%s' and table '%s' using existing schema or mapping policy" % (
-                dbms_name, table_name))
+            status.add_keep_error("Failed to retrieve data from JSON file: Time column and Value column not identified: for database: '%s' and table '%s'" % (dbms_name, table_name))
             ret_val = False
         elif data_monitor.set_monitoring(dbms_name, table_name):    # Sets the monitored struct - or returns false if not monitored
             # Update the data_monitor struct
@@ -367,9 +366,20 @@ def map_json_list_to_sql(status: process_status, tsd_name, tsd_id, dbms_name, ta
                     err_msg = "Failed to INSERT streaming data to local table with immediate flag: %s.%s" % (dbms_name, table_name)
             else:
                 # Operator process
-                # write the SQL file with insert stmt to a file with .sql extension
-                ret_val = write_sql_file(status, file_name, dbms_name, table_name, table_extension, insert_size,
-                                     columns_list, insert_columns)
+                ret_val, insert_stmt = columns_to_insert_stmt(status, dbms_name, table_name, table_extension, columns_list, insert_size, insert_columns)
+                if ret_val:
+                    # Write SQL data to the database
+                    dbms_start_time = time.time()
+                    ret_val, processed_rows = db_info.process_contained_stmt(status, dbms_name, insert_stmt)
+                    dbms_process_time = time.time() - dbms_start_time
+                    stats.operator_update_inserts(dbms_name, table_name, processed_rows, False, dbms_process_time)  # Update stat on inserts
+                    if ret_val:
+                        table_partition = f"{table_name}.{table_extension}" if table_extension else table_name
+                        stats.operator_update_stats("sql", dbms_name, table_partition, False, False)
+                    else:
+                        # Failure may be the result of table/partition not yet defined
+                        # write the SQL file with insert stmt to a file with .sql extension
+                        ret_val = write_sql_file(status, insert_stmt, file_name)
 
             if not ret_val:
                 break
@@ -442,35 +452,31 @@ def partition_data(status, sql_dir, sql_file_name, dbms_name, table_name, column
 # -------------------------------------------------------------------------------------------
 # Write the Insert statements to a SQL file
 # ___________________________________________________________________________________________
-def write_sql_file(status, sql_file, dbms_name, table_name, par_name, insert_size, column_names, insert_columns):
+def write_sql_file(status, insert_stmt, sql_file):
 
     # Map columns data to insert stmt
-    ret_val, insert_stmt = columns_to_insert_stmt(status, dbms_name, table_name, par_name, column_names, insert_size, insert_columns)
 
-    if ret_val:
-        io_handle = utils_io.IoHandle()
-        tmp_name =  sql_file + '_tmp'    # Name changed not be processed by the main Operator thread
-        if not io_handle.open_file("append", tmp_name):
+    # Update a file
+    io_handle = utils_io.IoHandle()
+    tmp_name =  sql_file + '_tmp'    # Name changed not be processed by the main Operator thread
+    if not io_handle.open_file("append", tmp_name):
+        ret_val = False
+    else:
+        ret_val = True
+        # File opened -> Append Data
+        if not io_handle.append_data(insert_stmt):
             ret_val = False
-        else:
-            # File opened -> Append Data
-            if not io_handle.append_data(insert_stmt):
-                ret_val = False
 
-            # Close file
-            if not io_handle.close_file():
-                ret_val = False
+        # Close file
+        if not io_handle.close_file():
+            ret_val = False
 
-            if ret_val:
-                ret_val = utils_io.rename_file(status, tmp_name, sql_file)  # Revert to .sql name so it will be processed
-                if not ret_val:
-                    ret_val = utils_io.delete_file(sql_file, False)        # Delete old file
-                    if ret_val:
-                        ret_val = utils_io.rename_file(status, tmp_name, sql_file)  # Try again after old file deleted
-
-
-
-
+        if ret_val:
+            ret_val = utils_io.rename_file(status, tmp_name, sql_file)  # Revert to .sql name so it will be processed
+            if not ret_val:
+                ret_val = utils_io.delete_file(sql_file, False)        # Delete old file
+                if ret_val:
+                    ret_val = utils_io.rename_file(status, tmp_name, sql_file)  # Try again after old file deleted
     return ret_val
 
 # -------------------------------------------------------------------------------------------

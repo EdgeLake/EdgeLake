@@ -8,6 +8,8 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 # generic_dir = os.path.expanduser(os.path.expandvars('$HOME/EdgeLake/source/generic'))
 # sys.path.insert(0, generic_dir)
 
+import time
+
 import edge_lake.dbms.cursor_info as cursor_info
 import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.process_status as process_status
@@ -20,7 +22,7 @@ import edge_lake.dbms.unify_results as unify_results
 import edge_lake.generic.params as params
 from edge_lake.generic.process_log import add
 from edge_lake.dbms.sqlite_dbms import get_dbms_connect_info
-from edge_lake.generic.utils_data import get_string_hash
+from edge_lake.generic.utils_data import get_string_hash, get_formatted_hms
 from edge_lake.dbms.dbms import connect_dbms, is_blobs_dbms
 from edge_lake.generic.stats import operator_update_inserts
 
@@ -30,6 +32,68 @@ active_tables = {}  # Table info as f(dbms name+table)
 active_views = {}  # View info as f(dbms name+view)
 
 
+insert_threshold_ = 0
+reported_rows_ = 0      # The number of rows on previous print
+reported_time_ = 0
+total_rows_ = 0
+start_time_ = 0
+
+# ===============================================================
+# Update performance stat of the insert stmt
+# ===============================================================
+def update_performance(rows_count):
+    global start_time_
+    global total_rows_
+    global reported_rows_
+    global reported_time_
+
+    total_rows_ += rows_count
+    if total_rows_ - reported_rows_ >= insert_threshold_:
+        current_time = time.time()
+        if reported_time_:
+            delta_time_sec = current_time - reported_time_
+        else:
+            delta_time_sec = current_time - start_time_
+
+        delta_rows = total_rows_ - reported_rows_
+        run_time_sec = current_time - start_time_
+        if not run_time_sec:
+            return
+        rows_per_sec = round(total_rows_ / run_time_sec, 3)
+
+        if not delta_time_sec:
+            return
+
+        delta_per_sec = round(delta_rows / delta_time_sec, 3)
+
+        run_time = get_formatted_hms(run_time_sec)
+        delta_time = get_formatted_hms(delta_time_sec)
+
+        info_table = [[run_time, total_rows_, rows_per_sec, delta_time, delta_rows, delta_per_sec]]
+
+        reported_rows_ = total_rows_
+        reported_time_ = current_time
+
+        output_str = utils_print.output_nested_lists(info_table, "", ["Run Time", "Total Rows", "Rows/Sec", "Delta Time", "New Rows", "New/Sec"], False)
+        utils_print.output(output_str, True)
+
+
+# ===============================================================
+# If the value is not 0, stats is printed every threshold inserts
+# ===============================================================
+def set_insert_threshold(value):
+    global insert_threshold_
+    global reported_rows_
+    global reported_time_
+    global total_rows_
+    global start_time_
+
+    insert_threshold_ = value
+    # Reset
+    reported_rows_ = 0  # The number of rows on previous print
+    reported_time_ = 0
+    total_rows_ = 0
+    start_time_ = 0
 # =======================================
 # Create new database
 # ======================================
@@ -41,7 +105,11 @@ def create_dbms(db_name, dbms, db_type, connection_pool):
     connection_pool - True - if the driver manage connections
     '''
     global active_dbms
-    active_dbms[db_name] = {'connection': dbms, 'db type': db_type, 'pool' : connection_pool}
+    if db_name == "system_query" or db_name == "almgm" or db_name == "blockchain":
+        owner = "system"
+    else:
+        owner = "user"
+    active_dbms[db_name] = {'connection': dbms, 'db type': db_type, 'pool' : connection_pool, 'owner': owner}
 # =======================================
 # Get DBMS connection
 # ======================================
@@ -126,6 +194,8 @@ def non_select_sql_stmt(status, dbms_name, sql_command):
 # =======================================
 def insert_rows(status, dbms_name, table_name, list_inserts):
 
+    dbms_start_time = time.time()
+
     db_connect = get_connection(dbms_name)
     if db_connect == None:
         status.add_keep_error("Database \'%s\' not connected" % dbms_name)
@@ -147,7 +217,8 @@ def insert_rows(status, dbms_name, table_name, list_inserts):
     # commit or if error than rollback
     if ret_val:
         db_connect.commit(status, db_cursor)
-        operator_update_inserts(dbms_name, table_name, len(list_inserts), True)  # Update stat on inserts
+        dbms_process_time = - time.time() - dbms_start_time
+        operator_update_inserts(dbms_name, table_name, len(list_inserts), True, dbms_process_time)  # Update stat on inserts
     else:
         db_connect.rollback(status, db_cursor)
 
@@ -238,6 +309,8 @@ def commands_for_temp_table(db_name, table_name):
 # Process a SQL Statement from a file
 # ======================================
 def process_sql_from_file(status, dbms_name, table_name, file_path):
+
+    dbms_start_time = time.time()
     db_connect = get_connection(dbms_name)
     if db_connect == None:
         status.add_keep_error("DBMS '%s' not connected" % dbms_name)
@@ -250,6 +323,7 @@ def process_sql_from_file(status, dbms_name, table_name, file_path):
         rows_counter = 0
     else:
 
+
         ret_val, rows_counter = db_connect.execute_sql_file(status, db_cursor, file_path)
 
         if ret_val:
@@ -259,13 +333,21 @@ def process_sql_from_file(status, dbms_name, table_name, file_path):
 
         db_connect.close_cursor(status, db_cursor)
 
-        operator_update_inserts(dbms_name, table_name, rows_counter, False) # Update stat on inserts
+        dbms_process_time = time.time() - dbms_start_time
+
+        operator_update_inserts(dbms_name, table_name, rows_counter, False, dbms_process_time) # Update stat on inserts
 
     return [ret_val, rows_counter]
 # =======================================
-# Process a single delete Statement
+# Process a single delete Statement i.e. Insert / Delete
 # ======================================
-def process_contained_delete_stmt(status, dbms_name, sql_command):
+def process_contained_stmt(status, dbms_name, sql_command):
+
+    global start_time_
+
+    if insert_threshold_ and not start_time_:
+        start_time_ = time.time()
+
     db_connect = get_connection(dbms_name)
     if db_connect == None:
         status.add_keep_error("DBMS '%s' not connected" % dbms_name)
@@ -292,10 +374,10 @@ def process_contained_delete_stmt(status, dbms_name, sql_command):
 
         db_connect.close_cursor(status, db_cursor)
 
-    reply_list = [ret_val, rows]
-    return reply_list
+    if insert_threshold_ and sql_command[0].lower() == "i":
+        update_performance(rows)
 
-
+    return [ret_val, rows]
 # =======================================
 # Process a single select Statement - Fetch all rows with this call
 # Get dbms object -> get cusrosr -> exec. sql -> close cursor
@@ -635,24 +717,29 @@ def get_table_partitions_list(status, dbms_name: str, table_name: str):
 # =======================================
 # Get the list of partitions with additional info on each partition
 # ======================================
-def get_partitions_info(status, dbms_name: str, table_name: str):
+def get_partitions_info(status, dbms_name: str, table_name: str, is_str:bool):
+    # Get partition info as a list or a string
+
+    reply_info = None
+
     d_name = dbms_name.lower()
     t_name = table_name.lower()
 
     db_connect = get_connection(dbms_name)
     if db_connect == None:
         status.add_keep_error("DBMS '%s' not connected" % dbms_name)
-        data_string = ""
     else:
-        ret_val, data_string = db_connect.get_table_partitions(status, d_name, t_name)
-        if ret_val and data_string:
-            info_list = partitions.get_info_partitions(status, d_name, t_name, data_string)
-            if not info_list:
-                data_string = None
-            else:
-                data_string = utils_print.output_nested_lists(info_list, "", ["Partition Name", "Start Date", "End Date"], True)
+        ret_val, par_info = db_connect.get_table_partitions(status, d_name, t_name)
+        if ret_val and par_info:
+            info_list = partitions.get_info_partitions(status, d_name, t_name, par_info)
+            if info_list:
+                if is_str:
+                    # Return a string
+                    reply_info = utils_print.output_nested_lists(info_list, "", ["Partition Name", "Start Date", "End Date"], True)
+                else:
+                    reply_info = info_list  # Return a list
 
-    return data_string
+    return reply_info
 # =======================================
 # Get a list with the partition name in each partition
 # ======================================
@@ -851,7 +938,16 @@ def get_db_type(db_name):
         db_type = ""
     return db_type
 
-
+# =======================================
+# Get database owner - user or system
+# ======================================
+def get_db_owner(db_name):
+    global active_dbms
+    try:
+        db_owner = active_dbms[db_name]['owner']
+    except:
+        db_owner = ""
+    return db_owner
 # =======================================
 # Is valid DBMS
 # ======================================
@@ -865,7 +961,6 @@ def get_dbms_array():
     global active_dbms
     return list(active_dbms)
 
-
 # =======================================
 # Get the number of databases
 # ======================================
@@ -877,18 +972,18 @@ def count_dbms():
 # =======================================
 # Get the list of databases
 # ======================================
-def get_dbms_list():
+def get_dbms_list(status):
     global active_dbms
-    stmt = "\r\nList of DBMS connections\r\n"
-    stmt += "Logical DBMS         Database Type IP:Port                        Storage\r\n"
-    stmt += "-------------------- ------------- ------------------------------ -------------------------\r\n"
+
+    title = ["Logical DBMS", "Database Type", "Owner", "IP:Port", "Configuration", "Storage"]
+    info_list = []
     for key in sorted(list(active_dbms)):
         dbms = active_dbms[key]['connection']
-        stmt += key.ljust(20)[:20] + " "
-        stmt += active_dbms[key]['db type'].ljust(13)[:13] + " "
-        stmt += dbms.get_ip_port().ljust(30)[:30] + " "
-        stmt += dbms.get_storage_type() + "\r\n"
-    return stmt
+
+        info_list.append((key, active_dbms[key]['db type'], active_dbms[key]['owner'],  dbms.get_ip_port(), dbms.get_config(status), dbms.get_storage_type()))
+
+    reply = utils_print.output_nested_lists(info_list, "Active DBMS Connections", title, True)
+    return reply
 # =======================================
 # Get the dictionary with databases info
 # ======================================
@@ -1579,7 +1674,7 @@ def delete_tsd_row(status, table_name, row_id):
 
     sql_delete = f"delete from {table_name} where file_id = '{row_id}'"
 
-    reply_val, rows = process_contained_delete_stmt(status, "almgm", sql_delete)
+    reply_val, rows = process_contained_stmt(status, "almgm", sql_delete)
 
     if reply_val:
         if rows == 1:
@@ -1763,7 +1858,7 @@ def blockchain_delete_by_id(status, policy_id):
 
     sql_delete = "delete from ledger where policy_id = '%s'" % policy_id
 
-    reply_val, rows = process_contained_delete_stmt(status, "blockchain", sql_delete)
+    reply_val, rows = process_contained_stmt(status, "blockchain", sql_delete)
 
     if reply_val:
         if rows == 1:
@@ -1835,7 +1930,7 @@ def blockchain_select(status, destination: str, filename: str, lock_key: str):
                     policy = entry[1].replace("\\'", "'")       # The policy entry
 
             if not host or not policy:
-                status.add_error("\Error in policy format: %s" % str(entry))
+                status.add_error("Error in policy format: %s" % str(entry))
                 ret_val = False
                 break
 
@@ -1844,7 +1939,7 @@ def blockchain_select(status, destination: str, filename: str, lock_key: str):
                 if json_entry:
                     utils_print.jput(json_entry, True)
                 else:
-                    status.add_error("\Error in policy format: %s" % str(policy))
+                    status.add_error("Error in policy format: %s" % str(policy))
                     ret_val = False
                     break
 
@@ -1971,8 +2066,7 @@ def select_parser(status, select_parsed, dbms_name, src_command, return_no_data,
         ret_val = process_status.Failed_to_parse_sql
         sql_stmt = src_command
 
-    reply_list = [ret_val, table_name, sql_stmt]
-    return reply_list
+    return [ret_val, table_name, sql_stmt]
 
 # ==================================================================
 # Return the size of the dbms in bytes
@@ -1986,7 +2080,15 @@ def get_dbms_size(status, dbms_name):
 
     reclaim_dbms_space(status, dbms_name)
 
-    reply = db_connect.get_dbms_size(status)  # Implemented by each interface
+    dbms_size = db_connect.get_dbms_size(status)  # Implemented by each interface
+
+    if len(dbms_size) > 3:
+        try:
+            reply = f"{int(dbms_size):,}"
+        except:
+            reply = dbms_size
+    else:
+        reply = dbms_size
 
     return reply
 

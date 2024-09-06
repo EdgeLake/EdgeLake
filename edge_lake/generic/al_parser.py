@@ -54,6 +54,7 @@ class SelectParsed():
         self.projection_parsed = []  # array with the projection list
         self.is_func_calls = False  # are projected field values or functions
         self.proprietary_functions = []  # array with anylog functions (like increments)
+        self.increment_info = ""        # Time unit and interval - used in trace mode by Grafana
         self.where_tree = None  # a TREE structure representing the where stmt
         self.distinct = False
         self.casting_list = []  # A list of casting for each column retrieved like ::float(3))
@@ -86,6 +87,17 @@ class SelectParsed():
         self.pass_through = False
         self.per_column = None      # A field name used in local query (with extended tables) to specify limit per table
 
+    # =======================================================================================================================
+    # Increment function info - used in trace mode by Grafana
+    # =======================================================================================================================
+    def set_increment_info(self, info):
+        self.increment_info = info
+
+    # =======================================================================================================================
+    # Increment function info - used in trace mode by Grafana
+    # =======================================================================================================================
+    def get_increment_info(self):
+        return self.increment_info
 
     # =======================================================================================================================
     # A local query will do the limit locally (not in the SQL query)
@@ -614,6 +626,8 @@ class SelectParsed():
         else:
             for index, data_type in enumerate(query_data_types):
 
+                if len(self.casting_columns) and str(index) in self.casting_columns:
+                    continue        # This date-time is being mapped using casting  -- keep UTC time
                 if data_type.startswith("timestamp"):
                     # make a list of time columns
                     self.date_types.append((str(index), self.query_title[index]))  # A list of the time data types
@@ -794,17 +808,21 @@ class SelectParsed():
     # =======================================================================================================================
     # Apply the results of the leading query on the next query
     # =======================================================================================================================
-    def process_leading_results(self):
+    def process_leading_results(self, status):
 
         leading_query = self.get_current_leading()
 
         # get the result to apply on the next query
         leading_results = leading_query.get_results()
-        if leading_query.get_function() == "period":
-            # update the main query with start time and end time
-            ret_val = self.apply_period_time_interval(leading_results)
+        if not len(leading_results):
+            status.add_error(f"Leading query to determine date range failed to return results: \"{leading_query.get_leading_query()}\"")
+            ret_val = process_status.Missing_leading_results
         else:
-            ret_val = process_status.SUCCESS
+            if leading_query.get_function() == "period":
+                # update the main query with start time and end time
+                ret_val = self.apply_period_time_interval(leading_results)
+            else:
+                ret_val = process_status.SUCCESS
         return ret_val
 
     # =======================================================================================================================

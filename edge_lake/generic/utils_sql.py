@@ -10,7 +10,7 @@ import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_data as utils_data
 import edge_lake.generic.utils_columns as utils_columns
 import edge_lake.generic.utils_print as utils_print
-
+import edge_lake.generic.params as params
 
 trace_level_ = 0
 trace_command_ = ""     # Limit trace to this command
@@ -1022,6 +1022,24 @@ def orgaize_where_condition(source_string, offset):
             where_string += source_string[offset_copied:offset_copied + bytes_to_copy] + replace_char
             bytes_to_copy = 0
             offset_copied = offset + 1
+        elif char == "!" and previous == ' ':
+            # replace with dictionary
+            where_string += source_string[offset_copied:offset_copied + bytes_to_copy]
+            bytes_to_copy = 0
+            offset_next = source_string.find(' ', offset)   # Find the space to flag end of word after exclamation point
+            if offset_next == -1:
+                offset_next = len(source_string)
+            offset_copied = offset_next + 1
+            key = source_string[offset:offset_next]
+            if len(key) >= 2:
+                word_value = params.get_value_if_available(key)
+            else:
+                word_value = key
+            where_string += word_value if word_value else source_string[offset:offset_next]
+            previous = where_string[-1]
+            where_string += ' '
+            char = ' '     # Because char was replaced by dictionary and space is jumped over by  offset += 1 below
+            offset = offset_next
         else:
             bytes_to_copy += copy_length
 
@@ -1188,6 +1206,10 @@ def process_projection(status, select_parsed):
 
         select_parsed.add_projection(is_function, inner_name, function_name, as_name, field_name)
         if casting_str:
+            if casting_str[:8] == "timediff" and "now()" in casting_str:
+                # Replace now() with current time
+                utc_time = utils_columns.get_current_utc_time()
+                casting_str = casting_str.replace("now()", f"'{utc_time}'")
             select_parsed.add_casting(index - counter_instruct_func + counter_extended, casting_str)
 
     return ret_val
@@ -1964,12 +1986,29 @@ def make_output_row(row_number, title_list, data_types_list, query_data):
                 key = str(x)
                 if key in data.keys():
                     data_type = data_types_list[x]
-                    if data_type in get_value_by_type_:
-                        json_row += get_value_by_type_[data_type](str(data[str(x)]))    # The outer str is because of casting
+                    data_val = data[str(x)]
+                    if not data_val:
+                        json_row += "null"  # add NULL if field not provided
                     else:
-                        json_row += get_value_by_type_["string"](data[str(x)])
+                        if data_type == "casting":
+                            # determine the data_type dynamically
+                            if isinstance(data_val,str):
+                                data_type = "str"
+                            elif isinstance(data_val,int):
+                                data_type = "int"
+                            elif isinstance(data_val, float):
+                                data_type = "float"
+                            elif isinstance(data_val, bool):
+                                data_type = "bool"
+                            else:
+                                data_type = "string"
+                            data_val = str(data_val)    # print will format the string by type
+                        if data_type in get_value_by_type_:
+                            json_row += get_value_by_type_[data_type](data_val)    # The outer str is because of casting
+                        else:
+                            json_row += get_value_by_type_["string"](data_val)
                 else:
-                    json_row += "NULL"  # add NULL if field not provided
+                    json_row += "null"  # add NULL if field not provided
 
             json_row += "}"
 
@@ -2241,6 +2280,24 @@ def update_and_stmt(status, and_array, where_str):
         if not ret_value:
             if utils_columns.is_valid_operator(operation):
                 right_operand = utils_data.remove_quotations(right_operand)
+                if operation == 'is':
+                    if right_operand != 'null' and right_operand != 'null)':
+                        # "is null" is allowed
+                        if right_operand == "not":
+                            start_offset, end_offset = get_sql_unit(where_str, False, end_offset)
+                            right_operand =  where_str[start_offset:end_offset]
+                            if right_operand != 'null' and right_operand != "null)":
+                                ret_value = process_status.Failed_to_parse_sql
+                            else:
+                                # the case of "IS NOT NULL"
+                                operation = "is not"
+                        else:
+                            ret_value = process_status.Failed_to_parse_sql
+                    if ret_value:
+                        status.add_keep_error("SQL parsing of WHERE condition failed (failed to identify \"is null\" or \"is not null\"): '%s'" % where_str)
+                        break
+
+
                 and_array.append((left_operand, operation, right_operand))
             else:
                 ret_value = process_status.Failed_to_parse_sql

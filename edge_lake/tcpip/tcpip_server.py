@@ -78,7 +78,7 @@ def rceive_data(status, mem_view, params, clientSoc, ip_in, port_in, max_buffr_s
             ret_val = process_status.ERR_network
             if unique_job_id:
                 # signal the REST thread that there is an error
-                member_cmd.stop_job_signal_rest(ret_val, job_location, unique_job_id)
+                member_cmd.stop_job_signal_rest(status, ret_val, job_location, unique_job_id)
 
             break
 
@@ -104,7 +104,7 @@ def rceive_data(status, mem_view, params, clientSoc, ip_in, port_in, max_buffr_s
             if unique_job_id:
                 # signal the REST thread that there is an error
                 if message_header.is_source_ip_port(mem_view, net_utils.get_external_ip_port()):  # test if this is the server initiating the message
-                    member_cmd.stop_job_signal_rest(ret_val, job_location, unique_job_id)
+                    member_cmd.stop_job_signal_rest(status, ret_val, job_location, unique_job_id)
 
             break
 
@@ -149,7 +149,7 @@ def rceive_data(status, mem_view, params, clientSoc, ip_in, port_in, max_buffr_s
         if command != "":
             command += " message"  # this would trigger __process_job() to process the job reply
 
-            if not command_ret_val or (unique_job_id and member_cmd.is_with_subset(job_location, unique_job_id)):
+            if not command_ret_val or (unique_job_id and member_cmd.is_with_subset(status, job_location, unique_job_id)):
                 # Either:
                 # a) No error
                 # b) Process with partial results (subset flag is set to true)
@@ -163,7 +163,7 @@ def rceive_data(status, mem_view, params, clientSoc, ip_in, port_in, max_buffr_s
                     if unique_job_id:  # Source node is True if the message is a reply
                         # :  # test if this is the server initiating the message
                         if message_header.is_source_ip_port(mem_view, net_utils.get_external_ip_port()):
-                            member_cmd.stop_job_signal_rest(command_ret_val, job_location, unique_job_id)
+                            member_cmd.stop_job_signal_rest(status, command_ret_val, job_location, unique_job_id)
 
 
         else:
@@ -202,6 +202,13 @@ def get_info( status = None ):
         info_str += ", Threads Pool: %u" % workers_pool.get_number_of_threds()
 
     return info_str
+
+# ------------------------------------------------------------------
+# Return info on the TCP Server in command - show processes
+# ------------------------------------------------------------------
+def get_workers_pool():
+    global workers_pool
+    return workers_pool
 
 def get_ip():
     """

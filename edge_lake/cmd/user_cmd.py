@@ -64,7 +64,7 @@ else:
         path_prefix = path_prefix.replace('/', '\\')
 
 if not path_prefix:
-    print(f"\n\Path to 'EdgeLake' folder is not provided - define sys param: EDGELAKE_HOME")
+    print(f"\nPath to 'EdgeLake' folder is not provided - define sys param: EDGELAKE_HOME")
     exit(-1)
 else:
     index = path_prefix.rfind("EdgeLake")

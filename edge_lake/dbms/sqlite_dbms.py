@@ -9,6 +9,7 @@ import sys
 import sqlite3
 from sqlite3 import Error
 
+from edge_lake.dbms.database import sql_storage
 import edge_lake.generic.utils_io as utils_io
 import edge_lake.generic.utils_sql as utils_sql
 import edge_lake.generic.process_status as process_status
@@ -16,12 +17,22 @@ import edge_lake.generic.params as params
 from edge_lake.generic.params import get_path_separator
 import edge_lake.generic.interpreter as interpreter
 
+# Map the synchronous level to a more understandable format
+sync_map_ = {
+    0: "off",
+    1: "normal (critical points)",
+    2: "full (after each write)",
+    3: "extra (Extra syncs)"
+}
+
+
 # =======================================================================================================================
 # SQLITE Instance
 # =======================================================================================================================
-class SQLITE:
+class SQLITE(sql_storage):
 
     def __init__(self, in_ram):
+        super().__init__()
         self.dbms_name = ""
         self.path = ""  # path to the data files
         self.in_ram = in_ram  # True for an in memory dbms
@@ -29,31 +40,32 @@ class SQLITE:
         self.first_conn = None
         self.engine_name = "sqlite"
         self.autocommit = True
+        self.single_insert = True   # The JSON are mapped to a single insert. False maps the JSON to multiple inserts
 
-    def get_engine_name(self):
-        return self.engine_name
+    # =======================================================================================================================
+    #  Return the special configuration for "get databases" command
+    # =======================================================================================================================
+    def get_config(self, status):
 
-    def get_dbms_name(self):
-        return self.dbms_name
+        if self.autocommit:
+            config_str = "Autocommit On"
+        else:
+            config_str = "Autocommit Off"
 
-    def retrieve_files(self, *args):
-        return process_status.No_dbms_engine_support
+        if self.in_ram:
+            config_str += ", RAM"
 
-    def remove_multiple_files(self, *args):
-        return process_status.No_dbms_engine_support
+        synchronous_status = -1
+        cursor = self.get_cursor(status)
+        if cursor:
+            if self.execute_sql_stmt(status, cursor, "PRAGMA synchronous;"):
+                synchronous_status = cursor.fetchone()[0]
+            self.close_cursor(status, cursor)
+        sync_stat = sync_map_.get(synchronous_status, "Unknown")
 
-    def remove_file(self, *args):
-        return process_status.No_dbms_engine_support
+        config_str += f", Fsync {sync_stat}"
 
-    def get_file_list(self, *args):
-        return None
-
-    def count_files(self, *args):
-        return -1
-
-    def store_file(self, *args):
-        return False
-
+        return config_str
     # =======================================================================================================================
     #  Return True if the Cusror is self contained - it does not need any info from AnyLog
     # =======================================================================================================================
@@ -66,11 +78,6 @@ class SQLITE:
     def get_ip_port(self):
         return "Local"
 
-    # =======================================================================================================================
-    #  Return True for SQL Storage
-    # =======================================================================================================================
-    def is_sql_storage(self):
-        return True
     # =======================================================================================================================
     #  Return the storage type
     # =======================================================================================================================
@@ -151,6 +158,7 @@ class SQLITE:
             # memory dbms info - https://www.sqlite.org/uri.html and https://www.sqlite.org/sharedcache.html
             self.first_conn = self.db_connect_thread(status)
 
+
         return ret_val
 
     # ==================================================================
@@ -166,6 +174,9 @@ class SQLITE:
                 conn = sqlite3.connect(self.connect_name, uri=True, timeout=100000, check_same_thread=False)   # Keep long timeout because a lot of conflicts if autocommit is changed to False
             else:
                 conn = sqlite3.connect(self.connect_name, timeout=10, check_same_thread=False) # how long the connection should wait for a lock until raising an exception. The default for the timeout parameter is 5.0 (five seconds).
+
+            conn.execute("PRAGMA busy_timeout = 5000;") # change the busy timeout after the connection has been established:
+            #conn.execute("PRAGMA journal_mode=WAL;")
 
             if self.autocommit:
                 # Use autocommit
@@ -317,17 +328,35 @@ class SQLITE:
         except:
             error_msg = "Error: Failed to open Insert file: '%s'" % sql_file
             status.add_keep_error(error_msg)
-            return False
+            return [False, 0]
 
-        for rows_counter, entry in enumerate(f):
-            if not self.execute_sql_stmt(status, db_cursor, entry):
-                ret_val = False
-                break
+        if self.single_insert:
+            try:
+                entry = f.read()
+            except:
+                error_msg = "Error: Failed to read from Insert file: '%s'" % sql_file
+                status.add_keep_error(error_msg)
+                return [False, 0]
+            else:
+                ret_val = self.execute_sql_stmt(status, db_cursor, entry)
+                rows_counter = self.get_rows_affected(status, db_cursor)
+
+        else:
+            # Add row after row
+            for rows_counter, entry in enumerate(f):
+                if not self.execute_sql_stmt(status, db_cursor, entry):
+                    ret_val = False
+                    break
+            if ret_val:
+                rows_counter += 1
+            else:
+                rows_counter = 0
 
         if ret_val == False:
             error_msg = "Error executing SQL from file: %s" % sql_file
             status.add_error(error_msg)
             status.keep_error(error_msg)
+            rows_counter = 0
         else:
             self.commit(status, db_cursor)
 
@@ -337,9 +366,7 @@ class SQLITE:
             error_msg = "Error: Failed to close Insert file: '%s'" % sql_file
             status.add_keep_error(error_msg)
 
-        reply_list = [ret_val, rows_counter + 1]
-
-        return reply_list
+        return [ret_val, rows_counter]
 
     # ==================================================================
     # Execute SQL statement
@@ -791,38 +818,70 @@ class SQLITE:
 
         return sql_stmt
 
+    # =======================================
+    # Map rows to insert statements
+    # ======================================
+    def get_insert_rows(self, status: process_status, dbms_name: str, table_name: str, insert_size: int, column_names: list, insert_rows: list):
+
+        if self.single_insert:
+            # One insert command
+            inserts = self.get_single_insert(process_status, dbms_name, table_name, insert_size, column_names, insert_rows)
+        else:
+            # Multiple commands
+            inserts = self.get_multiple_inserts(process_status, dbms_name, table_name, insert_size, column_names, insert_rows)
+        return inserts
+    # =======================================
+    # Get a single insert for all new entries
+    # ======================================
+    def get_single_insert(self, status: process_status, dbms_name: str, table_name: str, insert_size: int,
+                          column_names: list, insert_rows: list):
+
+        # Generate column names string
+        column_names_str = ", ".join(entry[1] for entry in column_names)
+        insert_statements = []
+
+        for row in insert_rows:
+            if not row:
+                continue
+
+            # Generate values string
+            columns_string = ", ".join("NULL" if col_val == "DEFAULT" else col_val for col_val in row)
+
+            insert_statements.append(f"({columns_string})")
+
+        return f"INSERT INTO {table_name} ({column_names_str}) VALUES " + ",\n".join(insert_statements) + ';'
 
     # =======================================
     # Map rows to insert statements
     # Adding column names and removing default values
     # ======================================
-    def get_insert_rows(self, status: process_status, dbms_name: str, table_name: str, insert_size: int,
-                        column_names: list, insert_rows: list):
-        insert_statements = ""
+    def get_multiple_inserts(self, status: process_status, dbms_name: str, table_name: str, insert_size: int,
+                             column_names: list, insert_rows: list):
+        insert_statements = []
         counter_columns = len(column_names)
+
         for column_values in insert_rows:
             if not column_values:
                 continue
-            names_string = ""
-            values_string = ""
+
             if counter_columns < len(column_values):
-                status.add_error("Table '%s.%s' is declared with %u columns and row inserted has %u columns" % (
-                dbms_name, table_name, counter_columns, len(column_values)))
-                insert_statements = ""
-                break
+                status.add_error(
+                    f"Table '{dbms_name}.{table_name}' is declared with {counter_columns} columns and row inserted has {len(column_values)} columns")
+                return ""
+
+            names_list = []
+            values_list = []
 
             for index, value in enumerate(column_values):
-
                 if value != "DEFAULT":
-                    # add column name and value
-                    # Column name is a list wheras every entry includes: <JSON Attribute Name><Table Column Name><Data Type><Default Value>
-                    names_string += column_names[index][1] + ','
-                    values_string += value + ','
+                    # Add column name and value
+                    names_list.append(column_names[index][1])
+                    values_list.append(value)
 
-            insert_stmt = "INSERT INTO %s (%s) VALUES (%s);\n" % (table_name, names_string[:-1], values_string[:-1])
-            insert_statements += insert_stmt
-        return insert_statements
+            insert_stmt = f"INSERT INTO {table_name} ({','.join(names_list)}) VALUES ({','.join(values_list)});"
+            insert_statements.append(insert_stmt)
 
+        return "\n".join(insert_statements)
 
 # =======================================================================================================================
 # Database name can include path - seperate the database name from the path

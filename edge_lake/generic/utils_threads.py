@@ -11,9 +11,66 @@ import traceback
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.params as params
 import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.interpreter as interpreter
 import edge_lake.generic.process_log as process_log
 import edge_lake.cmd.member_cmd as member_cmd
 import edge_lake.tcpip.message_header as message_header
+
+
+system_threads_pools_ = {
+    # The lists of continues system threads using a pool
+}
+
+system_threads_names_ = {
+    # Convert lower to the stored name
+    # rest  --> REST, query -- > Query
+}
+def set_system_pool(pool_name, pool_obj):
+    system_threads_names_[pool_name.lower()] = pool_name
+    system_threads_pools_[pool_name] = pool_obj
+
+# =======================================================================================================================
+# List of system threads and their status
+# get system threads
+# get system threads where pool = tcp and with_details = true and reset = true
+# =======================================================================================================================
+def get_system_threads(status, io_buff_in, cmd_words, trace):
+
+    info = ""
+    #                             Must     Add      Is
+    #                             exists   Counter  Unique
+    keywords = {"pool": ("str", False, False, True),        # The name of the pool
+                "details": ("bool", False, False, True),    # Include details
+                "reset": ("bool", False, False, True),      # Reset statistics
+                }
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
+
+    if not ret_val:
+        pool = interpreter.get_one_value_or_default(conditions, "pool", None)
+        details = interpreter.get_one_value_or_default(conditions, "details", False)
+        reset = interpreter.get_one_value_or_default(conditions, "reset", False)
+
+        if pool:
+            if pool in system_threads_names_:
+                # Get the saved name
+                pool_name = system_threads_names_[pool]
+            else:
+                pool_name = None
+            if pool_name and pool_name in system_threads_pools_:
+                # A single pool
+                if  system_threads_pools_[pool_name]:
+                    # If not Null
+                    info += ("\r\n" + system_threads_pools_[pool_name].get_info(details, reset))
+            else:
+                status.add_error(f"Command 'get system threads' - Error in pool name: '{pool}'")
+                ret_val = process_status.ERR_command_struct
+        else:
+            # all pools
+            for key, pool in system_threads_pools_.items():
+                if pool:
+                    info += ("\r\n" + pool.get_info(details, reset))
+
+    return [ret_val, info]
 
 # --------------------------------------------------------------------------------
 # Read Write Lock
@@ -80,6 +137,8 @@ class WorkersPool:
         self.tasks_que = TasksQue(threads_count)  # declare a Que for instructions to the threads
 
         thread_name = pool_name.lower().replace(' ','_')
+
+        set_system_pool(self.pool_name, self)
 
         # init threads
         for i in range(threads_count):
@@ -258,11 +317,16 @@ class WorkersPool:
     # End Pool process by providing a task with NULL command to each thread
     # --------------------------------------------------------------------------------
     def exit(self):
+
+        set_system_pool(self.pool_name, None)
+
         self.active_threads = False
         for x in range(self.threads_count):
             task = self.get_free_task()
             task.set_cmd(None, None)  # None will make the thread to terminate
             self.add_new_task(task)
+
+
 
     # --------------------------------------------------------------------------------
     # Returns FALSE if pool was terminated
@@ -447,13 +511,20 @@ class Task:
 # --------------------------------------------------------------------------------
 def get_thread_name():
     try:
-        thread_name =  threading.currentThread().getName().lower()
+        thread_name =  threading.current_thread().name.lower()
     except:
         thread_name = "not_available"
     else:
         thread_name = thread_name.replace(" ", "_")
 
     return thread_name
+
+# --------------------------------------------------------------------------------
+# Print thread message
+# --------------------------------------------------------------------------------
+def print_thread_message(message):
+    t_name = get_thread_name()
+    utils_print.output(f"\r\nThread: {t_name} Message: {message}", False)
 
 # --------------------------------------------------------------------------------
 # Get the thread number from the thread name

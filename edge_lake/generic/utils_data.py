@@ -8,9 +8,13 @@ from datetime import datetime
 import ipaddress
 import uuid
 import hashlib
+import re
 
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.process_log as process_log
+
+# Define the pattern for characters to replace - 1) single quote 2) double quote 3) any control characters (both lower than space and higher than tilde ~).
+basic_pattern_ = re.compile(r"['\"\x00-\x1F\x7F-\x9F]")
 
 # Conversion table to allow proper dbms names and table names
 translate_dict_ = {}
@@ -34,6 +38,7 @@ data_types_unifier_ = {
 
     "str" :     "varchar",
     "string" :  "varchar",
+    'char varying' : "varchar",
     "uuid"   :  "uuid",
     "int":      "int",
     "bigint":   "bigint",
@@ -216,6 +221,24 @@ def unify_data_type( status, data_type_name ):
     return [ret_val, data_type]
 
 # -------------------------------------------------------------------------
+#   Return a unified data type from the data_types_unifier_
+# -------------------------------------------------------------------------
+def get_unified_data_type( data_type_name ):
+
+    global data_types_unifier_
+
+    data_type = data_type_name.strip()
+    if len(data_type):
+        if data_type in data_types_unifier_:
+            return data_types_unifier_[data_type]
+        if data_type.startswith("timestamp "):
+            return "timestamp"
+        if data_type.startswith("character"):
+            data_type = data_type.strip()   # Make the parenthesis without spaces (before and after)
+            return data_type.replace("character", "char", 1)
+
+    return None
+# -------------------------------------------------------------------------
 # Return true if the data type is in the supported dictionary
 # -------------------------------------------------------------------------
 def is_supported_data_type(data_type):
@@ -239,6 +262,25 @@ def is_supported_data_type(data_type):
 def reset_str_chars( source_str ):
     global translate_dict_
     return source_str.translate ( translate_dict_ )
+
+# ======================================================================================================================
+# Remove control chars (replace with space) - keep printable chars
+# Replace the following:
+# '\'': '`', '"': '`',  chars lower than ' ' or greater than  '~' with space
+# ======================================================================================================================
+def prep_data_string(src_str):
+
+    # Define the replacement function
+    def replacement(match):
+        ch = match.group(0)
+        if ch == '\'' or  ch == '"':
+            return '`'
+        return ' '
+
+    # Perform the replacement
+    result = basic_pattern_.sub(replacement, src_str)
+
+    return result
 
 # ======================================================================================================================
 # Remove control chars (replace with space) - keep printable chars
@@ -1399,6 +1441,12 @@ def seconds_to_hms(total_time):
 
     return [hours_time, minutes_time, seconds_time]
 
+# ======================================================================================================================
+# get a string with hh:mm:ss
+# ======================================================================================================================
+def get_formatted_hms(total_time):
+    hours_time, minutes_time, seconds_time = seconds_to_hms(total_time)
+    return "%02u:%02u:%02u" % (hours_time, minutes_time, seconds_time)
 
 # ======================================================================================================================
 # Go over entries in array and replace chars

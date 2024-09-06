@@ -63,16 +63,13 @@ import edge_lake.cmd.json_instruct as json_instruct
 import edge_lake.generic.process_log as process_log
 import edge_lake.generic.stats as stats
 import edge_lake.generic.version as version
+import edge_lake.generic.profiler as profiler
+import edge_lake.generic.trace_func as trace_func
 
-from edge_lake.json_to_sql.mapping_policy import set_mapping_trace
 from edge_lake.json_to_sql.suggest_create_table import *
 from edge_lake.dbms.dbms import connect_dbms, get_real_dbms_name
 import edge_lake.generic.node_info as node_info
 import edge_lake.tcpip.port_forwarding as port_forwarding
-
-
-code_version_ = 0    # git log -1 --oneline --decorate
-
 
 watch_directories = {}  # a dictionary of directories and threads watching each directory
 dir_mutex = threading.Lock()  # mutex to check threads considering directories
@@ -151,10 +148,14 @@ sql_commands = {
     "create" : 1,
 }
 
+
+
 nodes_options_ = ['operator','publisher','query','master']
 nodes_pattern_ = '|'.join(map(re.escape, nodes_options_))   # This is to quickly find node type
 commands_options_ = ["subset", "timeout"]
 commands_pattern_ = "|".join(re.escape(word) for word in commands_options_)
+
+
 
 # =======================================================================================================================
 # Return True if the query pool is active
@@ -255,7 +256,6 @@ workers_pool = None         # Pool of workers thread
 
 echo_queue = None  # A message queue for buffered messages
 
-
 # =======================================================================================================================
 # Connect a logical database to a physical database
 # 'connect dbms [db name] where type = [db type] and user = [db user] and ip = [db ip] and port = [db port] and password = [db passwd]  and memory = [true/false] and connection = [db string]
@@ -289,6 +289,8 @@ def _connect_dbms(status, io_buff_in, cmd_words, trace):
                 "memory": ("bool", False, False, True),     # True for in memory dbms
                 "connection" : ("str", False, False, True), # special connection string for the database
                 "autocommit": ("bool", False, False, True),  # change autocommit config with the underlying database
+                "unlog" : ("bool", False, False, True),     # create unlogged tables
+                # "fsync": ("bool", False, False, True),  # create unlogged tables
                 }
 
     ret_val, counter, conditions = interpreter.get_dict_from_words(status, words_array,
@@ -304,7 +306,7 @@ def _connect_dbms(status, io_buff_in, cmd_words, trace):
 
 
     db_usr = interpreter.get_one_value_or_default(conditions, "user", "")
-    password = interpreter.get_one_value_or_default(conditions, "password", "")
+    password = interpreter.get_one_value_or_default(conditions, "password", None)
     host = interpreter.get_one_value_or_default(conditions, "ip", "")
     port = interpreter.get_one_value_or_default(conditions, "port", "")
 
@@ -1170,7 +1172,8 @@ def blockchain_push_local(status, io_buff_in, cmd_words, trace, func_params):
         json_dictionary = None
 
     if not ret_val:
-        ret_val, json_dictionary = prep_policy(status, cmd_words[policy_offset], func_params[0])
+        compare_to_file = not func_params[1]    # If message to blockchain - this is a master node, avoid compare to local blockchain file
+        ret_val, json_dictionary = prep_policy(status, cmd_words[policy_offset], func_params[0], compare_to_file)
 
         if not ret_val:
             # if blockchain table was not created - create table ledger in blockchain dbms
@@ -1427,6 +1430,10 @@ def blockchain_seed_file(status, io_buff_in, cmd_words, trace, func_params):
     else:
         ret_val = process_status.ERR_command_struct
 
+    if ret_val:
+        # Because multiple nested process_cmd calls, the reset wll cause the error to be leveraged on the root process_cmd
+        status.reset_considerd_err_val()
+
     return [ret_val, None]
     # =======================================================================================================================
 # Represent the metadata in a diagram
@@ -1607,7 +1614,9 @@ def blockchain_get(status, cmd_words, blockchain_file, return_data):
                 if not output_str:
                     output_str = "[]"       # Return empty list
                 status.get_active_job_handle().set_result_set(output_str)
-            status.get_active_job_handle().signal_wait_event()  # signal the REST thread that output is ready
+            if status.is_rest_wait():
+                # Single the rest thread (that data is available) if on wait
+                status.get_active_job_handle().signal_wait_event()  # signal the REST thread that output is ready
 
         data_object = None
     else:
@@ -1722,7 +1731,7 @@ def blockchain_select_schema(status, dbms_name, table_name):
 
     ret_val, create_stmt = blockchain_get(status, cmd.split(), blockchain_file, True)
     if ret_val or not create_stmt:
-        status.add_error("Missing 'create' section in blockchain info for table: '%s.%s'" % (dbms_name, table_name))
+        status.add_error("Failed to retrieve table definition from metadata policy for table: '%s.%s'" % (dbms_name, table_name))
         return None
 
     ret_val, t_name, schema_list = utils_sql.create_to_column_info(status, create_stmt)
@@ -1909,12 +1918,12 @@ def load_table_metadata_from_blockchain(status, db_cursor, output_prefix, dbms_n
     if output and len(output):
         string_data = utils_sql.format_db_rows(status, db_cursor, output_prefix, output, [], None)
     else:
-        status.add_error("Failed to get blockchain data on: %s.%s" % (dbms_name, table_name))
+        status.add_error(f"Failed to get metadata info from Table Policy with DBMS: '{dbms_name}' and Table: '{table_name}'")
         return process_status.Failed_load_table_blockchain
 
     table_info = utils_json.str_to_json(string_data)
     if table_info == None:
-        status.add_error("Failed to map blockchain data on: %s.%s" % (dbms_name, table_name))
+        status.add_error(f"Error in the format of a Table Policy (DBMS: '{dbms_name}' and Table: '{table_name}')")
         return process_status.Failed_load_table_blockchain
 
     db_info.set_table(dbms_name, table_name, table_info)
@@ -1979,8 +1988,8 @@ def get_command_ip_port(status, cmd_words):
         ip_port_values.append([ip, port, "", "", True, 0])
 
     else:
-        # format in parenthesis
-        ips_ports = re.sub('\s+', ' ',ip_port_val[1:-1])  # remove extra spaces
+        # format in parentheses
+        ips_ports = re.sub(r'\s+', ' ',ip_port_val[1:-1])  # remove extra spaces
         ips_ports = ips_ports.strip()  # remove leading and trailing spaces
 
         if len(ips_ports) and (ips_ports.startswith("blockchain get") or ips_ports[0][0] == '('):
@@ -2221,11 +2230,10 @@ def get_goto_line(status, name_to_line, goto_name):
     status.add_error("Script includes goto command without declared destination: '%s'" % goto_name)
     return -1  # not found
 
-
 # =======================================================================================================================
 # List of threads running scrips and their info
 # =======================================================================================================================
-def get_threads_info(status, io_buff_in, cmd_words, trace):
+def get_user_threads(status, io_buff_in, cmd_words, trace):
     info = "Thread ID       Script\r\n" \
            "--------------- -----------------------\r\n"
 
@@ -3818,7 +3826,7 @@ def job_stop(status, io_buff_in, cmd_words):
 
         # A running job is being stopped from processing
 
-        j_instance.data_mutex_aquire('W')  # take exclusive lock
+        j_instance.data_mutex_aquire(status, 'W')  # take exclusive lock
 
         if j_instance.is_job_active():
             j_instance.set_job_status("Stopped")
@@ -3839,7 +3847,7 @@ def job_stop(status, io_buff_in, cmd_words):
             ret_val = process_status.ERR_job_id
             job_status = j_instance.get_job_status()
 
-        j_instance.data_mutex_release('W')
+        j_instance.data_mutex_release(status, 'W')
 
     else:
         ret_val = process_status.ERR_job_id
@@ -3855,13 +3863,13 @@ def job_stop(status, io_buff_in, cmd_words):
 # =======================================================================================================================
 # Stop the running Job and Signal a thread waiting to completion of a job
 # =======================================================================================================================
-def stop_job_signal_rest(error_code, job_location, unique_job_id):
+def stop_job_signal_rest(status, error_code, job_location, unique_job_id):
     j_instance = job_scheduler.get_job(job_location)
     j_handle = j_instance.get_job_handle()
     error_msg = process_status.get_status_text(error_code)  # error on the second node
     error_text = "REST thread with job[%u] ID: %u was signaled with error <%s>" % (
     job_location, unique_job_id, error_msg)
-    j_instance.data_mutex_aquire('W')  # Write Mutex
+    j_instance.data_mutex_aquire(status, 'W')  # Write Mutex
     # test thread did not timeout - or a previous process terminated the task
     if j_instance.is_job_active() and j_instance.get_unique_job_id() == unique_job_id:
         # Flag that the job is completed
@@ -3873,20 +3881,20 @@ def stop_job_signal_rest(error_code, job_location, unique_job_id):
                 # Signal REST Thread
                 process_log.add("Error", error_text)
                 j_handle.signal_wait_event()  # signal the REST thread that output is ready
-    j_instance.data_mutex_release('W')  # release the mutex that prevents conflict with the rest thread
+    j_instance.data_mutex_release(status, 'W')  # release the mutex that prevents conflict with the rest thread
 
 # =======================================================================================================================
 # Return True if allowing to return results from some nodes
 # With subset flag is set to true
 # =======================================================================================================================
-def is_with_subset(job_location, unique_job_id):
+def is_with_subset(status, job_location, unique_job_id):
     is_subset = False
     if unique_job_id:
         j_instance = job_scheduler.get_job(job_location)
-        j_instance.data_mutex_aquire('R')  # Read Mutex
+        j_instance.data_mutex_aquire(status, 'R')  # Read Mutex
         if j_instance.is_job_active() and j_instance.get_unique_job_id() == unique_job_id:
             is_subset = job_scheduler.get_job(job_location).get_job_handle().is_subset()  # return True if error from node is ignored
-        j_instance.data_mutex_release('R')
+        j_instance.data_mutex_release(status, 'R')
     return is_subset
 
 # =======================================================================================================================
@@ -3939,7 +3947,8 @@ def deliver_rows(status, io_buff_in, j_instance, receiver_id, par_id, is_pass_th
     counter_local_fields = select_parsed.get_counter_local_fields()  # the number of fields on the create stmt (or 0 for select *)
     local_fields = select_parsed.get_local_fields()  # the column name and data type of the fields in system_query database
 
-    conditions = j_instance.get_job_handle().get_conditions()
+    j_handle = j_instance.get_job_handle()
+    conditions = j_handle.get_conditions()
 
 
     destination, format_type, timezone = interpreter.get_multiple_values(conditions,
@@ -3950,16 +3959,13 @@ def deliver_rows(status, io_buff_in, j_instance, receiver_id, par_id, is_pass_th
     if is_pass_through:
         # Get the print format
         nodes_count = j_instance.get_nodes_participating()
-        output_manager = output_data.OutputManager(conditions, io_stream, False, nodes_count)
+        output_into = j_handle.get_output_into()    # If output generates HTML file
+        output_manager = output_data.OutputManager(conditions, io_stream, output_into, False, nodes_count)
         if len(casting_columns):
             # Data types changed - create a new data type list representing the output
             types_list = copy.copy(data_types_list)
             for index, column_id in  enumerate(casting_columns):
-                new_data_type = utils_columns.cast_key_to_type(casting_list[index])
-                if not new_data_type:
-                    status.add_error(f"Casting instraction {casting_list[index]} is not recognized")
-                    return process_status.NON_supported_casting
-                types_list[int(column_id)] = new_data_type
+                types_list[int(column_id)] = "casting"  # "casting" will force the output code to determine the type dynamically as it can change with casting
         else:
             types_list = data_types_list
         ret_val = output_manager.init(status, select_parsed.get_source_query(), title_list, types_list, select_parsed.get_dbms_name())
@@ -4091,11 +4097,12 @@ def query_summary(status, io_buff_in, j_instance, io_stream):
     j_handle.set_query_completed()      # Flag that the query is completed such that the REST thread will not re-print the summary
 
     j_handle.stop_timer()
+    output_into = j_handle.get_output_into()  # If output generates HTML file
 
     show_stat = interpreter.get_one_value_or_default(conditions, "stat", True)
     nodes_count = j_instance.get_nodes_participating()
 
-    output_manager = output_data.OutputManager(conditions, io_stream, show_stat, nodes_count)
+    output_manager = output_data.OutputManager(conditions, io_stream, output_into, show_stat, nodes_count)
 
     ret_val = output_manager.init(status, None, None, None, None)
 
@@ -4214,7 +4221,7 @@ def query_row_by_row(status, dbms_cursor, io_buff_in, conditions, sql_time, sql_
         casting_list = select_parsed.get_casting_list()  # The list of casting functions
         casting_columns = select_parsed.get_casting_columns()
 
-        output_manager = output_data.OutputManager(conditions, j_handle.get_output_socket(), add_stat, nodes_count)
+        output_manager = output_data.OutputManager(conditions, j_handle.get_output_socket(), j_handle.get_output_into(), add_stat, nodes_count)
 
         ret_val = output_manager.init(status, select_parsed.get_source_query(), title_list, data_types_list, select_parsed.get_dbms_name())
         if ret_val:
@@ -4296,7 +4303,7 @@ def query_row_by_row(status, dbms_cursor, io_buff_in, conditions, sql_time, sql_
         if message:  # prepare a reply
 
             fetch_counter += 1
-            # if data retrieved is send to an query node
+            # if data retrieved is send to a query node
 
             if f_object:
                 # Symetric encryption
@@ -4401,6 +4408,13 @@ def query_row_by_row(status, dbms_cursor, io_buff_in, conditions, sql_time, sql_
 
     if message:
 
+        job_instance.get_query_monitor().update_monitor(dbms_time)
+        query_log_time = job_instance.get_query_log_time()  # -1 means no logging, 0 - all or value representing query threshold in seconds
+        if query_log_time >= 0:
+            if query_log_time <= dbms_time:
+                # log slow queries
+                query_info = f"Sec: {dbms_time:>4,} Rows: {fetch_counter:>6,} DBMS: {dbms_cursor.get_table_name()} SQL: {sql_command}"
+                process_log.add("query", query_info)
 
         # if data retrieved is send to a query node
         if ret_val != process_status.ERR_network:
@@ -4449,6 +4463,9 @@ def query_row_by_row(status, dbms_cursor, io_buff_in, conditions, sql_time, sql_
         j_handle.set_query_completed()  # Flag that the query is completed such that the REST thread will not re-print the summary
         if not ret_val or ret_val > process_status.NON_ERROR_RET_VALUE:
             ret_val = output_manager.finalize(status, io_buff_in, fetch_counter, dbms_time, False, True, nodes_replied)
+
+        if output_manager.is_with_result_set():
+            j_handle.set_outpu_buff(output_manager.get_result_set())
 
 
     return ret_val
@@ -5892,6 +5909,76 @@ def _disconnect_dbms(status, io_buff_in, cmd_words, trace):
 
 
 # =======================================================================================================================
+# Get Info on partitions
+# get partitions info where dbms = smart_city and table = test
+'''
+Replacing:
+info table sensors readings partitions\n'
+                            'info table sensors readings partitions last\n'
+                            'info table sensors readings partitions first\n'
+                            'info table sensors readings partitions count',
+'''
+# =======================================================================================================================
+def get_partitions_info(status, io_buff_in, cmd_words, trace):
+
+    words_count = len(cmd_words)
+
+    offset = get_command_offset(cmd_words)
+
+    #                        Must     Add      Is
+    #                        exists   Counter  Unique
+
+    keywords = {"dbms": ("str", True, False, True),
+                "table": ("str", True, False, True),
+            }
+
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, offset + 4, 0, keywords, False)
+    if ret_val:
+        # conditions not satisfied by keywords or command structure
+        return [ret_val, None]
+
+
+    dbms_name = conditions["dbms"][0]
+    table_name = conditions["table"][0]
+
+    output_list = []
+
+    if partitions.is_partitioned(dbms_name, table_name):
+
+        partition_list = db_info.get_partitions_info(status, dbms_name, table_name, False)
+        '''
+        Example Info Returned
+        0 = {list: 3} ['par_test_2024_08_00_d14_insert_timestamp', '2024-08-01', '2024-08-14']
+        0 = {str} 'par_test_2024_08_00_d14_insert_timestamp'
+        1 = {str} '2024-08-01'
+        2 = {str} '2024-08-14'
+        __len__ = {int} 3
+        '''
+        if partition_list:
+            previous_table = ""
+            for entry in partition_list:
+                # Pull table name
+                match = re.search(r'\d', entry[0]) # Offset to date digit
+                table_by_par = entry[0][4:match.start()-1]
+                if table_by_par == previous_table:
+                    par_table = ""      # Info in the list
+                    counter += 1        # Count partitions per table
+                else:
+                    counter = 1
+                    par_table = table_by_par
+                    previous_table = table_by_par
+                start_date = entry[1]
+                end_date = entry[2]
+                output_list.append([par_table, counter, entry[0], start_date, end_date])
+
+            info_string = utils_print.output_nested_lists(output_list, f"Partitions in DBMS: '{dbms_name}'", ["Table", "Counter", "Partition", "Start Date", "End Data"], True, "    ")
+        else:
+            info_string = "Not Partitioned"
+    else:
+        info_string= "Not Partitioned"
+
+    return [ret_val, info_string]
+# =======================================================================================================================
 # Return the info on the specified table or view.
 # Examples:
 # info table sensors readings column
@@ -6121,8 +6208,10 @@ def _drop_table(status, io_buff_in, cmd_words, trace):
         command = message_header.get_command(mem_view)
         msg_words = command.split()
         words_array = msg_words
+        is_msg = True
     else:
         words_array = cmd_words
+        is_msg = False
 
     if len(words_array) == 7 and utils_data.test_words(words_array, 3, ["where", "dbms", "="]):
         table_name = params.get_value_if_available(words_array[2])
@@ -6154,8 +6243,12 @@ def _drop_table(status, io_buff_in, cmd_words, trace):
     else:
         ret_value = process_status.ERR_command_struct
 
-    return ret_value
+    if is_msg:
+        reply = process_status.get_status_text(ret_value)
+        display = "echo"  # error goes to the message queue
+        ret_val = send_display_message(status, ret_value, display, io_buff_in, reply, False)  # send text message to peers
 
+    return ret_value
 
 # =======================================================================================================================
 # Drops a partition
@@ -6624,7 +6717,7 @@ def _python(status, io_buff_in, cmd_words, trace):
 # Get policy of type 'instructions' by an ID
 # ==================================================================
 def get_instructions(status, instruct_id):
-    cmd_get_instruct = ["blockchain", "get", "mapping", "where", "id", "="]
+    cmd_get_instruct = ["blockchain", "get", "(mapping, transform)", "where", "id", "="]
     cmd_get_instruct.append(instruct_id)
     ret_val, mapping = blockchain_get(status, cmd_get_instruct, "", True)  # Get info from the blockchain
     if not ret_val:
@@ -6636,7 +6729,7 @@ def get_instructions(status, instruct_id):
         instruct = None
 
     if not instruct:
-        status.add_error("Failed to retrieve mapping instructions with id: '%s'" % instruct_id)
+        status.add_error("Failed to retrieve Mapping or Transform instructions with id: '%s'" % instruct_id)
 
     return instruct
 
@@ -6807,7 +6900,8 @@ def post_process_command(status, io_buff_in, ret_val, is_msg, is_policy, reply, 
         else:
             if status.get_active_job_handle().is_rest_caller():
                 status.get_active_job_handle().set_result_set(reply)
-                status.get_active_job_handle().signal_wait_event()  # signal the REST thread that output is ready
+                if status.is_rest_wait():   # if a REST caller is on wait for a reply from the destinations nodes
+                    status.get_active_job_handle().signal_wait_event()  # signal the REST thread that output is ready
             else:
                 if reply:
                     if is_policy:
@@ -7049,7 +7143,7 @@ def integrate_print_reply(status, is_async_io, is_subset, is_reply_msg, io_buff_
         cmd_text = message
         is_last = False if is_async_io else True        # If is_async_io then failure of message send doesnt't terminate the object
 
-    j_instance.data_mutex_aquire('R')  # Read Mutex - to test that the job is active
+    j_instance.data_mutex_aquire(status, 'R')  # Read Mutex - to test that the job is active
 
     if j_instance.is_job_active() and j_instance.get_unique_job_id() == unique_job_id:
 
@@ -7057,28 +7151,32 @@ def integrate_print_reply(status, is_async_io, is_subset, is_reply_msg, io_buff_
 
         j_instance.set_par_ret_code(receiver_id, 0, node_ret_val)
 
-    j_instance.data_mutex_release('R')
+    j_instance.data_mutex_release(status, 'R')
 
     if is_last:
         # Last block from the node received
-        j_instance.end_job_instance(unique_job_id, is_reply_msg, is_subset)
+        j_instance.end_job_instance(status, unique_job_id, is_reply_msg, is_subset)
 
 
 # =======================================================================================================================
 # Get data from Job instance which is updated by peer nodes on the peer nodes
 # The data is returned as a list or a dictionary
 # =======================================================================================================================
-def get_data_struct_from_job(job_id, unique_job_id):
+def get_data_struct_from_job(status, job_id, unique_job_id):
+    reply = ""
     j_instance = job_scheduler.get_job(job_id)
-    j_instance.data_mutex_aquire('W')  # Write Mutex
+    j_instance.data_mutex_aquire(None, 'W')  # Write Mutex
     # test thread did not timeout - or a previous process terminated the task
     if j_instance.is_job_active() and j_instance.get_unique_job_id() == unique_job_id:
         j_handle = j_instance.get_job_handle()
         assignment = j_handle.get_assignment()  # If with value - results are assigned to the assignment key
-        is_dict = assignment[-2] == '{'  # Flag if output is set in a dictionary or as a list
-        out_obj = j_instance.get_nodes_reply_object(is_dict)
-    j_instance.data_mutex_release('W')  # release the mutex that prevents conflict with the rest thread
-    return utils_json.to_string(out_obj)
+        if assignment and isinstance(assignment,str):
+            is_dict = assignment[-2] == '{'  # Flag if output is set in a dictionary or as a list
+            out_obj = j_instance.get_nodes_reply_object(is_dict)
+            if out_obj:
+                reply = utils_json.to_string(out_obj)
+    j_instance.data_mutex_release(None, 'W')  # release the mutex that prevents conflict with the rest thread
+    return reply
 # =======================================================================================================================
 # Assign values to variables - when a script is processe, assign the values provided with the scripts
 # Variables are declared with the keyword variables followed by variable names in parenthesis, example:
@@ -7692,6 +7790,112 @@ def _map_json_to_insert(status, io_buff_in, cmd_words, trace):
 
     return ret_val
 
+
+# =======================================================================================================================
+# Get the profiler output
+# get profiler output where target = operator
+# =======================================================================================================================
+def get_profiler_output(status, io_buff_in, cmd_words, trace):
+
+    reply = None
+
+    if cmd_words[3] != "where":
+        return [process_status.ERR_command_struct, None]
+
+    operation = cmd_words[2]
+
+    if operation != "output":
+        return [process_status.ERR_command_struct, None]
+
+    #                                Must     Add      Is
+    #                                exists   Counter  Unique
+
+    keywords = {"target": ("str", True, False, True),  # i.e. target = "operator"
+
+                }
+
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
+    if ret_val:
+        # conditions not satisfied by keywords or command structure
+        return [ret_val, None]
+
+    if not profiler.is_active():
+        return process_status.Profiler_lib_not_loaded
+
+    target = interpreter.get_one_value(conditions, "target")
+
+    if not profiler.is_target(target):
+        status.add_error("Not recognized profile target: %s" % target)
+        return process_status.ERR_command_struct
+
+    if profiler.is_running(target):
+        # profiler was not set to off
+        status.add_error("profiler for target: %s is at 'on' mode (switch to 'off')" % target)
+        ret_val = process_status.Profiler_call_not_in_sequence
+    else:
+
+        reply = profiler.get_profiler_results(target)
+
+    return [ret_val, reply]
+# =======================================================================================================================
+# Enable and disable the profiler
+# set profiler on where target = operator
+# =======================================================================================================================
+def set_profiler(status, io_buff_in, cmd_words, trace):
+
+    if cmd_words[3] != "where":
+        return process_status.ERR_command_struct
+
+    operation = cmd_words[2]
+
+    if operation != "on" and operation != "off":
+        return process_status.ERR_command_struct
+
+    #                                Must     Add      Is
+    #                                exists   Counter  Unique
+
+    keywords = {"target": ("str", True, False, True),   # i.e. target = "operator"
+                "reset": ("bool", False, False, True),  # Reset / maintain results
+                }
+
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
+    if ret_val:
+        # conditions not satisfied by keywords or command structure
+        return ret_val
+
+    if not profiler.is_active():
+        return process_status.Profiler_lib_not_loaded
+
+    target = interpreter.get_one_value(conditions, "target")
+
+    if not profiler.is_target(target):
+        status.add_error("Not recognized profile target: %s" % target)
+        return process_status.ERR_command_struct
+
+    if operation == "on":
+        reset_results = interpreter.get_one_value_or_default(conditions, "reset", True)
+        if not profiler.set_instructions(target, True, reset_results):
+            # is already on
+            status.add_error("Repeatable calls to set profiler to 'on' for target: %s" % target)
+            return process_status.Profiler_call_not_in_sequence
+        comment = "Sart New Run" if reset_results else "Continue Previous Run"
+
+    elif operation == "off":
+        # Turn off
+        if not profiler.set_instructions(target, False, False):
+            # profiler was not turned on
+            status.add_error("profiler for target: %s is at 'off' mode" % target)
+            return process_status.Profiler_call_not_in_sequence
+        comment = "Run Paused"
+    else:
+        status.add_error("Profile command is missing on/off call")
+        ret_val = process_status.ERR_command_struct
+
+    if not ret_val:
+        opr_name = "Start" if operation == "on" else "Stop"
+        utils_print.output_box(f"{opr_name} {target} profiling ... {comment}")
+
+    return ret_val
 # =======================================================================================================================
 # Identify arbitrary messages and associate streaming data with a logical database, table and a topic
 # Example: set msg rule my_rule if ip = 139.162.126.241 and header = al.sl.header.new_company.syslog then dbms = test and table = syslog and syslog = true
@@ -8762,7 +8966,7 @@ def blockchain_commit(status, io_buff_in, cmd_words, trace, func_params):
             platform_name = params.get_value_if_available(cmd_words[3])
             json_key = params.get_value_if_available(cmd_words[4])
 
-            ret_val, json_dictionary = prep_policy(status, json_key, b_file)
+            ret_val, json_dictionary = prep_policy(status, json_key, b_file, True)
 
             if not ret_val:
                 policy_id =  utils_json.get_policy_value(json_dictionary, None, "id", None)
@@ -8890,12 +9094,16 @@ def blockchain_wait(status, io_buff_in, cmd_words, trace, func_params):
 # =======================================================================================================================
 # Add Missing components to the policy
 # =======================================================================================================================
-def prep_policy(status: process_status, json_key:str, blockchain_file:str):
+def prep_policy(status: process_status, json_key:str, blockchain_file:str, compare_to_file:bool):
     '''
     Giving a key to the AnyLog dictionary, the value assigned to the key is retrieved.
     If the value represents a Policy, the policy is validated and missing attributes are added:
     * Depending on the Policy type - the policy missing attributes are added.
     * For all policies - the ID and Date attribute are added (if missing from the policy)
+
+    compare_to_file - determine if to test policy against local file. In master this process is not done because:
+    a) It was done at the edge nodes
+    b) With master and operator in a single node, it can reject policies at the master
     '''
 
     json_data = params.get_value_if_available(json_key)
@@ -8915,12 +9123,13 @@ def prep_policy(status: process_status, json_key:str, blockchain_file:str):
         ret_val = policies.add_json_id_date(json_dictionary)  # if there is no ID to the JSON, add ID
         if not ret_val:
 
-            ret_val = policies.process_new_policy(status, json_dictionary, blockchain_file)  # Add values to special type of policies
-            if not ret_val:
-                if not utils_json.validate(json_dictionary):  # test dictionary can be represented as JSON
-                    ret_val = process_status.ERR_wrong_json_structure
-                else:
-                    ret_val = process_status.SUCCESS
+            if compare_to_file:
+                ret_val = policies.process_new_policy(status, json_dictionary, blockchain_file)  # Add values to special type of policies
+                if not ret_val:
+                    if not utils_json.validate(json_dictionary):  # test dictionary can be represented as JSON
+                        ret_val = process_status.ERR_wrong_json_structure
+                    else:
+                        ret_val = process_status.SUCCESS
     else:
         status.add_keep_error("String is not representative of JSON: " + json_data)
         ret_val = process_status.ERR_wrong_json_structure
@@ -8967,7 +9176,7 @@ def blockchain_drop_host(status, io_buff_in, cmd_words, trace, func_params):
 
     sql_delete = "delete from ledger where host = '%s'" % ip_port
 
-    reply_val, rows = db_info.process_contained_delete_stmt(status, "blockchain", sql_delete)
+    reply_val, rows = db_info.process_contained_stmt(status, "blockchain", sql_delete)
 
     if reply_val:
         if rows >= 1:
@@ -9448,83 +9657,6 @@ def update_blockchain(status, platform, mem_view, policy, ip_port, blockchain_fi
     return ret_val
 
 # =======================================================================================================================
-# Drop instances across the entire network:
-# drop network table where dbms = dbms_name and table = table name and master = !master_node
-# drop network operator where id = [operator id]
-# =======================================================================================================================
-def drop_network_object(status, io_buff_in, cmd_words, trace):
-
-    words_count = len(cmd_words)
-    if cmd_words[3] != "where":
-       ret_val = process_status.ERR_command_struct
-    else:
-        #                          Must     Add      Is
-        #                          exists   Counter  Unique
-        keywords = {"master": ("str", True, False, True),
-                    "dbms": ("str", False, True, True),
-                    "table": ("str", False, True, True),
-                    "id": ("str", False, False, True),  # File, dbms
-                    }
-        ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
-        if ret_val:
-            # conditions not satisfied by keywords or command structure
-            return ret_val
-
-        master_node = interpreter.get_one_value(conditions, "master")
-
-        if  words_count == 15 and cmd_words[2] == "table":
-            if counter != 2:
-                status.add_error("Missing dbms and table names in 'drop network table' command")
-                ret_val = process_status.ERR_command_struct
-            else:
-                dbms_name = interpreter.get_one_value(conditions, "dbms")
-                table_name = interpreter.get_one_value(conditions, "table")
-                ret_val = drop_network_table(status, io_buff_in, master_node, dbms_name, table_name)
-        elif words_count == 11 and cmd_words[2] == "operator":
-            operator_id = interpreter.get_one_value(conditions, "id")
-            if operator_id:
-                # send drop policy command to the master node
-                get_command = "blockchain get operator where id = %s" % operator_id
-                ret_val =  drop_policy_from_metadata(status, io_buff_in, master_node, get_command)
-            else:
-                status.add_error("Missing Operator ID in 'drop network operator' command")
-                ret_val = process_status.ERR_command_struct
-        else:
-            ret_val = process_status.ERR_command_struct
-
-    return ret_val
-
-# =======================================================================================================================
-# Drop network instance across the enire network:
-# drop network table where dbms = dbms_name and table = table name
-# drop network operator where id = [operator id]
-# =======================================================================================================================
-def drop_network_table(status, io_buff_in, master_node, dbms_name, table_name):
-    '''
-    Identify all nodes that host data and send drop table command
-    Update the blockchain to remove the table
-    '''
-    ret_val = process_status.SUCCESS
-
-    # Get the list of nodes that have local tables to drop
-    ret_val, operators_list = resolve_destination(status, "", False, dbms_name, table_name, "")
-
-    if not ret_val:
-
-        for operator in operators_list:
-            # drop the table with all operators
-            command_str = "run client %s:%s drop table %s where dbms = %s" % (operator[0], operator[1], table_name, dbms_name)
-            ret_val = process_cmd(status, command_str, False, None, None, io_buff_in)
-            if ret_val:
-                break
-
-        if not ret_val:
-            # drop the table definition from the blockchain
-            get_command = "blockchain get table where name = %s and dbms = %s" % (table_name, dbms_name)
-            ret_val = drop_policy_from_metadata(status, io_buff_in, master_node, get_command)
-
-    return ret_val
-# =======================================================================================================================
 # Retrieve the policy and if available -
 # send a message to the master node / or blockchain to delete the policy
 # =======================================================================================================================
@@ -9538,6 +9670,13 @@ def drop_policy_from_metadata(status, io_buff_in, master_node, get_command):
     if not ret_val:
         if len(policy) == 1:
             # Drop the operator policies
+            if not master_node:
+                cmd_get_master = f"blockchain get (master) bring.ip_port"
+                ret_val, master_node = blockchain_get(status, cmd_get_master.split(), None, True)
+                if ret_val or not master_node or not isinstance(master_node, str):
+                    status.add_error("Failed to retrieve Master Node IP and port from the Ledger")
+                    return process_status.ERR_process_failure
+
             policy_str = utils_json.to_string(policy[0])
             command_str = "run client %s blockchain drop policy %s" % (master_node, policy_str)
             ret_val = process_cmd(status, command_str, False, None, None, io_buff_in)
@@ -9547,6 +9686,37 @@ def drop_policy_from_metadata(status, io_buff_in, master_node, get_command):
 
     return ret_val
 
+
+# =======================================================================================================================
+# reset statistics on one or more services
+# Example: reset stats where service = operator and topic = summary
+# =======================================================================================================================
+def reset_statistics(status, io_buff_in, cmd_words, trace):
+
+    #                                       Must    Add     Is
+    #                                       exists  Counter Unique
+    keywords = {"service":      ("str",     True,   False,  True),
+                "topic":        ("str",     True,  False,   True)
+                }
+
+    offset = get_command_offset(cmd_words)
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 3 + offset, 0, keywords, False)
+    if ret_val:
+        # conditions not satisfied by keywords or command structure
+        return ret_val
+
+    service = conditions["service"][0]
+    topic = conditions["topic"][0]
+
+    if service == "operator" and topic == "summary":
+        # Rest summary values
+        stats.reset_operator_summary()
+
+    else:
+        status.add_error(f"Wrong service and topic names: '{service}' and '{topic}'")
+        ret_val = process_status.ERR_process_failure
+
+    return ret_val
 
 # =======================================================================================================================
 # Get statistics on one or more services
@@ -11156,7 +11326,7 @@ def next_query(status, io_buff_in, j_instance):
     # Apply the results of the leading query
     select_parsed = j_instance.get_job_info().get_select_parsed()
 
-    ret_val = select_parsed.process_leading_results()  # apply the results on the next query
+    ret_val = select_parsed.process_leading_results(status)  # apply the results on the next query
     if ret_val:
         error_msg = "Failed to process leading query for: " + select_parsed.get_generic_query()
         status.add_error(error_msg)
@@ -11175,7 +11345,7 @@ def next_query(status, io_buff_in, j_instance):
         is_leading, new_message = process_leading_message(status, select_parsed)
         if is_leading:
             # send leading message
-            message = new_message  # The Leadeing Message
+            message = new_message  # The Leading Message
             ret_val = process_status.SUCCESS
         else:
             # Get main query
@@ -11287,7 +11457,7 @@ def process_all_nodes_replied(status, peer_error, node_error, code_status, j_ins
             # Wait that all messages are send, before testing j_instance.all_replied()
             time.sleep(1)
 
-    j_instance.data_mutex_aquire('W')  # take exclusive lock
+    j_instance.data_mutex_aquire(status, 'W')  # take exclusive lock
 
     if j_instance.all_replied() or (peer_error and peer_error != process_status.Empty_data_set and not j_handle.is_subset()) or node_error:
 
@@ -11300,7 +11470,7 @@ def process_all_nodes_replied(status, peer_error, node_error, code_status, j_ins
 
         if not j_instance.is_job_active() or j_instance.get_unique_job_id() != unique_job_id or (is_rest_caller and j_handle.is_signaled()):
             # Process ended by a different thread
-            j_instance.data_mutex_release('W')
+            j_instance.data_mutex_release(status, 'W')
             if peer_error:
                 ret_val = peer_error
             else:
@@ -11342,7 +11512,7 @@ def process_all_nodes_replied(status, peer_error, node_error, code_status, j_ins
                         # At least one node replied with data, otherwise, query ends
                         ret_val = next_query(status, io_buff_in, j_instance)
                         if ret_val:
-                            j_instance.data_mutex_release('W')
+                            j_instance.data_mutex_release(status, 'W')
                             return ret_val
                         completed = False
 
@@ -11380,7 +11550,7 @@ def process_all_nodes_replied(status, peer_error, node_error, code_status, j_ins
                     ret_val = process_status.Empty_data_set
 
 
-    j_instance.data_mutex_release('W')
+    j_instance.data_mutex_release(status, 'W')
 
     if name_key:
         # Execute the target query - using current query as an input to the target
@@ -11544,7 +11714,7 @@ def process_cmd(status, command, print_cmd, source_ip, source_port, io_buffer_in
 
         process_log.add("Error", header_txt + error_msg + ") " + cmd_text)  # update event log
 
-        if status.get_err_value() != error_code:
+        if status.get_considered_err_value() != error_code:
             # if equal - the error_code was set on the status objected and the error message was printed (this is a recursive call to process_cmd)
             if user_input:
                 if not first_word:  # if not assignment
@@ -11557,7 +11727,7 @@ def process_cmd(status, command, print_cmd, source_ip, source_port, io_buffer_in
                 echo_queue.add_msg("Error executing: [%s] Message: [%s]" % (' '.join(sub_str), error_msg))
             else:
                 utils_print.output(error_msg, True)  # print error message
-            status.set_err_value(error_code)
+            status.set_considerd_err_value(error_code)
 
     return error_code
 # =======================================================================================================================
@@ -11774,7 +11944,7 @@ def process_reply(status, io_buff_in):
     select_parsed = j_instance.get_job_info().get_select_parsed()
 
     # Use a read lock as a) multiple threads may update the job data and b) avoid conflict with the rest thread
-    j_instance.data_mutex_aquire('R')
+    j_instance.data_mutex_aquire(status, 'R')
 
     # test that JOB was not terminated
     if not j_instance.is_job_active() or j_instance.get_unique_job_id() != unique_job_id:
@@ -11790,7 +11960,7 @@ def process_reply(status, io_buff_in):
 
         opetrator_err = j_handle.get_operator_error_txt()
 
-        j_instance.data_mutex_release('R')  # release the mutex that prevents conflict with the rest thread
+        j_instance.data_mutex_release(status, 'R')  # release the mutex that prevents conflict with the rest thread
 
         if error_code != process_status.JOB_terminated_by_caller:
             # Not an error to be logged if the query was called to stop
@@ -11889,7 +12059,7 @@ def process_reply(status, io_buff_in):
                                              par_id)  # This call needs to be done after setting the reply data
 
     # release the read mutex
-    j_instance.data_mutex_release('R')
+    j_instance.data_mutex_release(status, 'R')
 
     if error_code or ret_val or j_instance.is_last_block(receiver_id, par_id) or code_status == 6:
         # In the case of an error, no data (code 6), or in the case of last message -> test if the JOB is completed
@@ -13269,7 +13439,150 @@ def test_connection(status, io_buff_in, cmd_words, trace):
     ret_val, reply = net_utils.test_host_port(ip_port)
     return [ret_val, reply]
 
+# =======================================================================================================================
+# Issue "drop table" command on all nodes that maintain the table's data
+# AND removes the blockchain ledger
+# Example: drop network table where name = ping_sensor and dbms = lsl_demo and master = 10.0.0.25:2548
+# =======================================================================================================================
+def drop_network_table(status, io_buff_in, cmd_words, trace):
 
+    reply = ""
+    keywords = {
+        #                 Must     Add      Is
+        #                 exists   Counter  Unique
+
+        "dbms": ("str", True, False, True),
+        "name": ("str", True, False, True),
+        "master": ("str", True, False, False),
+    }
+
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
+    if ret_val:
+        return ret_val
+
+    dbms_name = conditions["dbms"][0]
+    if dbms_name == '*':
+        status.add_error(f"Unrecognized database name - asterisk (*) for dbms name is not allowed")
+        return process_status.Error_command_params
+
+    table_name = conditions["name"][0]
+    if table_name == '*':
+        status.add_error(f"Unrecognized table name - asterisk (*) for table name is not allowed")
+        return process_status.Error_command_params
+
+    master_node = interpreter.get_one_value_or_default(conditions, "master", None)
+
+    # Get the list of nodes that have local tables to drop
+    ret_val, operators_list = resolve_destination(status, "", False, dbms_name, table_name, "")
+
+    # Get the list of operators that host the data
+    if not ret_val:
+        if not len(operators_list):
+            status.add_error(f"No operators for dbms: '{dbms_name}' and table '{table_name}'")
+            ret_val = process_status.Error_command_params
+        else:
+            ip_port_list = []
+            for operator in operators_list:
+                ip_port_list.append(f"{operator[0]}:{operator[1]}")
+            drop_cmd = f"drop_table_cmd{{}} = run client ({','.join(ip_port_list)}) drop table {table_name} where dbms = {dbms_name}"
+            ret_val = process_cmd(status, drop_cmd, False, None, None, io_buff_in)
+            if not ret_val:
+
+                time.sleep(3)       # Wait for the round trips
+
+                nodes_reply_str = params.get_value_if_available("!drop_table_cmd")
+                nodes_reply = utils_json.str_to_json(nodes_reply_str)
+                if not nodes_reply:
+                    status.add_error(f"Failed to interpret replies for 'test network tables' command with DBMS: '{dbms_name}' and table '{table_name}'")
+                    ret_val = process_status.ERR_process_failure
+                else:
+                    reply_summary = []
+                    all_dropped = True
+                    for operator in operators_list:
+                        ip_port = f"{operator[0]}:{operator[1]}"
+                        if ip_port in nodes_reply:
+                            # this node replied to the 'test network table command"
+                            single_reply = nodes_reply[ip_port]
+                            if single_reply != "Success":
+                                all_dropped = False
+                        else:
+                            single_reply = "No reply from node"
+                            all_dropped = False
+                        reply_summary.append([ip_port, single_reply])
+
+                    if all_dropped:
+                        get_command = f"blockchain get table where name = {table_name} and dbms = {dbms_name}"
+                        ret_val =  drop_policy_from_metadata(status, io_buff_in, master_node, get_command)
+                        if not ret_val:
+                            reply_summary.append(["Ledger Policy", "Dropped"])
+                        else:
+                            reply_summary.append(["Ledger Policy", "Not Dropped"])
+
+                    reply = utils_print.output_nested_lists(reply_summary, f"Drop Network Table: {dbms_name}.{table_name}", ["IP:Port","Status"], True)
+                    utils_print.output(reply, True)
+
+    return ret_val
+
+# =======================================================================================================================
+# Issue "test table" command on all nodes that maintain the table's data
+# Example: test network table where name = ping_sensor and dbms = lsl_demo
+# =======================================================================================================================
+def test_network_table(status, io_buff_in, cmd_words, trace):
+
+    reply = ""
+    keywords = {
+        #                 Must     Add      Is
+        #                 exists   Counter  Unique
+
+        "dbms": ("str", True, False, True),
+        "name": ("str", True, False, True),
+    }
+
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
+    if ret_val:
+        return [ret_val, None]
+
+    dbms_name = conditions["dbms"][0]
+    if dbms_name == '*':
+        status.add_error(f"Unrecognized database name - asterisk (*) for dbms name is not allowed")
+        return [process_status.Error_command_params, reply]
+
+    table_name = conditions["name"][0]
+
+    # Get the list of operators that host the data
+    operators = metadata.get_operators_by_company('*', dbms_name, table_name)
+    if not len(operators):
+        status.add_error(f"No operators for dbms: '{dbms_name}' and table '{table_name}'")
+        ret_val = process_status.Error_command_params
+    else:
+        ip_port_list = []
+        for operator in operators:
+            ip_port_list.append(operator[7])
+        test_cmd = f"test_table_cmd{{}} = run client ({','.join(ip_port_list)}) test table {table_name} where dbms = {dbms_name}"
+        ret_val = process_cmd(status, test_cmd, False, None, None, io_buff_in)
+
+        time.sleep(3)       # Wait for the round trips
+
+        nodes_reply_str = params.get_value_if_available("!test_table_cmd")
+        nodes_reply = utils_json.str_to_json(nodes_reply_str)
+        if not nodes_reply:
+            status.add_error(f"Failed to interpret replies for 'test network tables' command with DBMS: '{dbms_name}' and table '{table_name}'")
+            ret_val = process_status.ERR_process_failure
+        else:
+            reply_summary = []
+            for entry in operators:
+                operator_name = entry[5]
+                ip_port = entry[7]
+                if ip_port in nodes_reply:
+                    # this node replied to the 'test network table command"
+                    single_reply = nodes_reply[ip_port]
+                else:
+                    single_reply = "No reply from node"
+                reply_summary.append([operator_name, ip_port, single_reply])
+
+            reply = utils_print.output_nested_lists(reply_summary, f"Network status for DBMS: '{dbms_name}' Table '{table_name}'", ["Operator","IP:Port","Status"], True)
+
+    return [ret_val, reply]  # Return a message if an error
 # =======================================================================================================================
 # Test that a table definition in the dbms is the same as the blockchain definition of the table
 # Example: test table ping_sensor where dbms = lsl_demo
@@ -13392,9 +13705,13 @@ def compare_schema_ledger_to_table(status, dbms_name, table_name, blockchain_sch
                     break
 
                 if l_data_type != d_data_type:
-                    reply = f"Test table {dbms_name}.{table_name} schema failed: column {index + 1} ({l_column_name}) with data type '{l_data_type}' in blockchain and '{d_data_type}' in dbms schema"
-                    ret_val = process_status.Inconsistent_schema
-                    break
+                    l_unified_dt = utils_data.get_unified_data_type(l_data_type)
+                    d_unified_dt = utils_data.get_unified_data_type(d_data_type)
+                    if not l_unified_dt or not d_unified_dt or l_unified_dt != d_unified_dt:
+                        # Can be "timestamp without time zone" in the dbms and timestamp in the ledger
+                        reply = f"Test table {dbms_name}.{table_name} schema failed: column {index + 1} ({l_column_name}) with data type '{l_data_type}' in blockchain and '{d_data_type}' in dbms schema"
+                        ret_val = process_status.Inconsistent_schema
+                        break
 
     else:
         reply = "\r\n\r\nSchema for %s.%s in the local database is not recognized" % (dbms_name, table_name)
@@ -13852,37 +14169,51 @@ def _set_trace(status, io_buff_in, cmd_words, trace):
                 for command in commands.keys():
                     commands[command]['trace'] = trace_level
             else:
-                command = utils_data.get_str_from_array(words_array, 4, 0)
-                if command in commands:
-                    commands[command]['trace'] = trace_level
-                elif command == "tcp":
-                        # This will enable trace on IP and ports used
-                        # command: trace level = 1 tcp
-                        net_utils.set_tcp_debug(trace_level)
-                elif command[:11] == "sql command":
-                    # This will enable trace with SQL stmt
-                    # command: trace level = 1 sql command
-                    if len(command) > 11:
-                        trace_command = command[11:].lower().strip()
+                if cmd_words[4] == "insert":
+                    # trace the number of inserts
+                    # Example: trace level = 1 inserts 2000 --> Report every 2000
+                    # By default report every 1000
+                    if not trace_level:
+                        inserts_threshold = 0
                     else:
-                        trace_command = ""      # All commands
-                    utils_sql.set_trace_level(trace_level, trace_command)
-                elif command == "mapping":
-                    # Enables trace when source data is mapped in mapping_policy.apply_policy_schema()
-                    # command: trace level = 1 mapping
-                    set_mapping_trace(trace_level)
+                        if len(cmd_words) >= 6 and cmd_words[5].isdigit():
+                            inserts_threshold = int(words_array[5])
+                        else:
+                            inserts_threshold = 1000
+                    db_info.set_insert_threshold(inserts_threshold)
                 else:
-                    # test sub command
-                    command_list = command.split(' ',1)
-                    if len(command_list) == 2 and command_list[0] in commands and 'methods' in commands[command_list[0]]:
-                        # get the subcommand
-                        subcommands = commands[command_list[0]]['methods']
-                        if command_list[1] in subcommands:
-                            subcommands[command_list[1]]['trace'] = trace_level
+                    command = utils_data.get_str_from_array(words_array, 4, 0)
+                    if command in commands:
+                        commands[command]['trace'] = trace_level
+                    elif command == "tcp":
+                            # This will enable trace on IP and ports used
+                            # command: trace level = 1 tcp
+                            net_utils.set_tcp_debug(trace_level)
+                    elif command[:11] == "sql command":
+                        # This will enable trace with SQL stmt
+                        # command: trace level = 1 sql command
+                        if len(command) > 11:
+                            trace_command = command[11:].lower().strip()
+                        else:
+                            trace_command = ""      # All commands
+                        utils_sql.set_trace_level(trace_level, trace_command)
+                    elif trace_func.is_traced(command):
+                        # Enables trace on functions
+                        # For example: when source data is mapped in mapping_policy.apply_policy_schema()
+                        # command: trace level = 1 mapping
+                        trace_func.set_trace_level(command, trace_level)
+                    else:
+                        # test sub command
+                        command_list = command.split(' ',1)
+                        if len(command_list) == 2 and command_list[0] in commands and 'methods' in commands[command_list[0]]:
+                            # get the subcommand
+                            subcommands = commands[command_list[0]]['methods']
+                            if command_list[1] in subcommands:
+                                subcommands[command_list[1]]['trace'] = trace_level
+                            else:
+                                ret_val = process_status.ERR_command_struct
                         else:
                             ret_val = process_status.ERR_command_struct
-                    else:
-                        ret_val = process_status.ERR_command_struct
 
     else:
         ret_val = process_status.ERR_command_struct
@@ -14061,6 +14392,13 @@ def set_script(status, io_buff_in, cmd_words, trace):
 
     return ret_val
 
+# --------------------------------------------------------------
+# Set Buffer threshold - include a flag to signal if Publisher is running
+# Publisher node is not allowed with write_immediate set to True
+# --------------------------------------------------------------
+def set_buff_thresholds(status, io_buff_in, cmd_words, trace):
+
+    return streaming_data.set_thresholds(status, io_buff_in, cmd_words, trace, False)   # The False value is as Publisher is not supported in EdgeLake
 
 # ------------------------------------------
 # Create a list of ip and ports representing monitored nodes
@@ -14123,6 +14461,8 @@ def get_node_status(status, io_buff_in, cmd_words, trace):
 
     ret_val = process_status.SUCCESS
     reply = node_info.get_node_name() + " running"
+    if profiler.is_active():
+        reply += " -- in profiling mode"
 
     if words_count == (offset + 2):
         # Only get status
@@ -14234,7 +14574,7 @@ def get_partitions(status, io_buff_in, cmd_words, trace):
                             reply = utils_print.format_dictionary(par_struct, True, False, False, None)
                     else:
 
-                        reply = db_info.get_partitions_info(status, dbms_name, table_name)
+                        reply = db_info.get_partitions_info(status, dbms_name, table_name, True)
                         if not reply:
                             ret_val = process_status.Missing_par_info
                             reply = "No partitions info"
@@ -15427,7 +15767,7 @@ def get_databases(status, io_buff_in, cmd_words, trace):
             db_dict = db_info.get_dbms_dict()
             reply = utils_json.to_string(db_dict)
         else:
-            reply = db_info.get_dbms_list()
+            reply = db_info.get_dbms_list(status)
 
 
     return [process_status.SUCCESS, reply, out_format]
@@ -15587,6 +15927,8 @@ def get_operator_exec(status, io_buff_in, cmd_words, trace):
             query_counter = query_details["id"]
             rows_count = query_details["rows_count"]
             limit = query_details["limit"]
+            if not "threads" in query_details:
+                break       # Query was not yet set by the query thread
             threads_participating = query_details["threads"]
             threads_done = query_details["done"]
             thread_info = query_details["info"]
@@ -15790,12 +16132,9 @@ def get_pool_status(status, io_buff_in, cmd_words, trace):
 # ------------------------------------------------
 def get_version(status, io_buff_in, cmd_words, trace):
 
-    global code_version_
+    code_version = node_info.get_version(status)
 
-    if not code_version_:
-        code_version_ = node_info.get_version(status)
-
-    reply = f"EdgeLake: {code_version_}/240226"
+    reply = f"EdgeLake Version: {code_version}"   # Includes git version and date
 
     return [process_status.SUCCESS, reply]
 
@@ -16169,7 +16508,7 @@ def reset_echo_queue(status, io_buff_in, cmd_words, trace):
     return ret_val
 
 # --------------------------------------------------------------
-# Set the size of the threaads supporting a query
+# Set the size of the threads supporting a query
 # --------------------------------------------------------------
 def set_query_pool(status, io_buff_in, cmd_words, trace):
 
@@ -16633,6 +16972,15 @@ _reset_methods = {
                      'keywords': ["streaming"],
                  }
                  },
+        "stats": {'command': reset_statistics,
+                     'words_count': 10,
+                     'help': {
+                         'usage': "reset stats where service = [service name] and topic = [topic]",
+                         'example': "reset stats where service = operator and topic = summary",
+                         'text': "reset the statistics on the service and topic provided",
+                         'keywords': ["streaming"],
+                     }
+                     },
 
         "msg rule": {'command': message_server.reset_msg_rules,
                   'words_count': 4,
@@ -16764,16 +17112,38 @@ _reset_methods = {
 
 }
 _set_methods = {
+
+        "profiler": {'command': set_profiler,
+                     'words_min': 7,
+                     'help': {
+                         'usage': "set profiler [on/off] where target = [process name]",
+                         'example': "set profiler on where target = operator",
+                         'text': "Enable and disable profiling. Note: Profile libraries needs to be loaded per moudle using sys variables."\
+                                 "i.e.: PROFILE_OPERATOR=true",
+                         'keywords': ["debug", "profile"],
+                     }
+                     },
+
         "msg rule": {'command': set_msg_rule,
                         'words_min': 12,
                         'help': {
                             'usage': "set msg rule [rule name] if ip = [IP address] and port = [port] and header = [header text] then dbms = [dbms name] and table = [table name] and syslog = [true/false] and format = [data format] and topic = [topic name]",
-                            'example': " set msg rule my_rule if ip = 10.0.0.78 and port = 1468 then dbms = test and table = syslog and syslog = true",
+                            'example': "set msg rule my_rule if ip = 10.0.0.78 and port = 1468 then dbms = test and table = syslog and syslog = true",
                             'text': "Identify arbitrary messages and associate streaming data with a logical database, table and a topic",
                             'link' : 'blob/master/using%20syslog.md#setting-a-rule-to-accept-syslog-data',
                             'keywords': ["streaming"],
                         }
                         },
+
+        "buffer threshold": {'command': set_buff_thresholds,
+                         'help': {
+                             'usage': "set buffer threshold where [configuration key value pairs]",
+                             'example': "set buffer threshold where dbms = al_demo and table = ping_sensor and time = 2 minutes and volume = 1MB",
+                             'text': "Configure time and volume thresholds for buffered streaming data.",
+                             'link': "blob/master/adding%20data.md#setting-and-retrieving-thresholds-for-a-streaming-mode",
+                             'keywords': ["data", "configuration", "streaming", "enterprise"],
+                         }
+                         },
 
         "port forward": {'command': set_port_forward,
                         'words_count': 19,
@@ -16922,6 +17292,7 @@ _set_methods = {
                            'usage': "set query pool [n]",
                            'example': "set query pool 5",
                            'text': "Sets the number of threads supporting queries (the default value is 3).",
+                           'link' : 'blob/master/node%20configuration.md#configuring-the-size-of-the-query-pool',
                            'keywords' : ["query", "profiling"],
                         }
                     },
@@ -16941,7 +17312,7 @@ _set_methods = {
                    'help': {
                        'usage': "set compression [on/off]",
                        'example': "set compression on",
-                       'text': "Enable\disable compression of data in message transfer.",
+                       'text': "Enable/disable compression of data in message transfer.",
                        'keywords' : ["data", "configuration"],
 
                         }
@@ -17114,6 +17485,17 @@ _test_methods = {
                        'keywords' : ["debug", "dbms"],
                     }
                    },
+        "network table": {'command': test_network_table,
+              'words_count': 11,
+              'help': {
+                  'usage': "test network table where name = [table name] and dbms = [dbms name]",
+                  'example': "test network table where name = ping_sensor and dbms = lsl_demo\n"
+                             "test network table where name = * and dbms = lsl_demo",
+                  'text': "Issue 'test table' command for all the operator nodes that host the table.",
+                  'link': 'blob/master/test%20commands.md#test-table',
+                  'keywords': ["debug", "dbms"],
+              }
+        },
 
 }
 
@@ -17335,6 +17717,18 @@ _query_status_methods = {
 }
 
 _get_methods = {
+
+        'profiler': {
+            'command': get_profiler_output,
+            'words_min': 7,
+            'help': {'usage': 'get profiler output where target = [process name]',
+                     'example': 'get profiler output where target = operator',
+                     'text': 'Output the profiler info',
+                     'keywords': ["debug", "profile"],
+                     },
+            'trace': 0,
+        },
+
         'stack trace': {
             'command': process_status.get_stack_traces,
             'words_min': 3,
@@ -17345,8 +17739,19 @@ _get_methods = {
                      'text': 'Output the stack trace of all threads',
                      'keywords': ["debug"],
                      },
-            'trace': 0,
-        },
+                'trace': 0,
+            },
+
+        'partitions info': {
+                'command': get_partitions_info,
+                'words_min': 10,
+                'help': {'usage': 'get partitions info where dbms = smart_city and table = test and details = [true/false]',
+                         'example': 'get partitions info where dbms = smart_city and table = test and details = true',
+                         'text': 'Provide info on the partitions used or a list of all partitions in the database',
+                         'keywords': ["node info", "dbms"],
+                         },
+                'trace': 0,
+            },
 
         'policies diff': {
                     'command': diff_policies,
@@ -17875,17 +18280,29 @@ _get_methods = {
                        }
                    },
 
-        "threads": {'command': get_threads_info,
+        "user threads": {'command': get_user_threads,
                   'key_only': True,
                   'help': {
-                      'usage': "get threads",
-                      'example': "get threads",
-                      'text': "Get the list of processes activated by the thread command.",
+                      'usage': "get user threads",
+                      'example': "get user threads",
+                      'text': "Get the list of processes activated by the 'thread' command.",
                       'keywords' : ["node info", "configuration"],
                     }
                   },
+        "system threads": {'command': utils_threads.get_system_threads,
+                     'min_words': 3,
+                     'help': {
+                         'usage': "get system threads where pool = [pool type] and with_details = [true/false] and reset = [true/false]",
+                         'example': "get system threads\n"
+                                    "get system threads where pool = query\n"
+                                    "get system threads where pool = rest and details = true",
+                         'text': "Get the list of system threads and their status.",
+                         'link' : "blob/master/node%20configuration.md#threads-configuration-and-monitoring",
+                         'keywords': ["node info", "configuration", "monitor"],
+                     }
+                     },
 
-        "query mode": {'command': get_query_params,
+    "query mode": {'command': get_query_params,
                 'key_only': True,
                 'help': {
                     'usage': "get query mode",
@@ -18096,7 +18513,7 @@ _get_methods = {
                     'usage': "get query pool",
                     'example': "get query pool",
                     'text': "Status of query threads assigned by the command 'set threads pool [n]'.",
-                    'link' : 'blob/master/anylog%20commands.md#get-pool-info',
+                    'link' : 'blob/master/node%20configuration.md#threads-configuration-and-monitoring',
                     'keywords' : ["query", "node info", "configuration"],
                     }
                 },
@@ -18106,7 +18523,7 @@ _get_methods = {
                      'usage': "get tcp pool",
                      'example': "get tcp pool",
                      'text': "Status of TCP threads.",
-                     'link' : 'blob/master/anylog%20commands.md#get-pool-info',
+                     'link' : 'blob/master/node%20configuration.md#threads-configuration-and-monitoring',
                      'keywords' : ["data", "node info", "configuration"],
                  }
                  },
@@ -18117,7 +18534,7 @@ _get_methods = {
                             'usage': "get rest pool",
                             'example': "get rest pool",
                             'text': "Status of REST threads.",
-                            'link' : 'blob/master/anylog%20commands.md#get-pool-info',
+                            'link' : 'blob/master/node%20configuration.md#threads-configuration-and-monitoring',
                             'keywords' : ["streaming", "node info", "configuration"],
                             }
                         },
@@ -18127,7 +18544,7 @@ _get_methods = {
                       'usage': "get msg pool",
                       'example': "get msg pool",
                       'text': "Status of Message Server threads.",
-                      'link' : 'blob/master/anylog%20commands.md#get-pool-info',
+                      'link' : 'blob/master/node%20configuration.md#threads-configuration-and-monitoring',
                       'keywords' : ["streaming", "node info", "configuration"],
                   }
                   },
@@ -18157,7 +18574,7 @@ _get_methods = {
                     'usage': "get git [version/info] [path to github root]",
                     'example': "get git version\n"
                                "get git info\n"
-                               "get git version D:\AnyLog-Code",
+                               "get git version D:/AnyLog-Code",
                     'text': "Return the git version or info.",
                     'keywords' : ["node info"],
                     }
@@ -18341,7 +18758,7 @@ _id_methods = {
 commands = {
     'connect dbms': {
         'command': _connect_dbms,
-        'help': {'usage': 'connect dbms [db name] where type = [db type] and user = [db user] and password = [db passwd] and ip = [db ip] and port = [db port] and memory = [true/false] and connection = [db string]',
+        'help': {'usage': 'connect dbms [db name] where type = [db type] and user = [db user] and password = [db passwd] and ip = [db ip] and port = [db port] and memory = [true/false] and connection = [db string] and autocommit = [true/false] and unlog = [true/false]',
                  'example': 'connect dbms test where type = sqlite\n'
                             'connect dbms sensor_data where type = psql and user = anylog and password = demo and ip = 127.0.0.1 and port = 5432',
                  'text': 'Connect to the specified dbms.\n'
@@ -18351,7 +18768,9 @@ commands = {
                          '[db passwd] - The user dbms password\n'
                          '[db port] - The database port\n'
                          '[memory] - a bool value to determine memory resident data (if supported by the database)\n'
-                         '[connection] - Database connection string\n',
+                         '[connection] - Database connection string\n'
+                         '[autocommit] - A false value groups multiple statements into a single transaction\n'
+                         '[unlog] - A true value unlogs tables to not write their changes to the WAL.',
                  'link' : 'blob/master/sql%20setup.md#connecting-to-a-local-database',
                  'keywords' : ["dbms", "configuration"],
         },
@@ -18486,6 +18905,7 @@ commands = {
                             'create table tsd_info where dbms = almgm',
                  'text': 'Creates a data table assigned to the named database. The structure of the table is derived from the metadata in the blockchain\n'
                          'The tables \'ledger\' and \'tsd_info\' are system tables and their structure is predefined',
+                'link' : 'blob/master/sql%20setup.md#creating-tables',
                  'keywords' : ["data"],
                  },
         'trace': 0,
@@ -18516,12 +18936,27 @@ commands = {
         'trace': 0,
     },
 
+    "drop network table": {'command': drop_network_table,
+                      'words_mon': 11,
+                      'help': {
+                          'usage': "drop network table where name = [table name] and dbms = [dbms name] and master = [master_node]",
+                          'example': "drop network table where name = ping_sensor and dbms = lsl_demo and master = 10.0.0.25:2548",
+                          'text': "Issue a 'drop table' command for all the operator nodes that host the table.\n"
+                                  "Issue a 'blockchain drop policy' command to remove the policy from the ledger.",
+                          'link' : 'blob/master/sql%20setup.md#dropping-a-table-on-all-nodes',
+                          'keywords': ["data", "dbms"],
+                      },
+                    'trace': 0,
+    },
+
     'drop table': {
         'command': _drop_table,
         'help': {'usage': 'drop table [table name] where dbms = [dbms name]',
-                 'example': 'drop table tsd_info where dbms = almgm',
+                 'example': 'drop table ping_sensor where dbms = lsl_demo\n'
+                            'drop table tsd_info where dbms = almgm',
                  'text': 'Drop a table in the named database. If the table is partitioned, all partitions are dropped.',
-                 'keywords' : ["data"],
+                 'link' : 'blob/master/sql%20setup.md#dropping-tables',
+                 'keywords' : ["data", "dbms"],
                  },
         'trace': 0,
     },
@@ -18629,17 +19064,6 @@ commands = {
                     'The call returns the sql file name and path',
             'keywords' : ["data", "json"],
             },
-        'trace': 0,
-    },
-
-    'drop network': {
-        'command': drop_network_object,
-        'help': {'usage': 'drop network [object] where [conditions]',
-                 'example': 'drop network table where dbms = my_dbms and table = sensor_35_data\n'
-                            'drop network operator where id = 3428878990774992003ac663',
-                 'text': 'Drop an object (like a table or an operator) and update the related policies from all network nodes',
-                 'keywords' : ["policy"],
-                 },
         'trace': 0,
     },
 

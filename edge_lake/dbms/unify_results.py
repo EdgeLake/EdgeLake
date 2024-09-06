@@ -13,7 +13,8 @@ import edge_lake.dbms.projection_entry as projection_entry
 import edge_lake.generic.utils_sql as utils_sql
 import edge_lake.generic.utils_columns as utils_columns
 import edge_lake.generic.utils_data as utils_data
-
+import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.trace_func as trace_func
 # ==================================================================
 # Create a dbms table, on the publisher node, per each issued query.
 # The table name inclused the job number.
@@ -300,6 +301,94 @@ def range_function(select_parsed, projection, function_id, remote_dbms, remote_t
 
     return [new_field_name, column_type]
 
+# ==================================================================
+# Get the time intervals as declared by the user.
+# Example: "select increments(hour, 1, timestamp), max(timestamp), min(a_current), ...
+# ==================================================================
+def get_increment_intervals(details):
+    # Details are: [hour, 1, timestamp]
+    if details[1].isdecimal():
+        time_unit = details[0]  # second, minute, hour etc.
+        if time_unit in utils_sql.increment_date_types:
+            column_name = details[2]
+            time_interval = int(details[1])
+            trunc_time = utils_sql.increment_date_types[time_unit]
+            if time_unit == "week":
+                time_unit = "day"
+                time_interval *= 7
+        else:
+            column_name = ""
+            time_interval = ""
+            trunc_time = ""
+    else:
+        time_unit = ""
+        column_name = ""
+        time_interval = ""
+        trunc_time = ""
+
+    return [column_name, time_unit, time_interval, trunc_time ]
+# ==================================================================
+# Determine the optimized time intervals
+# Example: "select increments(hour, 1, timestamp), max(timestamp), min(a_current), ...
+# ==================================================================
+def get_optimized_intervals(select_parsed, details):
+
+    column_name = details[0]
+
+    where_conditions = select_parsed.get_where()
+
+    time_difference = utils_columns.str_to_timediff(where_conditions)
+    if not time_difference:
+        # Error in calculating increment
+        return ["", "", "", ""]
+
+    days_diff = time_difference.days
+    seconds_diff = time_difference.seconds
+
+    if not days_diff:
+        minutes_diff = seconds_diff / 60
+        if minutes_diff <= 10:
+            time_unit = "second"
+            time_interval = optimized_interval(360, seconds_diff)
+        else:
+            time_unit = "minute"
+            time_interval = optimized_interval(360, minutes_diff)
+    else:
+        # In days
+        if days_diff <= 15:
+            time_unit = "hour"
+            time_interval = 1
+        elif days_diff <= 32:
+            time_unit = "hour"
+            time_interval = 2
+        else:
+            if days_diff <= 366:
+                time_unit = "day"
+                time_interval = 1
+            elif days_diff <= 800:
+                time_unit = "day"
+                time_interval = 4
+            else:
+                time_unit = "month"
+                time_interval = 1
+
+    trunc_time = utils_sql.increment_date_types[time_unit]
+
+    return [column_name, time_unit, time_interval, trunc_time]
+
+# ==================================================================
+# Get the interval based on the max points to show
+# ==================================================================
+def optimized_interval(max_points, time_diff):
+    if time_diff <= max_points:
+        return 1
+    else:
+        time_interval = 1
+        points = max_points
+        while time_diff >  points:
+            points *= 2
+            time_interval *= 2
+    return time_interval
 
 # ==================================================================
 # process Increment - Group by time increments
@@ -315,18 +404,19 @@ def increment_function(select_parsed, projection, function_id, remote_dbms, remo
     if description != "":
         details = description.replace(' ', '').split(",")  # remove spaces and split on the commas
         if len(details) == 3:
-            if details[1].isdecimal():
-                time_unit = details[0]  # second, minute, hour etc.
-                if time_unit in utils_sql.increment_date_types:
-                    column_name = details[2]
-                    time_interval = int(details[1])
-                    trunc_time = utils_sql.increment_date_types[time_unit]
-                    if time_unit == "week":
-                        time_unit = "day"
-                        time_interval *= 7
+            column_name, time_unit, time_interval, trunc_time = get_increment_intervals(details)
+            g_query = function + "(" + description + ')'  # keep original call
+        elif len(details) == 1:
+            # Optimize time_unit info
+            column_name, time_unit, time_interval, trunc_time = get_optimized_intervals(select_parsed, details)
+            g_query = f"{function}({time_unit}, {time_interval}, {column_name})"    # new optimized description. i.e. (timestamp) --> (hour, 2, timestamp),
+        else:
+            time_interval = None
 
     if not time_interval:
         return ["", ""]
+
+    select_parsed.set_increment_info(g_query)   # Keep the info for trace mode (Grafana trace shows these values)
 
     column_type = db_info.get_column_type(remote_dbms, remote_table, column_name)
 
@@ -374,7 +464,7 @@ def increment_function(select_parsed, projection, function_id, remote_dbms, remo
 
         projection.set_remote_group_by("group by 1")
 
-    g_query = function + "(" + description + ')'  # keep original call
+
 
     projection.set_projection_info(column_name, new_field_name, remote_query, g_query, local_create, local_query, counter_local_fields, "")
 
@@ -558,15 +648,19 @@ def period_time_frame(select_parsed, description, table_name, updated_column_nam
     if select_parsed.with_leading_queries():
         # use leading query
         if filter == "":
-            leading = "sql %s text select max(%s) from %s where %s <= %s" % (
+            leading = "sql %s timezone = utc select max(%s) from %s where %s <= %s" % (
             select_parsed.remote_dbms, column_name, table_name, column_name, end_date_time)
             sub_sql_remote = "%s > %s and %s <= %s" % (column_name, "%s", column_name, "%s")
         else:
-            leading = "sql %s text select max(%s) from %s where %s <= %s %s" % (
+            leading = "sql %s timezone = utc select max(%s) from %s where %s <= %s %s" % (
             select_parsed.remote_dbms, column_name, table_name, column_name, end_date_time, filter)
             sub_sql_remote = "%s > %s and %s <= %s %s" % (column_name, "%s", column_name, "%s", filter)
 
         l_query = select_parsed.get_new_leading_query()  # get leading query
+
+        if trace_func.get_func_trace_level("period"):
+            utils_print.output(f"\r\n run client () {leading}", True)
+
         l_query.set_leading_query(leading)
         l_query.set_period_function(time_unit, count)
 
@@ -590,6 +684,27 @@ def period_time_frame(select_parsed, description, table_name, updated_column_nam
 
     return [sub_sql_remote, sub_sql_local, ""]
 
+
+# ==================================================================
+# Get the column names fron the filter criteria
+# # For example: "and id = 2" returns "2"
+# ==================================================================
+def get_filter_columns(filter):
+    filter_list = filter.split()
+
+    counter = 0;
+    filter_columns = ""
+    for entry in filter_list:
+        if entry == "and":
+            continue
+        # search for column name, operand, value
+        counter += 1
+        if counter == 1:
+            filter_columns += (", " + entry)
+        elif counter == 3:
+            counter = 0
+
+    return filter_columns
 
 # ==================================================================
 # For a query using PERIOD - Get the period where condition on the remote dbms

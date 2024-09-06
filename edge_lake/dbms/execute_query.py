@@ -33,7 +33,7 @@ def get_raw_data(status: process_status, active_dbms, query_type: str, query: st
     elif query_type == 'file':
         raw_data, rows_counter = active_dbms.execute_sql_file(status, query)
     else:
-        status.add_warning("Unsuporrted query type - `%s`" % query_type)
+        status.add_warning("Unsupported query type - `%s`" % query_type)
         return False  # return empty list
 
     return raw_data

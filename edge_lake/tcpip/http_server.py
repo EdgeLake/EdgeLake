@@ -10,6 +10,10 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import sys
 import ssl
+import os
+with_profiler_ = True if os.getenv("PROFILER", "False").lower() == "true" else False      # Needs to return True - otherwise will be False
+if with_profiler_:
+    import edge_lake.generic.profiler as profiler
 
 try:
     import OpenSSL
@@ -45,7 +49,9 @@ import edge_lake.generic.streaming_data as streaming_data
 import edge_lake.tcpip.net_utils as net_utils
 import edge_lake.generic.utils_threads as utils_threads
 import edge_lake.tcpip.mqtt_client as mqtt_client
+import edge_lake.tcpip.html_reply as html_reply
 from edge_lake.generic.utils_columns import get_current_time
+
 
 # REST with server and client authentication requests - https://requests.readthedocs.io/en/master/user/advanced/
 # https://requests.readthedocs.io/en/master/user/quickstart/
@@ -143,6 +149,9 @@ class http_server_info():
     node_private_key = None     # The node private key file
     lib_open_ssl = with_open_ssl_   # Test if library is loaded
     streaming_log = False       # Sets to true to enable logging
+
+def get_workers_pool():
+    return http_server_info.workers_pool
 
 def is_ssl():
     global http_server_info
@@ -412,7 +421,32 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     def write_headers_and_msg(self, status, response_code, content_type, message ):
 
-        encoded_message = message.encode(encoding='UTF-8')
+        ret_val = process_status.SUCCESS
+        html_policy = None
+        into_output = get_value_from_headers(self.al_headers, "into")   # Push the output as HTML
+
+        if not into_output:
+            encoded_message = message.encode(encoding='UTF-8')
+        else:
+            # Return HTML
+            html_info = get_value_from_headers(self.al_headers, "html")
+            if html_info:
+                if html_info.startswith("blockchain "):
+                    ret_val, html_policy = native_api.get_from_blockchain(status, html_info)
+                    if ret_val or not html_policy:
+                        encoded_message = "Failed to retrieve Ploicy using '{html_info}'".encode(encoding='UTF-8')
+                        ret_val = process_status.ERR_process_failure
+                else:
+                    html_policy, err_msg = html_reply.url_to_json(status, html_info)  # Get the user info for the HTML page
+                    if err_msg or not html_policy:
+                        encoded_message = err_msg.encode(encoding='UTF-8')
+                        ret_val = process_status.Wrong_policy_structure
+
+            if not ret_val:
+                encoded_message = html_reply.to_html(status, message, content_type, into_output, html_policy).encode(encoding='UTF-8')
+                content_type =  "text/html"
+
+
         ret_val = self.send_reply_headers(status, response_code, None, False, content_type, len(encoded_message), False, None)
         if not ret_val:
             write_ret_value = utils_io.write_encoded_to_stream(status, self.wfile, encoded_message)
@@ -569,7 +603,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     # Failed to process with AnyLog command
     # =======================================================================================================================
-    def error_failed_process(self, status, with_wait, error_code, http_method, command, err_msg):
+    def error_failed_process(self, status, with_wait, error_code, http_method, into_output, command, err_msg):
 
         err_reply = {
             "method": http_method,
@@ -592,19 +626,32 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         if not reply:
             reply = str(err_reply)
 
-        if not with_wait:
-            # If with_wait it True - a SQL query is processed and different threads satisfy the query
-            # The headers were send before the process started
+        if into_output:
 
-            if reply:
-                content_type = get_result_set_type(reply)  # returns 'text/json' or "text"
-            else:
-                reply = "AnyLog command returned an error"  # Generic reply
-                content_type = 'text'
+            # Place error in the html and send as HTMP
+            encoded_message = html_reply.to_html(status, reply, "text/html", into_output, None).encode(encoding='UTF-8')
 
-            self.send_reply_headers(status, REST_BAD_REQUEST, reply, True, content_type, 0, True, None)
+            content_type = "text/html"
+            ret_val = self.send_reply_headers(status, REST_OK, None, False, content_type, len(encoded_message),
+                                              False, None)
+            if not ret_val:
+                write_ret_value = utils_io.write_encoded_to_stream(status, self.wfile, encoded_message)
 
-        write_ret_value = utils_io.write_to_stream(status, self.wfile, reply, True, True)
+        else:
+
+            if not with_wait:
+                # If with_wait it True - a SQL query is processed and different threads satisfy the query
+                # The headers were send before the process started
+
+                if reply:
+                    content_type = get_result_set_type(reply)  # returns 'text/json' or "text"
+                else:
+                    reply = "AnyLog command returned an error"  # Generic reply
+                    content_type = 'text'
+
+                self.send_reply_headers(status, REST_BAD_REQUEST, reply, True, content_type, 0, True, None)
+
+            write_ret_value = utils_io.write_to_stream(status, self.wfile, reply, True, True)
 
     # =======================================================================================================================
     # Mismatch between REST CALL and AnyLog command - return an error
@@ -727,7 +774,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
                 ret_val = al_grafana.grafana_get(status, self)
 
-            elif user_agent == "anylog":
+            elif command and user_agent == "anylog":
 
                 try:
                     ret_val = self.al_exec(status, "get", command)      # Updated version
@@ -872,6 +919,9 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     def do_POST(self):
 
+        if with_profiler_:
+            profiler.manage("post")     # Stop, Start and reset the profiler
+
         self.msg_body = None
         self.al_headers = set_al_headers(self.headers._headers)
         status = process_status.ProcessStat()
@@ -959,6 +1009,9 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
         self.log_streaming(ret_val)
 
+        if with_profiler_:
+            profiler.stop("post")     # Force Profiler because thread goes to sleep
+
     # =======================================================================================================================
     # send info to MQTT CLIENT
     # If a client is registered for this info. (using broker=rest and user-agent determines the calls assigned to the MQTT)
@@ -1031,24 +1084,28 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                 
                 # Update commands_list with a list of commands (main command and commands placed in the msg body)
                 commands_list = []
-                ret_val, with_wait, content_type, is_select, is_stream = self.prepare_commands(status, command, commands_list)
-                
+                into_output = get_value_from_headers(self.al_headers, "into")  # Push the output as HTML
+                ret_val, with_wait, content_type, is_select, is_stream = self.prepare_commands(status, command, commands_list, into_output)
+
                 if not ret_val:
                     if with_wait:
-                        # Send the headers first
-                        self.send_reply_headers(status, REST_OK, "", True, content_type, 0, True, None)
+                        if not into_output:     # If not as HTML - HTML is organized as a single write to the caller
+                            # Send the headers first
+                            self.send_reply_headers(status, REST_OK, "", True, content_type, 0, True, None)
 
                     buff_size = int(params.get_param("io_buff_size"))
                     io_buff = bytearray(buff_size)
 
-                    ret_val = self.execute_al_commands(status, io_buff, commands_list)
 
-                j_handle = status.get_active_job_handle()
+                    ret_val = self.execute_al_commands(status, io_buff, commands_list, into_output)
+
+
+                j_handle = status.get_active_job_handle()  # Need to be done after the execution of the commands
                 if ret_val != process_status.SUCCESS and ret_val < process_status.NON_ERROR_RET_VALUE:
                     # Operator returned an error
 
                     err_msg = j_handle.get_operator_error_txt()         # Error returned by operators
-                    self.error_failed_process(status, with_wait, ret_val, http_method, command, err_msg)
+                    self.error_failed_process(status, with_wait, ret_val, http_method, into_output, command, err_msg)
 
 
                 elif not with_wait and is_select:
@@ -1063,6 +1120,8 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
                     write_ret_value = self.local_table_query(status, j_handle, with_wait, nodes_count, nodes_replied)
 
+                    j_instance.set_not_active()
+
                 elif with_wait and is_select:
                     # This is a select command that was executed against other network nodes
 
@@ -1071,13 +1130,17 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                         # job instance was used
                         j_instance = job_scheduler.get_job(job_id)
                         # Mutex such that the job instance is not reused by a different thread in the query process
-                        j_instance.data_mutex_aquire('W')
+                        j_instance.data_mutex_aquire(status, 'W')
                         if j_instance.is_job_active() and j_instance.get_unique_job_id() == status.get_unique_job_id():
                             if not j_instance.is_pass_through():
-                                # Othewise the data was written to the caller
+                                # Otherwise the data was written to the caller
                                 nodes_count = j_instance.get_nodes_participating()
                                 nodes_replied = j_instance.get_nodes_replied()
                                 write_ret_value = self.local_table_query(status, j_handle, with_wait, nodes_count, nodes_replied)
+                                if into_output and not write_ret_value:
+                                    # Write the HTML including header and data
+                                    ret_val = self.write_headers_and_msg(status, REST_OK, content_type, j_handle.get_output_buff())
+
                             if j_handle.is_subset():
                                 # Reply with partial nodes
 
@@ -1091,7 +1154,9 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                                     # Include: IP + Port + Partition + RetCode + Text
                                     reply = utils_print.output_nested_lists(error_list, "\r\nReply errors:", ["Node IP", "Port", "Par", "Ret-Code", "Error Message"], True)
                                     write_ret_value = utils_io.write_to_stream(status, self.wfile, reply, True, True)
-                        j_instance.data_mutex_release('W')
+                        j_instance.data_mutex_release(status, 'W')
+
+                        j_instance.set_not_active()
                 elif with_wait and not is_select:
                     # This is a print message returned from multiple nodes
 
@@ -1100,14 +1165,14 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                         # job instance was used
                         j_instance = job_scheduler.get_job(job_id)
                         # Mutex such that the job instance is not reused by a different thread in the query process
-                        j_instance.data_mutex_aquire('W')
+                        j_instance.data_mutex_aquire(status, 'W')
                         if j_instance.is_job_active() and j_instance.get_unique_job_id() == status.get_unique_job_id():
                             result_set = j_instance.get_nodes_print_message()
                             # raw_requestline represents ? in command:
                             # http://10.0.0.78:7849/?User-Agent=AnyLog/1.23?destination=10.0.0.78:7848?subset=true?timeout=2?command=get status
                             transfer_encoding = False if "url" in self.al_headers else True    # self.al_headers["url"] is set in header_from_raw_requestline()
                             write_ret_value = utils_io.write_to_stream(status, self.wfile, result_set, transfer_encoding, True)
-                        j_instance.data_mutex_release('W')
+                        j_instance.data_mutex_release(status, 'W')
 
                 elif is_stream:
                     # stream data to an app or browser
@@ -1139,11 +1204,12 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # 1) the main command in the header
     # 2) Include secondary commands from the body
     # =======================================================================================================================
-    def prepare_commands(self, status, command, commands_list):
+    def prepare_commands(self, status, command, commands_list, into_output):
         '''
         status - status object
         command - the command from the header
         command_list - a list to be updated with all commands
+        into_output - for example into htm - it disables pass_through
         '''
         
         with_wait = False  # No wait for a reply from a different node
@@ -1190,6 +1256,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                 # For SQL command
                 if command[:5] != "file ":
                     # No wait for file copy
+                    # if data goes to HTML, it needs to go into a file to be pulled to one HTML doc.
                     with_wait = True  # Place thread on wait for reply
 
             # Execute the command (or commands in message body)
@@ -1270,7 +1337,10 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     # Execute the commands on the command_list and the commandon the header
     # =======================================================================================================================
-    def execute_al_commands(self, status, io_buff, commands_list):
+    def execute_al_commands(self, status, io_buff, commands_list, into_output):
+        '''
+        into_output - when output is organized as HTML
+        '''
 
         ret_val = process_status.SUCCESS
 
@@ -1278,7 +1348,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
             command = entry[0]
             with_reply = entry[1]       # Indicate if the thread needs to wait for a reply (i.e. SQL query)
             if with_reply:
-                ret_val = native_api.exec_al_cmd(status, command, self.wfile)
+                ret_val = native_api.exec_al_cmd(status, command, self.wfile, into_output, 20)   # Timeout for a list of commands is the default
             else:
                 ret_val = native_api.exec_no_wait(status, command, io_buff, self.wfile)
             if ret_val:
@@ -1341,6 +1411,9 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     def do_PUT(self):
 
+        if with_profiler_:
+            profiler.manage("put")     # Stop, Start and reset the profiler
+
         status = process_status.ProcessStat()
         self.msg_body = None
         self.al_headers = set_al_headers(self.headers._headers)
@@ -1371,6 +1444,9 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
         self.log_streaming(ret_val)
 
+        if with_profiler_:
+            profiler.stop("put")     # Force Profiler because thread goes to sleep
+
     # =======================================================================================================================
     # AnyLog PUT method def - write data
     # =======================================================================================================================
@@ -1380,14 +1456,16 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
         headers_info.rest_status = REST_API_OK
 
-        hash_val = '0'
-
         msg_body = self.get_msg_body(status)
         ret_val, msg_data, row_counter = utils_json.make_json_rows(status, msg_body)
         if ret_val:
-            status.keep_error("Failed to process JSON data")
+            if not msg_body:
+                err_msg = "Failed to process JSON data: Message Body is empty"
+            else:
+                err_msg = "Failed to process JSON data"
+            status.add_error(err_msg)
         elif not msg_data:
-            status.keep_error("REST PUT command without new data")
+            status.add_error("REST PUT command without new data")
             headers_info.rest_status = REST_API_MISSING_BODY
         else:
             prep_dir = params.get_value_if_available("!prep_dir")  # dir where the data will be written

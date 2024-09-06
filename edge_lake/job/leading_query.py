@@ -43,11 +43,12 @@ class LeadingQuery():
         if len(function_array):
             value_array = function_array[0][1].get_results()
             end_date = value_array[0]
-            # get the start date by subtracting time_units X units
-            start_date = utils_columns.get_start_date(end_date, self.time_unit, self.units)
+            if end_date:
+                # get the start date by subtracting time_units X units
+                start_date = utils_columns.get_start_date(end_date, self.time_unit, self.units)
 
-            results.append(start_date)
-            results.append(end_date)
+                results.append(start_date)
+                results.append(end_date)
 
     # =======================================================================================================================
     # Returns the functions array if the query executed can process with AnyLog native functions (like MIN, NAX) - without a local database
