@@ -753,6 +753,9 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
         ret_val = process_status.SUCCESS
 
+        if with_profiler_:
+            profiler.manage("get")  # Stop, Start and reset the profiler
+
         self.msg_body = None
         self.al_headers = set_al_headers(self.headers._headers)
         status = process_status.ProcessStat()
@@ -793,6 +796,10 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         update_stats("GET", user_agent, ret_val, self.client_address)
 
         self.log_streaming(ret_val)
+
+        if with_profiler_:
+            profiler.stop("get")     # Force Profiler because thread goes to sleep
+
 
     # =======================================================================================================================
     # An option to place AnyLog header on the URL line.
@@ -1421,21 +1428,13 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
         if self.authenticate_request(status, "PUT", "Data"):
 
-            if user_agent == "anylog":
-                try:
-                    ret_val = self.al_put(status)  # Updated version
-                except:
-                    errno, value, stack_trace = sys.exc_info()[:3]
-                    self.handle_exception(status, "PUT", errno, value, stack_trace)
-                    ret_val = process_status.REST_call_err
 
-            else:
-                try:
-                    ret_val = self.al_put(status)  # Updated version
-                except:
-                    errno, value, stack_trace = sys.exc_info()[:3]
-                    self.handle_exception(status, "PUT", errno, value, stack_trace)
-                    ret_val = process_status.REST_call_err
+            try:
+                ret_val = self.al_put(status)  # Updated version
+            except:
+                errno, value, stack_trace = sys.exc_info()[:3]
+                self.handle_exception(status, "PUT", errno, value, stack_trace)
+                ret_val = process_status.REST_call_err
 
         else:
             ret_val = process_status.Failed_message_authentication

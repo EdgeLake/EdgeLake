@@ -596,12 +596,16 @@ def set_thresholds(status, io_buff_in, cmd_words, trace, publisher_active):
 # stat_list[3] - counter calls with mode = streaming
 # stat_list[4] - counter for rows written to a table with write immediate flag
 
-# COmmand 1: get streaning steup
+# Command 1: get streaming setup
 # Command 2 get streaming
 
 
 # =======================================================================================================================
-def show_info(out_format):
+def show_info(config_only, out_format):
+    '''
+    config_only - Only Configuration
+    out_format - Output Format - Table or JSON
+    '''
     global write_threshold  # A dictionary that maintains, for every table the threshold time and volume to add the data to the database
     global default_time_  # A default 60 seconds threshold
     global default_volume_  # A default 1000 bytes threshold
@@ -612,86 +616,90 @@ def show_info(out_format):
 
     # Provide the default Thresholds
 
-    if is_running:
-        streamer_stat = "Running"
-    else:
-        streamer_stat = "Not Running"
+    if config_only:
+        if is_running:
+            streamer_stat = "Running"
+        else:
+            streamer_stat = "Not Running"
 
-    if out_format == "json":
-        info_json = {}
-        info_json["status"] = streamer_stat
-        info_json["Threshold_Time"] = default_time_
-        info_json["Threshold_Volume"] = default_volume_
-        info_json["Write_Immediate"] = write_immediate_
-        info_json["Buffered_Rows"] = counter_rows_in_buff_
-        info_json["Flushed_Rows"] = counter_rows_flushed_
-    else:
-        info_chart = []
-        info_chart.append(("Threshold Time", default_time_, streamer_stat))
-        info_chart.append(("Threshold Volume", format(default_volume_,","),""))
-        info_chart.append(("Write Immediate", str(write_immediate_), ""))
-        info_chart.append(("Buffered Rows", format(counter_rows_in_buff_, ","), ""))
-        info_chart.append(("Flushed Rows", format(counter_rows_flushed_, ","), ""))
-        info_string = utils_print.output_nested_lists(info_chart, "Flush Thresholds", ["Threshold", "Value", "Streamer"], True, "")
+        if out_format == "json":
+            info_json = {}
+            info_json["status"] = streamer_stat
+            info_json["Threshold_Time"] = default_time_
+            info_json["Threshold_Volume"] = default_volume_
+            info_json["Write_Immediate"] = write_immediate_
+            info_json["Buffered_Rows"] = counter_rows_in_buff_
+            info_json["Flushed_Rows"] = counter_rows_flushed_
 
-        # Provide the Thresholds per Table
-        if len(write_threshold):
-            info_string += utils_print.format_dictionary(write_threshold, True, False, False, ["Table", "Time / Volume"])
+            info_string =  utils_json.to_string((info_json))
 
+        else:
+            info_chart = []
+            info_chart.append(("Threshold Time", default_time_, streamer_stat))
+            info_chart.append(("Threshold Volume", format(default_volume_,","),""))
+            info_chart.append(("Write Immediate", str(write_immediate_), ""))
+            info_chart.append(("Buffered Rows", format(counter_rows_in_buff_, ","), ""))
+            info_chart.append(("Flushed Rows", format(counter_rows_flushed_, ","), ""))
+            info_string = utils_print.output_nested_lists(info_chart, "Flush Thresholds", ["Threshold", "Value", "Streamer"], True, "")
 
-    if out_format == "json":
-        tables_list = []
-        for dbms_table, stat_list in stat_by_table_.items():
-            table_info = {}
-            cached_rows, threshold_volume, volume_used, threshold_time, remaining_time = get_cached_info(dbms_table)
-
-            table_info["table"] = dbms_table
-            table_info["File Put"] = stat_list[0]
-            table_info["File Rows"] = stat_list[1]
-            table_info["Streaming Put"] = stat_list[2]
-            table_info["Streaming Rows"] = stat_list[3]
-            table_info["Streaming Cached"] = cached_rows # Get the number of rows that are still in buffer and not flushed to disk
-            table_info["Immediate"] = stat_list[4]
-            table_info["Threshold Volume"] = threshold_volume
-            table_info["% Buffer Fill"] = volume_used
-            table_info["Threshold Time"] = threshold_time
-            table_info["Time Left"] = remaining_time
-
-            elapsed_time = int(time.time()) - stat_list[5]  # Since last time data was added
-            hours_time, minutes_time, seconds_time = utils_data.seconds_to_hms(elapsed_time)
-            table_info["Last Process"] = "%02u:%02u:%02u" % (hours_time, minutes_time, seconds_time)
-
-
-            tables_list.append(table_info)
-
-        info_json["tables"] = tables_list
-
-        info_string = utils_json.to_string((info_json))
+            # Provide the Thresholds per Table
+            if len(write_threshold):
+                info_string += utils_print.format_dictionary(write_threshold, True, False, False, ["Table", "Time / Volume"])
 
     else:
-        # Provide data statistics -  File_counter, file_rows, stream_counter, stream_rows
-        info_chart = []
-        for dbms_table, stat_list in stat_by_table_.items():
-            files_put = format(stat_list[0], ",")
-            files_rows = format(stat_list[1], ",")
-            stream_put = format(stat_list[2], ",")
-            stream_rows = format(stat_list[3], ",")
-            counter_immediate = format(stat_list[4], ",")   # Rows with count immediate
+        # Print per table
+
+        if out_format == "json":
+            tables_list = []
+            for dbms_table, stat_list in stat_by_table_.items():
+                table_info = {}
+                cached_rows, threshold_volume, volume_used, threshold_time, remaining_time = get_cached_info(dbms_table)
+
+                table_info["table"] = dbms_table
+                table_info["File Put"] = stat_list[0]
+                table_info["File Rows"] = stat_list[1]
+                table_info["Streaming Put"] = stat_list[2]
+                table_info["Streaming Rows"] = stat_list[3]
+                table_info["Streaming Cached"] = cached_rows # Get the number of rows that are still in buffer and not flushed to disk
+                table_info["Immediate"] = stat_list[4]
+                table_info["Threshold Volume"] = threshold_volume
+                table_info["% Buffer Fill"] = volume_used
+                table_info["Threshold Time"] = threshold_time
+                table_info["Time Left"] = remaining_time
+
+                elapsed_time = int(time.time()) - stat_list[5]  # Since last time data was added
+                hours_time, minutes_time, seconds_time = utils_data.seconds_to_hms(elapsed_time)
+                table_info["Last Process"] = "%02u:%02u:%02u" % (hours_time, minutes_time, seconds_time)
+
+
+                tables_list.append(table_info)
+
+            info_string = utils_json.to_string((tables_list))
+
+        else:
+            # Provide data statistics -  File_counter, file_rows, stream_counter, stream_rows
+            info_chart = []
+            for dbms_table, stat_list in stat_by_table_.items():
+                files_put = format(stat_list[0], ",")
+                files_rows = format(stat_list[1], ",")
+                stream_put = format(stat_list[2], ",")
+                stream_rows = format(stat_list[3], ",")
+                counter_immediate = format(stat_list[4], ",")   # Rows with count immediate
 
 
 
-            elapsed_time = int(time.time()) - stat_list[5]  # Since last time data was added
-            hours_time, minutes_time, seconds_time = utils_data.seconds_to_hms(elapsed_time)
-            last_process = "%02u:%02u:%02u" % (hours_time, minutes_time, seconds_time)
+                elapsed_time = int(time.time()) - stat_list[5]  # Since last time data was added
+                hours_time, minutes_time, seconds_time = utils_data.seconds_to_hms(elapsed_time)
+                last_process = "%02u:%02u:%02u" % (hours_time, minutes_time, seconds_time)
 
-            cached_rows, threshold_volume, volume_used, threshold_time, remaining_time = get_cached_info(dbms_table)
-            cached_rows = format(cached_rows, ",")  # Get the number of rows that are still in buffer and not flushed to disk
+                cached_rows, threshold_volume, volume_used, threshold_time, remaining_time = get_cached_info(dbms_table)
+                cached_rows = format(cached_rows, ",")  # Get the number of rows that are still in buffer and not flushed to disk
 
 
-            info_chart.append((dbms_table, files_put, files_rows, "", stream_put, stream_rows, cached_rows, counter_immediate, threshold_volume, volume_used, threshold_time, remaining_time, last_process))
+                info_chart.append((dbms_table, files_put, files_rows, "", stream_put, stream_rows, cached_rows, counter_immediate, threshold_volume, volume_used, threshold_time, remaining_time, last_process))
 
-        title = ["\nDBMS-Table", "Put\nfiles", "Put\nRows", " ", "Streaming\nCalls", "Streaming\nRows", "Cached\nRows", "Counter\nImmediate", "Threshold\nVolume(KB)", "Buffer\nFill(%)", "Threshold\nTime(sec)", "Time Left\n(Sec)", "Last Process\nHH:MM:SS"]
-        info_string += utils_print.output_nested_lists(info_chart, "\r\nStatistics", title, True, "")
+            title = ["\nDBMS-Table", "Put\nfiles", "Put\nRows", " ", "Streaming\nCalls", "Streaming\nRows", "Cached\nRows", "Counter\nImmediate", "Threshold\nVolume(KB)", "Buffer\nFill(%)", "Threshold\nTime(sec)", "Time Left\n(Sec)", "Last Process\nHH:MM:SS"]
+            info_string = utils_print.output_nested_lists(info_chart, "\r\nStatistics", title, True, "")
 
 
     return info_string

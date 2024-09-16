@@ -32,6 +32,12 @@ profile_targets_ = {            # The list of profiled services
         "reset" : False,
         "profiler" : None
     },
+    "get": {  # REST GET
+        "set_on": False,  # Instruction from main thread
+        "is_on": False,  # Was it set by the profiled thread
+        "reset": False,
+        "profiler": None
+    },
     "put": {                    # REST PUT
         "set_on" : False,       # Instruction from main thread
         "is_on": False,         # Was it set by the profiled thread

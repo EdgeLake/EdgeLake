@@ -1873,7 +1873,7 @@ def cast_column(status, row, col_castings, column_val):
 
     for casting_str in col_castings:    # Can do multiple casting
 
-        if not casted_value:
+        if casted_value is None:
             # Deal with Null
            break
 

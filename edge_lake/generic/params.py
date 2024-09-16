@@ -1352,35 +1352,36 @@ def environment_var(format_type):
 def word_to_value_object(source_word):
 
     value_object = None
+    if isinstance(source_word, str):
 
-    if len(source_word) > 1:
+        if len(source_word) > 1:
 
-        value_word = get_value_if_available(source_word)  # Value from command line
+            value_word = get_value_if_available(source_word)  # Value from command line
 
-        if value_word:
-            value_object = value_word
+            if value_word:
+                value_object = value_word
 
-        if isinstance(value_word, str) and len(value_word) > 1:     # get_value_if_available can return int or float
+            if isinstance(value_word, str) and len(value_word) > 1:     # get_value_if_available can return int or float
 
-            ch = value_word[0]
+                ch = value_word[0]
 
-            if ch == '\'':
-                # Remove single quotation
-                if ch == value_word[-1]:
-                    value_object = value_word[1:-1]  # Remove quotation but ignore params.get_value
-            elif ch == '{' and value_word[-1] == '}':
-                # Get a Dictionary
-                value_object = utils_json.str_to_json(value_word)
-            elif ch == '[' and value_word[-1] == ']':
-                # Get a listynetynet
-                value_object = utils_json.str_to_list(value_word)
-                if value_object:
-                    # Remove leading and trailing single quotations
-                    for index, entry in enumerate(value_object):
-                        if len(entry) > 2 and entry[0] == '\'' and entry[-1] == '\'':
-                            value_object[index] = entry[1:-1]       # Remove single quotation
-        else:
-            value_object = value_word
+                if ch == '\'':
+                    # Remove single quotation
+                    if ch == value_word[-1]:
+                        value_object = value_word[1:-1]  # Remove quotation but ignore params.get_value
+                elif ch == '{' and value_word[-1] == '}':
+                    # Get a Dictionary
+                    value_object = utils_json.str_to_json(value_word)
+                elif ch == '[' and value_word[-1] == ']':
+                    # Get a listynetynet
+                    value_object = utils_json.str_to_list(value_word)
+                    if value_object:
+                        # Remove leading and trailing single quotations
+                        for index, entry in enumerate(value_object):
+                            if len(entry) > 2 and entry[0] == '\'' and entry[-1] == '\'':
+                                value_object[index] = entry[1:-1]       # Remove single quotation
+            else:
+                value_object = value_word
 
     if value_object == None:
         value_object = source_word

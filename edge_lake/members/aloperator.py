@@ -203,7 +203,7 @@ def run_operator(dummy: str, conditions: dict):
 
     threads_count = interpreter.get_one_value_or_default(conditions, "threads", 1)
     if threads_count > 1:
-        operator_pool_ = utils_threads.WorkersPool("Operator Pool", threads_count)
+        operator_pool_ = utils_threads.WorkersPool("Operator", threads_count)
         # files_in_process is a dictionary of files which are currently being processed
         # The list is maintained to avoid the same file provided to a different thread
         files_in_process = {}
