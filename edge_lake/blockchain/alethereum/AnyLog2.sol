@@ -11,19 +11,19 @@ contract AnyLog2 {
         bool exists;
     }
 
-    string[] policies;
+    string[] public policies;
 
-    string[] policy_ids;
+    string[] public policy_ids;
+    uint public num_policies = 0;
 
     uint public transaction_count = 0;
 
     mapping(string => Policy) policy_store;
 
-    event get_all_policies_event(string[]);
-    event get_all_policy_ids_event(string[]);
     event get_policy_event(string);
     event delete_policy_event(bool);
     event get_policy_owner_event(address);
+    event updated_policy_event(string, string);
 
 
     function insert(string calldata policy_id, string calldata json)
@@ -33,15 +33,7 @@ contract AnyLog2 {
         policy_ids.push(policy_id);
         policy_store[policy_id] = Policy(json, policies.length-1, msg.sender, true);
         transaction_count += 1;
-    }
-
-    function getAllPolicies() external  {
-        emit get_all_policies_event(policies);
-        emit get_all_policy_ids_event(policy_ids);
-    }
-
-    function getAllPolicyIds() external {
-        emit get_all_policy_ids_event(policy_ids);
+        num_policies += 1;
     }
 
     function getPolicy(string calldata policy_id) external  {
@@ -66,6 +58,16 @@ contract AnyLog2 {
         policies.pop(); // delete last index of policies array
         policy_ids.pop(); // delete last index of complementary policy_ids array
         emit delete_policy_event(true);
+        num_policies -= 1;
+    }
+
+    function updatePolicy(string calldata policy_id, string calldata json) external {
+        require(policy_store[policy_id].exists, "Policy ID does not exist");
+        require(policy_store[policy_id].policy_owner == address(msg.sender), "Only policy owner can update policy");
+        policy_store[policy_id] = Policy(json, policy_store[policy_id].policies_index, msg.sender, true); // update policies map
+        policies[policy_store[policy_id].policies_index] = json; // update policies list
+        transaction_count += 1;
+        emit updated_policy_event(policy_id, json);
     }
 
     function getPolicyOwner(string calldata policy_id) external {
