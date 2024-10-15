@@ -327,6 +327,9 @@ Profiler_process_failure = 243
 Err_grafana_payload = 244
 Mapping_to_garafana_Error = 245
 Failed_to_retrieve_network_reply = 246
+Policy_id_not_match=247
+Invalid_policy=248
+Not_suppoerted_on_main_thread=249
 
 
 # note that message is at location of error value + 1 (exit is set at 0)
@@ -577,7 +580,10 @@ status_text = ["Terminating node processes",
                "Profiler process failure",              # 243
                "Error in Grafana Payload info",         # 244
                "Error Mapping Data Source to Grafana",  # 245
-               "Failed to retieve reply from network",  # 246
+               "Failed to retrieve reply from network",  # 246
+               "Provided policy id does not match the policy", # 247
+               "Policy is invalid",                     # 248
+               "Command not suppoerted on main thread", # 249
                ]
 
 

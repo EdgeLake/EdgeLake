@@ -3477,7 +3477,7 @@ def get_sql_processing_info(status, cmd_words, words_count, index):
                 if not ret_val:
                     ret_val = interpreter.test_values(status, conditions, "dest", dest_values)
                     if not ret_val:
-                        ret_val = interpreter.test_values(status, conditions, "dest", nodes_values)
+                        ret_val = interpreter.test_values(status, conditions, "nodes", nodes_values)
 
     return [ret_val, dbms_name, conditions, cmd_str]
 
@@ -5874,6 +5874,31 @@ def _debug_next(status, io_buff_in, cmd_words, trace):
 
     return ret_val
 
+# =======================================================================================================================
+# Terminate debug interactive
+# COmmand: Continue
+# =======================================================================================================================
+def _debug_continue(status, io_buff_in, cmd_words, trace):
+    ret_val = process_status.SUCCESS
+    if len(cmd_words) == 1:
+        # continue to all threads
+        for scripts_array in running_scripts.values():
+            if len(scripts_array):
+                scripts_array[-1].set_debug_interactive(False)
+    elif len(cmd_words) == 2:
+        # given the thread id
+        thread_id = cmd_words[1]
+        if thread_id in running_scripts.keys():
+            scripts_array = running_scripts[thread_id]
+            if len(scripts_array):
+                scripts_array[-1].set_debug_interactive(False)
+        else:
+            ret_val = process_status.The_thread_has_no_script
+    else:
+        ret_val = process_status.ERR_command_struct
+    return ret_val
+
+
 
 # =======================================================================================================================
 # Register PI server on the network
@@ -7969,6 +7994,7 @@ def set_msg_rule(status, io_buff_in, cmd_words, trace):
                 "table": ("str",                True, False, True),
                 "syslog": ("bool",              False, False, True),
                 "topic": ("str",                False, False, True),
+                "extend": ("str",              False, False, False),   # Add info to the user's data i.e. "extend" : "ip"
                 "structure": ("str", False, True, True),  # text in the header (i.e. SysLog)
                 }
 
@@ -9060,13 +9086,61 @@ def blockchain_commit(status, io_buff_in, cmd_words, trace, func_params):
             ret_val, json_dictionary = prep_policy(status, json_key, b_file, True)
 
             if not ret_val:
-                policy_id =  utils_json.get_policy_value(json_dictionary, None, "id", None)
+                policy_id = utils_json.get_policy_value(json_dictionary, None, "id", None)
 
                 json_data = utils_json.to_string(json_dictionary)
                 if json_data:
                     ret_val, reply = bplatform.blockchain_commit(status, platform_name, policy_id, json_data, trace)
                 else:
                     ret_val = process_status.Wrong_policy_structure
+
+    return [ret_val, reply]
+
+# =======================================================================================================================
+# Update the JSON file to the blockchain
+# Example command: blockchain update to ethereum !policy_id !json_script
+# =======================================================================================================================
+def blockchain_update(status, io_buff_in, cmd_words, trace, func_params):
+
+    ret_val = None
+    reply = None
+    if cmd_words[2] != "to":
+        ret_val = process_status.ERR_command_struct
+    else:
+        b_file = params.get_value_if_available("!blockchain_file")
+        if b_file == "":
+            status.add_error("Missing dictionary definition for \'blockchain_file\'")
+            ret_val = process_status.No_local_blockchain_file
+        else:
+            platform_name = params.get_value_if_available(cmd_words[3])
+            policy_id = params.get_value_if_available(cmd_words[4])  # get the provided policy id
+            json_key = params.get_value_if_available(cmd_words[5])
+
+            # JSONify policy
+            policy_json = utils_json.str_to_json(json_key)
+            # check if policy is a valid JSON
+            if not policy_json:
+                ret_val = process_status.Invalid_policy
+            if not ret_val:
+                # Check if new policy contains a policy id
+                key = next(iter(policy_json))
+                if not policy_json[key].get("id"):
+                    policy_json[key]["id"] = policy_id  # add provided policy id if not included in policy
+                # Check if policy id matches
+                elif policy_id != policy_json[key].get("id"):
+                    ret_val = process_status.Policy_id_not_match # return error
+
+                if not ret_val:
+                    ret_val, json_dictionary = prep_policy(status, json_key, b_file, True)
+
+                    if not ret_val:
+
+                        json_data = utils_json.to_string(json_dictionary)
+                        if json_data:
+                            ret_val, reply = bplatform.blockchain_update(status, platform_name, policy_id, json_data,
+                                                                                trace)
+                        else:
+                            ret_val = process_status.Wrong_policy_structure
 
     return [ret_val, reply]
 
@@ -9605,6 +9679,7 @@ def blockchain_insert(status, io_buff_in, cmd_words, trace, func_params):
         blockchain_load(status, ["blockchain", "get", "cluster"], False, 0)
 
     return [ret_val, None]
+
 
 # -----------------------------------------------------------------------------------------------------
 # Validate policy structure + update policy in all platforms
@@ -11346,14 +11421,23 @@ def _incr(status, io_buff_in, cmd_words, trace):
 def data_assignment(status, first_word, cmd_words):
 
     words_count = len(cmd_words)
+    type_value = None
     if (first_word == 2 and words_count >= 3):
 
         if words_count > 3 and cmd_words[3] != '+':
             # Example: a = 30 seconds
             new_string = ' '.join(cmd_words[2:])
         else:
-            # Example: a = a + b
-            new_string = params.get_added_string(cmd_words, 2, 0)
+            if words_count == 3 and  cmd_words[1] == '=':
+                # Assignment
+                # Example:
+                # dict = {}
+                # dict[key] = !k.float
+                type_value = params.get_value_if_available(cmd_words[2])
+                new_string = str(type_value)
+            else:
+                # Example: a = a + b
+                new_string = params.get_added_string(cmd_words, 2, 0)
 
         dict_key = cmd_words[0]
         # Test if a policy
@@ -11364,8 +11448,8 @@ def data_assignment(status, first_word, cmd_words):
             if index > 0 and index < (len(dict_key)-2):
                 json_key = dict_key[index:]
                 dict_key = dict_key[:index]
-
-                ret_val = params.set_dictionary(status, dict_key, [json_key, '=', new_string] )
+                value = type_value if (type_value != None) else new_string    # Assignment may be a non-string value
+                ret_val = params.set_dictionary(status, dict_key, [json_key, '=', value] )
                 return True if ret_val == process_status.SUCCESS else False
 
         if dict_key[0] == '!' and len(dict_key) > 1:
@@ -12498,6 +12582,7 @@ def exec_script(status, io_buff_in, file_name, is_event, values):
     global event_time
     stack = []
 
+    thread_name = threading.current_thread().name
     debug_script = register_script(file_name)  # places the script name in a registry
 
     read_file = True  # file can be in RAM and then does not need to be read
@@ -12669,7 +12754,7 @@ def exec_script(status, io_buff_in, file_name, is_event, values):
             if debug_script.is_stop():
                 break  # flagged by the user to stop
             if debug_script.is_debug():
-                print_command("", line_number + 1, command[index:], ret_val)  # Debug - Print the command
+                print_command(thread_name, line_number + 1, command[index:], ret_val)  # Debug - Print the command
                 if debug_script.is_debug_interactive():
                     # wait for next command
                     while not debug_script.is_debug_next():
@@ -16474,7 +16559,8 @@ def set_debug_options(status, io_buff_in, cmd_words, trace):
             elif cmd_words[2] == "interactive":
                 if params.is_input_thread(thread_name):
                     # debug interactive is not doable on main thread is
-                    debug_interactive = False
+                    status.add_error("Main thread does not support 'debug interactive', call the scripty using 'thread' command")
+                    ret_val = process_status.Not_suppoerted_on_main_thread
                 else:
                     debug_interactive = True
                 debug = True
@@ -17067,6 +17153,16 @@ _blockchain_methods = {
                          'keywords' : ["blockchain"],
                         }
                      },
+    "update": {'command': blockchain_update,
+                    'words_count' : 6,
+                     'help': {
+                         'usage': "blockchain update to [blockchain name] [policy_id] [policy]",
+                         'example': "blockchain update to ethereum !policy_id !policy",
+                         'text': "Update an existing JSON policy in the blockchain platform.",
+                         'keywords' : ["blockchain"],
+                        }
+                     },
+
     "wait": {'command': blockchain_wait,
                    'words_count': 6,
                    'help': {
@@ -17309,7 +17405,7 @@ _set_methods = {
         "msg rule": {'command': set_msg_rule,
                         'words_min': 12,
                         'help': {
-                            'usage': "set msg rule [rule name] if ip = [IP address] and port = [port] and header = [header text] then dbms = [dbms name] and table = [table name] and syslog = [true/false] and format = [data format] and topic = [topic name]",
+                            'usage': "set msg rule [rule name] if ip = [IP address] and port = [port] and header = [header text] then dbms = [dbms name] and table = [table name] and syslog = [true/false] and extend = ip and format = [data format] and topic = [topic name]",
                             'example': "set msg rule my_rule if ip = 10.0.0.78 and port = 1468 then dbms = test and table = syslog and syslog = true",
                             'text': "Identify arbitrary messages and associate streaming data with a logical database, table and a topic",
                             'link' : 'blob/master/using%20syslog.md#setting-a-rule-to-accept-syslog-data',
@@ -19948,7 +20044,18 @@ commands = {
         'help': {'usage': 'next',
                      'example': 'next',
                      'text': 'In debug mode, executes the next command',
+                     'link' : 'blob/master/cli.md#the-set-debug-command',
                      'keywords' : ["debug"],
+                 },
+        'trace': 0,
+    },
+    'continue': {
+        'command': _debug_continue,
+        'help': {'usage': 'continue',
+                 'example': 'continue',
+                 'text': 'Terminate debug interactive mode',
+                 'link' : 'blob/master/cli.md#the-set-debug-command',
+                 'keywords': ["debug"],
                  },
         'trace': 0,
     },

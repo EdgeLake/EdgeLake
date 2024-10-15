@@ -204,6 +204,28 @@ def blockchain_commit(status, platform_name, policy_id, policy, trace):
     return [ret_val, tx_receipt]
 
 # =======================================================================================================================
+# Update the JSON file to the blockchain
+# Example command: blockchain update to ethereum !policy_id !json_policy
+# =======================================================================================================================
+def blockchain_update(status, platform_name, policy_id, policy, trace):
+
+    global bconnect_
+
+    tx_receipt = None
+
+    if platform_name not in bconnect_:
+        status.add_error("Blockchain platform '%s' is not recognized or not connected" % platform_name)
+        ret_val = process_status.BLOCKCHAIN_not_recognized
+    else:
+        platform = bconnect_[platform_name]
+        if platform.is_connected():
+            ret_val, reply = platform.update_policies(status, policy_id, policy)
+        else:
+            ret_val = process_status.Connection_error
+
+    return [ret_val, tx_receipt]
+
+# =======================================================================================================================
 # delete a policy from the blockchain
 # =======================================================================================================================
 def blockchain_delete(status, platform_name, policy_id, trace):

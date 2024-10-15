@@ -679,6 +679,9 @@ class GENERIC_MSG(SESSION):
         self.len_added_info = 0 # the length of al.sl.header.[dbms_mame].[table_name]
 
         mapping_cond = self.rules_obj[1]        # The user mapping info
+
+        self.extend = mapping_cond.get("extend", None)  # Add additional info to the json (i.e.: "extend" : "ip")
+
         self.syslog_format = interpreter.get_one_value(mapping_cond, "format")
 
         structure = interpreter.get_one_value(mapping_cond, "structure")    # If structure value is included, first row includes the structure
@@ -758,6 +761,12 @@ class GENERIC_MSG(SESSION):
             message = msg_list[index]
             if not message:
                 break
+
+            if self.extend:
+                # ADd external info to the json
+                for entry in self.extend:
+                    if entry == "ip":
+                        json_msg += f"\"source_ip\" : \"{self.peer_ip}\""
 
             msg_offset = self.header_len      # the offset considered - start at 0 or after the header that was added to syslog gen.
             for attr_id, attr_info in enumerate(self.mapping_attributes):
@@ -961,17 +970,19 @@ def get_msg_rules(status, io_buff_in, cmd_words, trace):
         is_syslog = interpreter.get_one_value_or_default(mapping_cond, "syslog", False)
         topic = interpreter.get_one_value_or_default(mapping_cond, "topic", "")
         structure = interpreter.get_one_value_or_default(mapping_cond, "structure", "")
+        extend_list = mapping_cond.get("extend", [])
+        extend = ','.join(extend_list)
 
         batches = statistics[0]
         counter = statistics[1]
         counter_err= statistics[2]
         err_msg = statistics[3]
 
-        output_table.append((rule_name, source_ip, source_port, header, dbms_name, table_name, is_syslog, topic, structure, batches, counter, counter_err, err_msg))
+        output_table.append((rule_name, source_ip, source_port, header, dbms_name, table_name, is_syslog, topic, structure, extend, batches, counter, counter_err, err_msg))
 
 
     reply = utils_print.output_nested_lists(output_table, "",
-                       ["Name", "IF\nSource IP", "IF\nPort", "IF\nHeader", "THEN\nDBMS", "THEN\nTable", "THEN\nSysLog", "THEN\nTopic", "THEN\nStructure", "Batches", "Events", "Errors", "Error Msg"], True)
+                       ["Name", "IF\nSource IP", "IF\nPort", "IF\nHeader", "THEN\nDBMS", "THEN\nTable", "THEN\nSysLog", "THEN\nTopic", "THEN\nStructure", "Extend", "Batches", "Events", "Errors", "Error Msg"], True)
 
     return [process_status.SUCCESS, reply, "table"]
 

@@ -499,11 +499,11 @@ def get_operator_info(service, topic):
     return reply
 # ---------------------------------------------------------------------------------------------
 # Get dictionary for output
-# ---------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------            -------------------
 def get_stat_dict_output(service, topic):
     source_object = statistics_[service][topic]
     if isinstance(source_object, dict):
-        # A dictionary like a policy
+        # A dictionary like a p     olicy
         entries_list = [source_object]  # A single dictionary (like [operator][summary])
     else:
         # as a list (like [operator][error]
@@ -556,10 +556,10 @@ def prepare_stats(service, topic, prep_key):
         elif operation == '%':
             # Division, i.e. rows / second
             if not stats_dict[operand2_dict][operand2] or not stats_dict[operand1_dict][operand1]:
-                stats_dict[target_dict][stats_key] = 0
+                stats_dict[target_dict][stats_key] = float(0)
             else:
                 number = (stats_dict[operand1_dict][operand1] / stats_dict[operand2_dict][operand2])
-                stats_dict[target_dict][stats_key] = f"{number:,.2f}"
+                stats_dict[target_dict][stats_key] = round(number, 2)
 
 
 # ---------------------------------------------------------------------------------------------
