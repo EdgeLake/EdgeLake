@@ -423,6 +423,15 @@ def update_operators(status, operators, trace):
                 if not updated:
                     # New Operator
                     operators_list.append(operator_info)
+
+                    if operator_info.get("main", False):
+                        # Use this operator as the first server option in a query
+                        if  cluster_to_servers_[cluster_id].get("main", False):
+                            err_msg = f"Multiple nodes are designated as main nodes in cluster: {cluster_id}"
+                            status.add_error(err_msg)
+                            utils_print.output_box(err_msg)     # Let the system continue after the printout
+
+                        cluster_to_servers_[cluster_id]["main"] = operator_info
         if ret_val:
             break
 
@@ -743,20 +752,21 @@ def get_all_operators(status, dest_keys, include_tables):
 #   0 - used by the query process
 #   1 - used by Operator for distribution process
 # ----------------------------------------------------------
-def get_operators(status, dest_keys, include_tables, rr_id, is_dict):
+def get_operators(status, dest_keys, include_tables, use_main, rr_id, is_dict):
     '''
     dest_keys is a list with the followinf format:
                     "dbms=[dbms name]"
                     "table=[table name]
     include_tables = the tables that determine the operators
-    rr_id is the round robin ID
+    use_main - query the main operator (if available), otherwise it will use the round-robin
+    rr_id is the round-robin ID
     if is_dict is True - a dictionary is returned, otherwise an object of type operator_info
     '''
 
     if len(dest_keys) >= 2:
         dbms_name = dest_keys[0][5:]        # after "dbms="
         table_name = dest_keys[1][6:]        # after "table="
-        ret_val, operators_list = get_operators_by_keys(status, dbms_name, table_name, rr_id, is_dict)
+        ret_val, operators_list = get_operators_by_keys(status, dbms_name, table_name, use_main, rr_id, is_dict)
         if include_tables:
             for inc_table in include_tables:
                 index = inc_table.find('.')
@@ -768,7 +778,7 @@ def get_operators(status, dest_keys, include_tables, rr_id, is_dict):
                     db_name = dbms_name
                     tb_name = inc_table
 
-                ret_val, inc_operators = get_operators_by_keys(status, db_name, tb_name, rr_id, is_dict)
+                ret_val, inc_operators = get_operators_by_keys(status, db_name, tb_name, use_main, rr_id, is_dict)
                 if ret_val:
                     break
                 operators_list += inc_operators     # Add the operators of the included tables
@@ -784,8 +794,9 @@ def get_operators(status, dest_keys, include_tables, rr_id, is_dict):
 #   0 - used by the query process
 #   1 - used by Operator for distribution process
 # ----------------------------------------------------------
-def get_operators_by_keys(status, dbms_name, table_name, rr_id,  is_dict):
+def get_operators_by_keys(status, dbms_name, table_name, use_main, rr_id,  is_dict):
     '''
+    use_main - query the main operator (if available), otherwise it will use the round-robin
     if is_dict is True - a dictionary is returned, otherwise an object of type operator_info
     '''
 
@@ -806,7 +817,7 @@ def get_operators_by_keys(status, dbms_name, table_name, rr_id,  is_dict):
                 for cluster_id in distribution:
                     if cluster_id in cluster_to_servers_:
                         cluster = cluster_to_servers_[cluster_id]
-                        ret_val, operator = get_any_operator(status, cluster, rr_id)
+                        ret_val, operator = get_any_operator(status, cluster, use_main, rr_id)
                         active_operator = True
                         if not operator:
                             if status.is_subset():
@@ -903,29 +914,45 @@ def get_info_from_operator(operator, dbms_name, table_name, is_dict, is_active):
 #   0 - used by the query process
 #   1 - used by Operator for distribution process
 # ----------------------------------------------------------
-def get_any_operator(status, cluster, rr_id):
+def get_any_operator(status, cluster, use_main, rr_id):
 
     ret_val = process_status.SUCCESS
     returned_operator = None
     if cluster["status"] == "active":
-        operators_list = cluster["operators"]
-        counter_operators = len(operators_list)
-        for _ in range(counter_operators):
-            # Get any operator without flag not_responding
-            id = cluster["round_robin"][rr_id]         # The operator to use
-            if id >= (counter_operators - 1):
-                cluster["round_robin"][rr_id] = 0      # set the next operator to use
-            else:
-                cluster["round_robin"][rr_id] += 1
-            operator = operators_list[id]
 
-            ip_port = operator["ip"] + ":" + str(operator["port"])  # Need to be the external IP
+        returned_operator = None
+        if "main" in cluster:
 
-            if ip_port in ip_port_to_operator_:     # ip_port_to_operator_ is an independent structure that is not deleted when metadata is refreshed
-                if ip_port_to_operator_[ip_port]["status"] == "active":
-                    if not ip_port_to_operator_[ip_port]["foreign_net"]:    # This server is from a foreign network - used to provide data source
-                        returned_operator = operator
-                        break
+            if use_main:
+                # Get the main server if an Operator has an attribute: main : true
+                operator = cluster["main"]
+                ip_port = operator["ip"] + ":" + str(operator["port"])  # Need to be the external IP
+
+                # Repeat the query against the main operator as the not main may be in the data sync process - avoiding different replies from servers
+                if ip_port in ip_port_to_operator_:  # ip_port_to_operator_ is an independent structure that is not deleted when metadata is refreshed
+                    if ip_port_to_operator_[ip_port]["status"] == "active":
+                        if not ip_port_to_operator_[ip_port]["foreign_net"]:  # This server is from a foreign network - used to provide data source
+                            returned_operator = operator
+
+        if not returned_operator:
+            operators_list = cluster["operators"]
+            counter_operators = len(operators_list)
+            for _ in range(counter_operators):
+                # Get any operator without flag not_responding
+                id = cluster["round_robin"][rr_id]         # The operator to use
+                if id >= (counter_operators - 1):
+                    cluster["round_robin"][rr_id] = 0      # set the next operator to use
+                else:
+                    cluster["round_robin"][rr_id] += 1
+                operator = operators_list[id]
+
+                ip_port = operator["ip"] + ":" + str(operator["port"])  # Need to be the external IP
+
+                if ip_port in ip_port_to_operator_:     # ip_port_to_operator_ is an independent structure that is not deleted when metadata is refreshed
+                    if ip_port_to_operator_[ip_port]["status"] == "active":
+                        if not ip_port_to_operator_[ip_port]["foreign_net"]:    # This server is from a foreign network - used to provide data source
+                            returned_operator = operator
+                            break
     if not returned_operator:
         err_msg = "No active operator for cluster"
         if "name" in cluster:
@@ -955,7 +982,7 @@ def get_cluster_operators(status, cluster_id):
 def get_data_destination_operator_ip_port(status, compamy_name, dbms_name, table_name, rr_id):
 
     ip_port = ""
-    operator = get_operator_json(status, compamy_name, dbms_name, table_name, rr_id)
+    operator = get_operator_json(status, compamy_name, dbms_name, table_name, False, rr_id)
 
     if operator:
         ip, port = net_utils.get_dest_ip_port(operator)
@@ -966,7 +993,7 @@ def get_data_destination_operator_ip_port(status, compamy_name, dbms_name, table
 # ----------------------------------------------------------
 # Get an operator that satisfies the condition (company, dbms_name, table_name)
 # ----------------------------------------------------------
-def get_operator_json(status, compamy_name, dbms_name, table_name, rr_id):
+def get_operator_json(status, compamy_name, dbms_name, table_name, use_main, rr_id):
 
     global cluster_to_servers_
 
@@ -990,7 +1017,7 @@ def get_operator_json(status, compamy_name, dbms_name, table_name, rr_id):
         table_info["round_robin"] = next_cluster  # set next cluster to use
 
         cluster = cluster_to_servers_[cluster_id]
-        ret_val, operator = get_any_operator(status, cluster, rr_id)
+        ret_val, operator = get_any_operator(status, cluster, use_main, rr_id)
     else:
         operator = None
 
@@ -1468,9 +1495,12 @@ def add_cluster_info(target_list, company_name, dbms_name, table_name, cluster_d
                 else:
                     node_state = "active"
 
+                # Is flagged as main query node
+                is_main = " +" if operator.get("main", False) else " -"
+
 
                 target_list.append((company, dbms, table, cluster_id, cluster_state, name, member,\
-                                    ip_port, local_ip_port, node_state))
+                                    ip_port, local_ip_port, is_main, node_state))
 
                 cluster_id = company = dbms = table = ""
 

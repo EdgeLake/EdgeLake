@@ -1159,13 +1159,30 @@ def set_sql_table_struct(status, dbms_name, table_name, reply_data):
 # =======================================================================================================================
 # Organize a JSON structure such that it can be provided as a table structure to Grafana
 # =======================================================================================================================
-def json_to_grafana_table(status, command, reply_data):
+def json_to_grafana_table(status, command, reply_data, multiple_servers):
+    # multiple_servers - if reply is a list of multiple nodes replies
+
     if isinstance(reply_data, str):
-        try:
-            json_struct = eval(reply_data)
-        except:
+        json_struct = utils_json.str_to_json(reply_data)
+        if not json_struct:
             status.add_error("Grafana Interface - data provided is not representative of a JSON structure")
-            json_struct = None
+        if multiple_servers and isinstance(json_struct, dict):
+            # it is organized as a dict and the reply from each node is a func (dict)
+            updated_reply = []
+            for node_ip, val in json_struct.items():
+                if isinstance(val, dict):
+                    val["source_node"] = node_ip
+                    updated_reply.append(val)
+                elif isinstance(val, list):
+                    # For example: "get streaming where format = json" from multiple nodes returns a list
+                    if not len(val):
+                        val.append({})      # this entry would show a reply from this server
+                    for entry in val:
+                        if isinstance(entry, dict):
+                            entry["source_node"] = node_ip
+                            updated_reply.append(entry)
+
+            json_struct = updated_reply
     elif isinstance(reply_data, list):
         json_struct = reply_data
     else:
@@ -1177,6 +1194,8 @@ def json_to_grafana_table(status, command, reply_data):
 
         # Get the Title List from the JSON instances
         title_list = []
+        if isinstance(json_struct, dict):
+            json_struct = [json_struct]
         if isinstance(json_struct, list):
             for entry in json_struct:
                 if isinstance(entry, dict):
@@ -1189,6 +1208,11 @@ def json_to_grafana_table(status, command, reply_data):
                         for key in entry.keys():
                             if key not in title_list:
                                 title_list.append(key)
+
+                if multiple_servers and title_list[-1] != "source_node":
+                    # source_node is added after title is set
+                    title_list.append("source_node")
+                break # Get title from first entry
 
         if len(title_list):
 
@@ -1207,6 +1231,12 @@ def json_to_grafana_table(status, command, reply_data):
                 if isinstance(entry, dict):
                     al_object = utils_json.get_inner(entry)  # get the AnyLog Object with the needed entries
                     if isinstance(al_object, dict):
+                        if "source_node" in entry:
+                            # move from outside the iner JSON to the inside of the JSON:
+                            # {'Queries Statistics': {'Up to  1 sec.': '0', 'Up to  2 sec.': '0', 'Up to  3 sec.': '0', 'Up to  4 sec.': '0', 'Up to  5 sec.': '0', 'Up to  6 sec.': '0', 'Up to  7 sec.': '0', 'Up to  8 sec.': '0', 'Up to  9 sec.': '0', 'Over   9 sec.': '0', 'Total queries': '0', 'Time interval': '222 (sec.) : 0:3:42 (H:M:S)'},
+                            # 'source_node': '127.0.0.78:7848'}
+                            source_node = entry["source_node"]
+                            al_object["source_node"] = source_node
                         row_str = get_row_from_dict(status, al_object, title_list)
                     elif isinstance(al_object, str):
                         row_str = get_row_from_dict(status, entry, title_list)
@@ -1496,9 +1526,23 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                     continue
 
                 # Non SQL command - AnyLog Native Command
-                # result was placed on the job_handle
-                reply_data = status.get_active_job_handle().get_result_set()
-                data_str = json_to_grafana_table(status, statement, reply_data)
+                if servers:
+                    # data collected from all replying servers
+                    ret_val, reply_data = native_api.get_network_reply(status)
+                    if ret_val:
+                        if queries_count == 1:
+                            data_str = f"Failed to retrieve reply from Network nodes using: run client ({servers}) {statement}"
+                            break  # With a single query - return the error message
+                        ret_val = process_status.SUCCESS  # ignore the error
+                        continue
+                    multiple_servers = True
+                else:
+                    # local command
+                    # result was placed on the job_handle
+                    reply_data = status.get_active_job_handle().get_result_set()
+                    multiple_servers = False
+
+                data_str = json_to_grafana_table(status, statement, reply_data, multiple_servers)
 
             elif query_params.get_request_type() == 'map':
                 # Data for the Grafana Map
@@ -1567,7 +1611,10 @@ def show_grafana_process(status, query_params,  trace_level, decode_body, call_t
 
         utils_print.output(print_msg, True)
     elif call_type == "info":
-        al_cmd = f"run client ({servers}) {statement}"
+        if servers:
+            al_cmd = f"run client ({servers}) {statement}"
+        else:
+            al_cmd = f"{statement}"
         print_msg = f"\rProcess: [{ret_val}:{msg_text}] Stmt: [{al_cmd}]"
         utils_print.output(print_msg, True)
     else:

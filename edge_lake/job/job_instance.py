@@ -360,7 +360,7 @@ class JobInstance:
             self.members[receiver_id][0].set_is_last_block(True)
 
     # =======================================================================================================================
-    # Add a print message to the member representing the peer node
+    # Get the print message from all members
     # =======================================================================================================================
     def get_nodes_print_message(self):
 

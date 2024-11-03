@@ -59,17 +59,17 @@ def update_performance(rows_count):
         run_time_sec = current_time - start_time_
         if not run_time_sec:
             return
-        rows_per_sec = round(total_rows_ / run_time_sec, 3)
+        rows_per_sec = format(total_rows_ / run_time_sec, ',.2f')
 
         if not delta_time_sec:
             return
 
-        delta_per_sec = round(delta_rows / delta_time_sec, 3)
+        delta_per_sec = format(delta_rows / delta_time_sec, ',.2f')
 
         run_time = get_formatted_hms(run_time_sec)
         delta_time = get_formatted_hms(delta_time_sec)
 
-        info_table = [[run_time, total_rows_, rows_per_sec, delta_time, delta_rows, delta_per_sec]]
+        info_table = [[run_time, format(total_rows_,','), rows_per_sec, delta_time, format(delta_rows,','), delta_per_sec]]
 
         reported_rows_ = total_rows_
         reported_time_ = current_time

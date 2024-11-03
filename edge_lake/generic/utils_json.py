@@ -1075,7 +1075,6 @@ def get_policy_value(policy, policy_type, attr_name, default_val):
 def make_json_rows(status, source_data):
 
     ret_val = process_status.ERR_wrong_json_structure
-    err_value = ""
     if not source_data:
         updated_data = []
         row_counter = 0

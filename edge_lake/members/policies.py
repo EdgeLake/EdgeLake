@@ -60,6 +60,7 @@ operator_attr = [
     ("port", int, None, None, True, False, None),
     ("member", int, None, None, False, False, None),
     ("cluster", str, None, None, False, False, validate_cluster_exists),
+    ("main", bool, None, None, False, False, None),
 ]
 
 cluster_attr = [

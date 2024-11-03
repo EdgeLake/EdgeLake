@@ -120,6 +120,7 @@ cmd_instructions = {"include": ("str", False, False, False),
                     "topic" : ("str", False, False, True),    # A topic if data is send to a broker
                     "committed" : ("bool", False, False, True),    # A true value will limit the query to data on all nodes of the cluster
                     "info": ("str", False, False, False),   # Additional info to include with the query
+                    "nodes": ("str", False, False, True),   # "main" or "all" - with HA: nodes = "main" - retrieve from main servers, "all" - retrieve from any server
                     }
 format_values = {
                     "json" : 0,             # Output in JSON format
@@ -135,6 +136,10 @@ dest_values = {
                     "kafka@" : 6,            # Output to kafka - the value after @ can be any value (to ignore the IP and port)
 }
 
+nodes_values = {
+                    "main" : 0,               # With HA - query from operators designated as main - default
+                    "all" : 0,                # With HA - query from any operator
+}
 metadata_query = {"dbms": ("str", False, False, True),
                   "table": ("str", False, False, True),
                   "company": ("str", False, False, True),
@@ -2661,7 +2666,12 @@ def get_public_str(status, ip, port):
 # =======================================================================================================================
 # Resolve the IP and Ports from logical names
 # =======================================================================================================================
-def resolve_destination(status, dest_names, is_select, remote_dbms, remote_table, include_tables):
+def resolve_destination(status, dest_names, is_select, remote_dbms, remote_table, include_tables, query_nodes):
+    """
+    include_tables - additional tables to query as if these tables are remote_table
+    query_nodes - with HA nodes: "main" - use the main node to query, "all" - use all nodes to query
+    """
+
     ip_port_values = []
     ret_val = process_status.SUCCESS
 
@@ -2715,8 +2725,9 @@ def resolve_destination(status, dest_names, is_select, remote_dbms, remote_table
         # Use Metadata layer
         # The metadata is in memory or just loaded
         if is_select:
-            # Bring one operator per Distributon
-            ret_val, operators = metadata.get_operators(status, dest_keys, include_tables, 0, False)
+            # Bring one operator per Distribution
+            use_main = True if query_nodes == "main" else False
+            ret_val, operators = metadata.get_operators(status, dest_keys, include_tables, use_main, 0, False)
         else:
             operators = metadata.get_all_operators(status, dest_keys, include_tables)
 
@@ -3042,7 +3053,7 @@ def run_client(status, io_buff_in, cmd_words, trace):
     if (words_list[word_offset] == "file" or words_list[word_offset] == "directory") and words_count > (
             word_offset + 1) and words_list[word_offset + 1] == "copy":  # read from file
         if dest_names != "":
-            ret_val, ip_port_values = resolve_destination(status, dest_names, False, None)
+            ret_val, ip_port_values = resolve_destination(status, dest_names, False, None, "main")
             if ret_val:
                 return ret_val
             if not len(ip_port_values):
@@ -3208,12 +3219,12 @@ def send_command_message(status, io_buff_in, cmd_words, word_offset, dest_names,
 
     if not list_size:
 
-        if "include" in conditions:
-            include_tables = conditions["include"]      # Additional tables to participate in the query
-        else:
-            include_tables = None
+        include_tables = conditions.get("include", None) # Additional tables to participate in the query
+        query_nodes = conditions.get("nodes", "main") # set with "main" or "all"
+        if isinstance(query_nodes,list):
+            query_nodes = query_nodes[0]
 
-        ret_val, ip_port_values = resolve_destination(status, dest_names, is_select, dbms_name, table_name, include_tables)
+        ret_val, ip_port_values = resolve_destination(status, dest_names, is_select, dbms_name, table_name, include_tables, query_nodes)
         if ret_val:
             return ret_val
         list_size = len(ip_port_values)
@@ -3396,6 +3407,7 @@ def get_sql_processing_info(status, cmd_words, words_count, index):
     global cmd_instructions
     global format_values
     global dest_values
+    global nodes_values
     global sql_commands
     # Get the DBMS name in SQL statements
     if cmd_words[index] == "sql":  # Each word is an entry in the cmd_words arrau
@@ -3464,6 +3476,8 @@ def get_sql_processing_info(status, cmd_words, words_count, index):
                 ret_val = interpreter.test_values(status, conditions, "format", format_values)
                 if not ret_val:
                     ret_val = interpreter.test_values(status, conditions, "dest", dest_values)
+                    if not ret_val:
+                        ret_val = interpreter.test_values(status, conditions, "nodes", nodes_values)
 
     return [ret_val, dbms_name, conditions, cmd_str]
 
@@ -4598,7 +4612,7 @@ def update_thread_query_done(status, source_ip, job_location, job_id, error_code
      block_counter - number of blocks delivered
      dbms_rows - total queried rows
      rows_to_transfer - since last send (rows not yet send)
-     sql_time - the time it tool to execute the sql stmt
+     sql_time - the time to execute the sql stmt
      fetch_time - the time to retrieve the rows from the dbms
      network_time - the time spend to send results over the network (not including last block)
      dbms_cursor - query info to include the dbms and table names
@@ -5860,6 +5874,31 @@ def _debug_next(status, io_buff_in, cmd_words, trace):
 
     return ret_val
 
+# =======================================================================================================================
+# Terminate debug interactive
+# COmmand: Continue
+# =======================================================================================================================
+def _debug_continue(status, io_buff_in, cmd_words, trace):
+    ret_val = process_status.SUCCESS
+    if len(cmd_words) == 1:
+        # continue to all threads
+        for scripts_array in running_scripts.values():
+            if len(scripts_array):
+                scripts_array[-1].set_debug_interactive(False)
+    elif len(cmd_words) == 2:
+        # given the thread id
+        thread_id = cmd_words[1]
+        if thread_id in running_scripts.keys():
+            scripts_array = running_scripts[thread_id]
+            if len(scripts_array):
+                scripts_array[-1].set_debug_interactive(False)
+        else:
+            ret_val = process_status.The_thread_has_no_script
+    else:
+        ret_val = process_status.ERR_command_struct
+    return ret_val
+
+
 
 # =======================================================================================================================
 # Register PI server on the network
@@ -6775,7 +6814,7 @@ def get_operators_json_by_table(status, blockchain_file, company_name, dbms_name
     Return a list with the policies (JSONs) that satisfy the search
     '''
 
-    operators_json = metadata.get_operator_json(status, company_name, dbms_name, table_name, 1)
+    operators_json = metadata.get_operator_json(status, company_name, dbms_name, table_name, False,1)
     if not operators_json:
         cmd_words = "blockchain get operator where company = %s and dbms = %s and table = %s" % (company_name, dbms_name, table_name)
         err_val, operators_json = blockchain_get(status, cmd_words.split(), blockchain_file, True)
@@ -7091,7 +7130,7 @@ def _print(status, io_buff_in, cmd_words, trace):
         for word_count, word in enumerate(cmd_words[1:]):
             if word_count:
                 string_text += ' '    # Add spaces to words
-            string_text += params.get_value_if_available(word)    # Use dictionary to extract
+            string_text += str(params.get_value_if_available(word))   # Use dictionary to extract
         if len(string_text) > 1 and string_text[0] == "'" and string_text[-1] == "'":
             string_text = string_text[1:-1]         # Remove single quotation
 
@@ -7917,7 +7956,10 @@ def set_msg_rule(status, io_buff_in, cmd_words, trace):
         status.add_error("Missing 'then' keyword in 'set msg rule' command")
         return process_status.ERR_command_struct
 
-    rule_name = cmd_words[3]
+    rule_name = params.get_value_if_available(cmd_words[3])
+    if not rule_name:
+        status.add_error("Missing rule name in 'set msg rule' command")
+        return process_status.ERR_command_struct
 
     # Identify the message by the Source message IP, Port, message header
     #                                           Must       Add      Is
@@ -7952,6 +7994,7 @@ def set_msg_rule(status, io_buff_in, cmd_words, trace):
                 "table": ("str",                True, False, True),
                 "syslog": ("bool",              False, False, True),
                 "topic": ("str",                False, False, True),
+                "extend": ("str",              False, False, False),   # Add info to the user's data i.e. "extend" : "ip"
                 "structure": ("str", False, True, True),  # text in the header (i.e. SysLog)
                 }
 
@@ -8688,6 +8731,80 @@ def start_tcp_threads(url, port, url_internal, port_internal, is_bind, url_bind,
     return process_status.SUCCESS
 
 # =======================================================================================================================
+# Stream JSON to a database
+# Example:
+# stream !json_data where dbms = my_dbms and table = my_table
+# =======================================================================================================================
+def stream_data(status, io_buff_in, cmd_words, trace):
+    if cmd_words[1] == "message":  # a tcp sql message
+        mem_view = memoryview(io_buff_in)
+        command = message_header.get_command(mem_view)
+        command = command.replace('\t', ' ')
+        words_array, left_brackets, right_brakets = utils_data.cmd_line_to_list_with_json(status, command, 0, 0)
+        if left_brackets != right_brakets:
+            status.add_keep_error("Stream Command: Received inconsistent JSON structure from a peer node")
+            return process_status.ERR_wrong_json_structure
+    else:
+        words_array = cmd_words
+
+    if len(words_array) < 10:
+        return process_status.ERR_command_struct
+
+    data_body = params.get_value_if_available(words_array[1])
+    if not data_body:
+        status.add_error("Stream command: failed to identify data")
+        return process_status.ERR_wrong_json_structure
+
+    ret_val, msg_data, row_counter = utils_json.make_json_rows(status, data_body)
+    if ret_val:
+        if not msg_data:
+            err_msg = "Failed to process JSON data: Data Body is empty"
+        else:
+            err_msg = "Failed to process JSON input"
+        status.add_error(f"Stream command: {err_msg}")
+        return process_status.ERR_wrong_json_structure
+
+    keywords = {
+        "dbms": ("str", True, False, True),
+        "table": ("str", True, False, True),
+        "mode": ("str", False, False, False),           # "file or streaming"
+        "source": ("str", False, False, False),  # "policy id"
+        "instructions": ("str", False, False, False),   # "policy id"
+    }
+
+    if words_array[2] != "where":
+        return process_status.ERR_command_struct
+
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, words_array, 3, 0, keywords, False)
+    if ret_val:
+        # conditions not satisfied by keywords or command structure
+        return ret_val
+
+    dbms_name = interpreter.get_one_value(conditions, "dbms")
+    table_name = interpreter.get_one_value(conditions, "table")
+
+
+    mode = interpreter.get_one_value_or_default(conditions, "mode", "streaming")
+    source = interpreter.get_one_value_or_default(conditions, "source", "0")
+    instructions = interpreter.get_one_value_or_default(conditions, "instructions", "0")
+
+    prep_dir = params.get_value_if_available("!prep_dir")  # dir where the data will be written
+    watch_dir = params.get_value_if_available("!watch_dir")  # dir where the data will be written
+    err_dir = params.get_value_if_available("!err_dir")
+    if not prep_dir or not err_dir or not watch_dir:
+        if not prep_dir:
+            missing_name = "prep_dir"
+        elif not watch_dir:
+            missing_name = "watch_dir"
+        else:
+            missing_name = "err_dir"
+        status.add_error(f"Stream command: Missing {missing_name} in local dictionary")
+        return process_status.Missing_configuration
+
+    ret_val, hash_value = streaming_data.add_data(status, mode, row_counter, prep_dir, watch_dir, err_dir, dbms_name, table_name, source, instructions, "json", msg_data)
+
+    return ret_val
+# =======================================================================================================================
 # Executes user's Python code
 # Example: ip_port = from !selected_operator bring ip ":" port " "
 # =======================================================================================================================
@@ -8969,13 +9086,61 @@ def blockchain_commit(status, io_buff_in, cmd_words, trace, func_params):
             ret_val, json_dictionary = prep_policy(status, json_key, b_file, True)
 
             if not ret_val:
-                policy_id =  utils_json.get_policy_value(json_dictionary, None, "id", None)
+                policy_id = utils_json.get_policy_value(json_dictionary, None, "id", None)
 
                 json_data = utils_json.to_string(json_dictionary)
                 if json_data:
                     ret_val, reply = bplatform.blockchain_commit(status, platform_name, policy_id, json_data, trace)
                 else:
                     ret_val = process_status.Wrong_policy_structure
+
+    return [ret_val, reply]
+
+# =======================================================================================================================
+# Update the JSON file to the blockchain
+# Example command: blockchain update to ethereum !policy_id !json_script
+# =======================================================================================================================
+def blockchain_update(status, io_buff_in, cmd_words, trace, func_params):
+
+    ret_val = None
+    reply = None
+    if cmd_words[2] != "to":
+        ret_val = process_status.ERR_command_struct
+    else:
+        b_file = params.get_value_if_available("!blockchain_file")
+        if b_file == "":
+            status.add_error("Missing dictionary definition for \'blockchain_file\'")
+            ret_val = process_status.No_local_blockchain_file
+        else:
+            platform_name = params.get_value_if_available(cmd_words[3])
+            policy_id = params.get_value_if_available(cmd_words[4])  # get the provided policy id
+            json_key = params.get_value_if_available(cmd_words[5])
+
+            # JSONify policy
+            policy_json = utils_json.str_to_json(json_key)
+            # check if policy is a valid JSON
+            if not policy_json:
+                ret_val = process_status.Invalid_policy
+            if not ret_val:
+                # Check if new policy contains a policy id
+                key = next(iter(policy_json))
+                if not policy_json[key].get("id"):
+                    policy_json[key]["id"] = policy_id  # add provided policy id if not included in policy
+                # Check if policy id matches
+                elif policy_id != policy_json[key].get("id"):
+                    ret_val = process_status.Policy_id_not_match # return error
+
+                if not ret_val:
+                    ret_val, json_dictionary = prep_policy(status, json_key, b_file, True)
+
+                    if not ret_val:
+
+                        json_data = utils_json.to_string(json_dictionary)
+                        if json_data:
+                            ret_val, reply = bplatform.blockchain_update(status, platform_name, policy_id, json_data,
+                                                                                trace)
+                        else:
+                            ret_val = process_status.Wrong_policy_structure
 
     return [ret_val, reply]
 
@@ -9515,6 +9680,7 @@ def blockchain_insert(status, io_buff_in, cmd_words, trace, func_params):
 
     return [ret_val, None]
 
+
 # -----------------------------------------------------------------------------------------------------
 # Validate policy structure + update policy in all platforms
 # -----------------------------------------------------------------------------------------------------
@@ -9770,10 +9936,9 @@ def _to_datetime(status, io_buff_in, cmd_words, trace):
     ret_val = process_status.ERR_command_struct
     reply = None
     offset = get_command_offset(cmd_words)
-    words_count = len(cmd_words)
     timezone = cmd_words[offset + 2]
 
-    time_words, time_string = utils_sql.process_date_time(cmd_words, 3, True)
+    time_words, time_string = utils_sql.process_date_time(cmd_words, offset + 3, True)
     if time_words and  time_string:
         ret_val = process_status.SUCCESS
         if timezone != "utc":
@@ -11256,14 +11421,23 @@ def _incr(status, io_buff_in, cmd_words, trace):
 def data_assignment(status, first_word, cmd_words):
 
     words_count = len(cmd_words)
+    type_value = None
     if (first_word == 2 and words_count >= 3):
 
         if words_count > 3 and cmd_words[3] != '+':
             # Example: a = 30 seconds
             new_string = ' '.join(cmd_words[2:])
         else:
-            # Example: a = a + b
-            new_string = params.get_added_string(cmd_words, 2, 0)
+            if words_count == 3 and  cmd_words[1] == '=':
+                # Assignment
+                # Example:
+                # dict = {}
+                # dict[key] = !k.float
+                type_value = params.get_value_if_available(cmd_words[2])
+                new_string = str(type_value)
+            else:
+                # Example: a = a + b
+                new_string = params.get_added_string(cmd_words, 2, 0)
 
         dict_key = cmd_words[0]
         # Test if a policy
@@ -11274,8 +11448,8 @@ def data_assignment(status, first_word, cmd_words):
             if index > 0 and index < (len(dict_key)-2):
                 json_key = dict_key[index:]
                 dict_key = dict_key[:index]
-
-                ret_val = params.set_dictionary(status, dict_key, [json_key, '=', new_string] )
+                value = type_value if (type_value != None) else new_string    # Assignment may be a non-string value
+                ret_val = params.set_dictionary(status, dict_key, [json_key, '=', value] )
                 return True if ret_val == process_status.SUCCESS else False
 
         if dict_key[0] == '!' and len(dict_key) > 1:
@@ -11712,7 +11886,7 @@ def process_cmd(status, command, print_cmd, source_ip, source_port, io_buffer_in
         else:
             header_txt = "(Failed: "
 
-        process_log.add("Error", header_txt + error_msg + ") " + cmd_text)  # update event log
+        status.add_error(header_txt + error_msg + ") " + cmd_text)
 
         if status.get_considered_err_value() != error_code:
             # if equal - the error_code was set on the status objected and the error message was printed (this is a recursive call to process_cmd)
@@ -12408,6 +12582,7 @@ def exec_script(status, io_buff_in, file_name, is_event, values):
     global event_time
     stack = []
 
+    thread_name = threading.current_thread().name
     debug_script = register_script(file_name)  # places the script name in a registry
 
     read_file = True  # file can be in RAM and then does not need to be read
@@ -12579,7 +12754,7 @@ def exec_script(status, io_buff_in, file_name, is_event, values):
             if debug_script.is_stop():
                 break  # flagged by the user to stop
             if debug_script.is_debug():
-                print_command("", line_number + 1, command[index:], ret_val)  # Debug - Print the command
+                print_command(thread_name, line_number + 1, command[index:], ret_val)  # Debug - Print the command
                 if debug_script.is_debug_interactive():
                     # wait for next command
                     while not debug_script.is_debug_next():
@@ -12810,7 +12985,7 @@ def get_data_distribution(status, io_buff_in, cmd_words, trace):
         f"dbms={dbms_name}",
         f"table={table_name}",
     ]
-    ret_val, nodes_list = metadata.get_operators(status, dest_keys, None, 0, True)
+    ret_val, nodes_list = metadata.get_operators(status, dest_keys, None, False, 0, True)
     total = 0
     if not ret_val and len(nodes_list):
         message = ["node_x", "=", "run", "client", "(destination)"] + al_cmd
@@ -12905,8 +13080,9 @@ def get_data_distribution(status, io_buff_in, cmd_words, trace):
 #           test network metadata version - test metadata version on all nodes
 #           test network table - test table definition on all nodes
 # =======================================================================================================================
-def network_get_info(status, io_buff_in, al_cmd, cmd_name, nodes_types, target_node, dbms_name, table_name, trace):
+def network_get_info(status, reply_format, io_buff_in, al_cmd, cmd_name, nodes_types, target_node, dbms_name, table_name, trace):
     '''
+    reply_format - "table" or "json"
     al_cmd - the command to issue like: ["get", "status"] or ["get", "metadata", "version"] or ["test", "table" ...]
     cmd_name - the name of the command like: "Status" or "Metadata Version" or "Table Test"
     nodes_types - A string with the list of policies to consider, like "master,operator,query"
@@ -12914,12 +13090,14 @@ def network_get_info(status, io_buff_in, al_cmd, cmd_name, nodes_types, target_n
     table_name - identifies nodes that service the database
     '''
 
-
-    aggregate_table = utils_print.PrintTable("")
-    aggregate_table.add_title("addr", "Address")
-    aggregate_table.add_title("type", "Node Type")
-    aggregate_table.add_title("name", "Node Name")
-    aggregate_table.add_title("status", cmd_name)   # Depending on the command issued
+    if reply_format == "json":
+        aggregate_dict = {}
+    else:
+        aggregate_table = utils_print.PrintTable("")
+        aggregate_table.add_title("addr", "Address")
+        aggregate_table.add_title("type", "Node Type")
+        aggregate_table.add_title("name", "Node Name")
+        aggregate_table.add_title("status", cmd_name)   # Depending on the command issued
 
 
     if dbms_name:
@@ -12962,17 +13140,31 @@ def network_get_info(status, io_buff_in, al_cmd, cmd_name, nodes_types, target_n
                 ip, port = net_utils.get_dest_ip_port(entry)  # Determine which IP and Port to use
                 if ip and port:
                     ip_port = f"{ip}:{port}"
-                    aggregate_table.add_entry("addr", ip_port, ip_port)  # The first column with the ip and port
+                    if reply_format == "json":
+                        aggregate_dict[ip_port] = {}
+                        aggregate_dict[ip_port]["address"] = ip_port
 
-                    if "policy" in entry:
-                        aggregate_table.add_entry("type", ip_port, entry["policy"])  # The policy type
+                        if "policy" in entry:
+                            aggregate_dict[ip_port]["type"] = entry["policy"]  # The policy type
+                        else:
+                            aggregate_dict[ip_port]["type"] = nodes_types  # The policy type defined by the user
+
+                        if "name" in entry:
+                            aggregate_dict[ip_port]["name"] =  entry["name"]  # The policy name
+                        elif "table" in entry:
+                            aggregate_dict[ip_port]["name"] =  entry["table"]  # The table name if specified
                     else:
-                        aggregate_table.add_entry("type", ip_port, nodes_types)  # The policy type defined by the user
+                        aggregate_table.add_entry("addr", ip_port, ip_port)  # The first column with the ip and port
 
-                    if "name" in entry:
-                        aggregate_table.add_entry("name", ip_port, entry["name"])  # The policy name
-                    elif "table" in entry:
-                        aggregate_table.add_entry("name", ip_port, entry["table"])  # The table name if specified
+                        if "policy" in entry:
+                            aggregate_table.add_entry("type", ip_port, entry["policy"])  # The policy type
+                        else:
+                            aggregate_table.add_entry("type", ip_port, nodes_types)  # The policy type defined by the user
+
+                        if "name" in entry:
+                            aggregate_table.add_entry("name", ip_port, entry["name"])  # The policy name
+                        elif "table" in entry:
+                            aggregate_table.add_entry("name", ip_port, entry["table"])  # The table name if specified
 
                     message[4] = ip_port        # Destination
                     node_key = f"node_{ip_port}"
@@ -13007,7 +13199,10 @@ def network_get_info(status, io_buff_in, al_cmd, cmd_name, nodes_types, target_n
                     node_val = params.get_value_if_available(node_key)
                     if node_val and node_val[-14:] != "Not responding":
                         if cmd_name == "Status":
-                            aggregate_table.add_entry("status", ip_port, "  +")  # Node replied
+                            if reply_format == "json":
+                                aggregate_dict[ip_port]["status"] = '+'
+                            else:
+                                aggregate_table.add_entry("status", ip_port, "  +")  # Node replied
                         else:
                             # Remove the [From Node 10.0.0.78:7848] prefix
                             index = node_val.find(']', 1)
@@ -13016,10 +13211,17 @@ def network_get_info(status, io_buff_in, al_cmd, cmd_name, nodes_types, target_n
                             else:
                                 info_returned = node_val
 
-                            aggregate_table.add_entry("status", ip_port, info_returned)  # Node replied with: get metadata version
+                            if reply_format == "json":
+                                aggregate_dict[ip_port]["status"] = info_returned
+                            else:
+                                aggregate_table.add_entry("status", ip_port, info_returned)  # Node replied with: get metadata version
 
     if not ret_val:
-        reply = aggregate_table.output("", True, "")
+        if reply_format == "json":
+            jsons_list = list(aggregate_dict.values())    # The IP and port is an item with a title
+            reply = utils_json.to_string(jsons_list)
+        else:
+            reply = aggregate_table.output("", True, "")
     else:
         reply = ""
 
@@ -13039,6 +13241,16 @@ def test_network(status, io_buff_in, cmd_words, trace):
     dbms_name = ""
     table_name = ""
     target_node = ""
+
+    if words_count >= 6 and utils_data.test_words(cmd_words, words_count - 3, ["format", "=", "json"]):
+        # Support test node if reply is in JSON
+        if cmd_words[words_count-4] != "where" and cmd_words[words_count-4] != "and":
+            return [process_status.ERR_command_struct, ""]
+        reply_format = "json"
+        words_count -= 4
+    else:
+        reply_format = "table"
+
 
     if words_count == 2:
         al_cmd = ["get", "status"]      # Issue get status to all nodes
@@ -13077,7 +13289,7 @@ def test_network(status, io_buff_in, cmd_words, trace):
         return [process_status.ERR_command_struct, ""]
 
 
-    ret_val, reply = network_get_info(status, io_buff_in, al_cmd, cmd_name, nodes_types, target_node, dbms_name, table_name, trace)
+    ret_val, reply = network_get_info(status, reply_format, io_buff_in, al_cmd, cmd_name, nodes_types, target_node, dbms_name, table_name, trace)
     return [ret_val, reply]
 
 # =======================================================================================================================
@@ -13473,7 +13685,7 @@ def drop_network_table(status, io_buff_in, cmd_words, trace):
     master_node = interpreter.get_one_value_or_default(conditions, "master", None)
 
     # Get the list of nodes that have local tables to drop
-    ret_val, operators_list = resolve_destination(status, "", False, dbms_name, table_name, "")
+    ret_val, operators_list = resolve_destination(status, "", False, dbms_name, table_name, None, "main")
 
     # Get the list of operators that host the data
     if not ret_val:
@@ -14169,14 +14381,14 @@ def _set_trace(status, io_buff_in, cmd_words, trace):
                 for command in commands.keys():
                     commands[command]['trace'] = trace_level
             else:
-                if cmd_words[4] == "insert":
+                if words_array[4] == "insert":
                     # trace the number of inserts
                     # Example: trace level = 1 inserts 2000 --> Report every 2000
                     # By default report every 1000
                     if not trace_level:
                         inserts_threshold = 0
                     else:
-                        if len(cmd_words) >= 6 and cmd_words[5].isdigit():
+                        if len(words_array) >= 6 and words_array[5].isdigit():
                             inserts_threshold = int(words_array[5])
                         else:
                             inserts_threshold = 1000
@@ -14605,8 +14817,29 @@ def get_watch_directories(status, io_buff_in, cmd_words, trace):
 # ------------------------------------------
 def get_queries_time(status, io_buff_in, cmd_words, trace):
 
-    reply = job_instance.get_query_stats(status.get_job_handle().is_rest_caller())
-    return [process_status.SUCCESS, reply]
+    cmd_offset = get_command_offset(cmd_words)
+    words_count = len(cmd_words)
+
+    out_format = "table"
+    if words_count == (3 + cmd_offset):
+        is_json = False
+        ret_val = process_status.SUCCESS
+    elif words_count == (7 + cmd_offset) and utils_data.test_words(cmd_words, cmd_offset + 3, ["where", "format", "="]):
+        # get queries time where format = JSON
+        if cmd_words[cmd_offset + 6] == "json":
+            is_json = True
+            out_format = "json"
+        else:
+            is_json = False
+        ret_val = process_status.SUCCESS
+    else:
+        ret_val = process_status.ERR_command_struct
+        reply = None
+
+    if not ret_val:
+        reply = job_instance.get_query_stats(is_json)
+
+    return [ret_val, reply, out_format]
 # ------------------------------------------
 # Get info on the scheduler
 # Commands options:
@@ -14719,21 +14952,34 @@ def get_local_broker(status, io_buff_in, cmd_words, trace):
 # show Info on Streaming Data (from REST calls and MQTT calls)
 # Command: get streaming
 # Command: get streaming where format = json
+# Command: get streaming config     # Configuration
 # ------------------------------------------------
 def get_streaming_info(status, io_buff_in, cmd_words, trace):
+    cmd_offset = get_command_offset(cmd_words)
 
     ret_val = process_status.SUCCESS
     words_count = len(cmd_words)
-    if words_count == 2:
+    if words_count == (2 + cmd_offset):
         out_format = "table"
-    elif words_count == 6 and cmd_words[2] == "where" and cmd_words[3] == "format" and cmd_words[4] == "=":
-        out_format = cmd_words[5]
+        config_only = False
     else:
-        out_format = "table"
-        ret_val = process_status.ERR_command_struct
+        if cmd_words[cmd_offset + 2] == "config":
+            config_only = True
+            cmd_offset += 1
+        else:
+            config_only = False
+
+        if words_count == (2 + cmd_offset):
+            out_format = "table"        # get streaming config
+        else:
+            if words_count == (6 + cmd_offset) and  utils_data.test_words(cmd_words, 2 + cmd_offset, ["where", "format", "="]):
+                out_format = cmd_words[5 + cmd_offset]
+            else:
+                out_format = "table"
+                ret_val = process_status.ERR_command_struct
 
     if not ret_val:
-        reply = streaming_data.show_info(out_format)
+        reply = streaming_data.show_info(config_only, out_format)
     else:
         reply = None
 
@@ -14805,6 +15051,10 @@ def get_msg_client_broker(status, io_buff_in, cmd_words, trace):
 # Command: get data nodes where company = company_name and dbms = dbms_name and table =  table_name
 # Command: get data nodes where sort = (1,2)
 # ------------------------------------------
+def enumarate(operator):
+    pass
+
+
 def get_data_nodes(status, io_buff_in, cmd_words, trace):
 
     if len(cmd_words) == 3:
@@ -14812,6 +15062,7 @@ def get_data_nodes(status, io_buff_in, cmd_words, trace):
         dbms_name =  '*'
         table_name = '*'
         sort_fields = None
+        out_format = "table"
         ret_val = process_status.SUCCESS
     elif len(cmd_words) >= 7 and cmd_words[3] == "where":
 
@@ -14823,6 +15074,7 @@ def get_data_nodes(status, io_buff_in, cmd_words, trace):
                     "dbms": ("str", False, False, True),
                     "table": ("str", False, False, True),
                     "sort" :  ("sort", False, False, False),
+                    "format": ("str", False, False, False),
                 }
 
         ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
@@ -14830,6 +15082,7 @@ def get_data_nodes(status, io_buff_in, cmd_words, trace):
             company_name = interpreter.get_one_value_or_default(conditions,"company", '*')
             dbms_name = interpreter.get_one_value_or_default(conditions,"dbms", '*')
             table_name = interpreter.get_one_value_or_default(conditions,"table", '*')
+            out_format = interpreter.get_one_value_or_default(conditions, "format", 'table')
 
             sort_fields = interpreter.get_one_value_or_default(conditions, "sort", None)   # List of columns ID for the sort in parenthesis (0,3)
 
@@ -14838,69 +15091,82 @@ def get_data_nodes(status, io_buff_in, cmd_words, trace):
         ret_val = process_status.ERR_command_struct
 
     if not ret_val:
+        title = ["Company", "DBMS", "Table", "Cluster ID", "Cluster Status", "Node Name", "Member ID",
+                                                      "External IP/Port", "Local IP/Port", "Main", "Node Status"]
         # version changed
         blockchain_load(status, ["blockchain", "get", "cluster"], False, 0)
         operators = metadata.get_operators_by_company(company_name, dbms_name, table_name)
 
-        if sort_fields:
-            sort_strings = sort_fields[1:-1].split(',')
-            try:
-                # Get the column ID
-                sort_columns = ([int(x) for x in sort_strings])
-            except:
-                status.add_error("Wrong sort values in 'get data nodes' command")
-                ret_val = process_status.ERR_command_struct
-            else:
-                # need to complete the space fields before the sort (for company, dbms and table)
-                entry_company = ""
-                entry_dbms = ""
-                entry_table = ""
-                cluster_id = ""
+        if out_format == "json":
+            json_list = []
+            for operator in operators:
+                operator_json = {}
+                index = 0
+                for attribute in operator:
+                    operator_json[title[index]] = attribute
+                    index += 1
+                json_list.append(operator_json)
+            reply = utils_json.to_string(json_list)
 
-                for index, entry in enumerate(operators):
-                    if entry[0] == "" or entry[1] == "" or entry[2] == "" or entry[3] == "":
-                        new_entry = []
-                        for x, column in enumerate(entry):
-                            if x == 0:
-                                if column:
-                                    entry_company = column
-                                new_entry.append(entry_company)
-                            elif x == 1:
-                                if column:
-                                    entry_dbms = column
-                                new_entry.append(entry_dbms)
-                            elif x == 2:
-                                if column:
-                                    entry_table = column
-                                new_entry.append(entry_table)
-                            elif x == 3:
-                                if column:
-                                    cluster_id = column
-                                new_entry.append(cluster_id)
-                            else:
-                                new_entry.append(column)
-                        operators[index] = new_entry        # Replace with complete row
-                    else:
-                        entry_company = entry[0]
-                        entry_dbms = entry[1]
-                        entry_table = entry[2]
-                        cluster_id = entry[3]
-
-                # get the column size for every sorted field
-                max_len = []
+        else:
+            if sort_fields:
+                sort_strings = sort_fields[1:-1].split(',')
                 try:
-                    for col_id in sort_columns:
-                        longest_column = max(len(str(item[col_id])) for item in operators)
-                        max_len.append(longest_column)
-                    # do the sort
-                    operators.sort(key=lambda x: custom_sort_key(x, sort_columns, max_len))
+                    # Get the column ID
+                    sort_columns = ([int(x) for x in sort_strings])
                 except:
                     status.add_error("Wrong sort values in 'get data nodes' command")
                     ret_val = process_status.ERR_command_struct
+                else:
+                    # need to complete the space fields before the sort (for company, dbms and table)
+                    entry_company = ""
+                    entry_dbms = ""
+                    entry_table = ""
+                    cluster_id = ""
 
-        reply = utils_print.output_nested_lists(operators, "",
-                                                 ["Company", "DBMS", "Table", "Cluster ID", "Cluster Status", "Node Name", "Member ID",
-                                                  "External IP/Port", "Local IP/Port", "Node Status"], True)
+                    for index, entry in enumerate(operators):
+                        if entry[0] == "" or entry[1] == "" or entry[2] == "" or entry[3] == "":
+                            new_entry = []
+                            for x, column in enumerate(entry):
+                                if x == 0:
+                                    if column:
+                                        entry_company = column
+                                    new_entry.append(entry_company)
+                                elif x == 1:
+                                    if column:
+                                        entry_dbms = column
+                                    new_entry.append(entry_dbms)
+                                elif x == 2:
+                                    if column:
+                                        entry_table = column
+                                    new_entry.append(entry_table)
+                                elif x == 3:
+                                    if column:
+                                        cluster_id = column
+                                    new_entry.append(cluster_id)
+                                else:
+                                    new_entry.append(column)
+                            operators[index] = new_entry        # Replace with complete row
+                        else:
+                            entry_company = entry[0]
+                            entry_dbms = entry[1]
+                            entry_table = entry[2]
+                            cluster_id = entry[3]
+
+                    # get the column size for every sorted field
+                    max_len = []
+                    try:
+                        for col_id in sort_columns:
+                            longest_column = max(len(str(item[col_id])) for item in operators)
+                            max_len.append(longest_column)
+                        # do the sort
+                        operators.sort(key=lambda x: custom_sort_key(x, sort_columns, max_len))
+                    except:
+                        status.add_error("Wrong sort values in 'get data nodes' command")
+                        ret_val = process_status.ERR_command_struct
+
+            reply = utils_print.output_nested_lists(operators, "",
+                                                     title, True)
     else:
         reply = None
 
@@ -16293,7 +16559,8 @@ def set_debug_options(status, io_buff_in, cmd_words, trace):
             elif cmd_words[2] == "interactive":
                 if params.is_input_thread(thread_name):
                     # debug interactive is not doable on main thread is
-                    debug_interactive = False
+                    status.add_error("Main thread does not support 'debug interactive', call the scripty using 'thread' command")
+                    ret_val = process_status.Not_suppoerted_on_main_thread
                 else:
                     debug_interactive = True
                 debug = True
@@ -16886,6 +17153,16 @@ _blockchain_methods = {
                          'keywords' : ["blockchain"],
                         }
                      },
+    "update": {'command': blockchain_update,
+                    'words_count' : 6,
+                     'help': {
+                         'usage': "blockchain update to [blockchain name] [policy_id] [policy]",
+                         'example': "blockchain update to ethereum !policy_id !policy",
+                         'text': "Update an existing JSON policy in the blockchain platform.",
+                         'keywords' : ["blockchain"],
+                        }
+                     },
+
     "wait": {'command': blockchain_wait,
                    'words_count': 6,
                    'help': {
@@ -17120,6 +17397,7 @@ _set_methods = {
                          'example': "set profiler on where target = operator",
                          'text': "Enable and disable profiling. Note: Profile libraries needs to be loaded per moudle using sys variables."\
                                  "i.e.: PROFILE_OPERATOR=true",
+                         'link' : 'blob/master/profiling%20and%20monitoring%20queries.md#profiling',
                          'keywords': ["debug", "profile"],
                      }
                      },
@@ -17127,7 +17405,7 @@ _set_methods = {
         "msg rule": {'command': set_msg_rule,
                         'words_min': 12,
                         'help': {
-                            'usage': "set msg rule [rule name] if ip = [IP address] and port = [port] and header = [header text] then dbms = [dbms name] and table = [table name] and syslog = [true/false] and format = [data format] and topic = [topic name]",
+                            'usage': "set msg rule [rule name] if ip = [IP address] and port = [port] and header = [header text] then dbms = [dbms name] and table = [table name] and syslog = [true/false] and extend = ip and format = [data format] and topic = [topic name]",
                             'example': "set msg rule my_rule if ip = 10.0.0.78 and port = 1468 then dbms = test and table = syslog and syslog = true",
                             'text': "Identify arbitrary messages and associate streaming data with a logical database, table and a topic",
                             'link' : 'blob/master/using%20syslog.md#setting-a-rule-to-accept-syslog-data',
@@ -17724,6 +18002,7 @@ _get_methods = {
             'help': {'usage': 'get profiler output where target = [process name]',
                      'example': 'get profiler output where target = operator',
                      'text': 'Output the profiler info',
+                     'link' : 'blob/master/profiling%20and%20monitoring%20queries.md#profiling',
                      'keywords': ["debug", "profile"],
                      },
             'trace': 0,
@@ -18334,7 +18613,6 @@ _get_methods = {
                    },
 
         "queries time": {'command': get_queries_time,
-                          'key_only': True,
                           'help': {
                               'usage': "get queries time",
                               'example': "get queries time",
@@ -18450,8 +18728,9 @@ _get_methods = {
         "streaming": {'command': get_streaming_info,
                      'words_min': 2,
                      'help': {
-                         'usage': "get streaming where format = [table/json]",
+                         'usage': "get streaming [info type] where format = [table/json]",
                          'example': "get streaming\n"
+                                    "get streaming config\n"    # only configuration
                                     "get streaming where format = json",
                          'text': "Statistics on the streaming processes.",
                          'link' : "blob/master/monitoring%20calls.md#get-streaming",
@@ -19249,6 +19528,18 @@ commands = {
         'trace': 0,
     },
 
+    'stream': {
+        'command': stream_data,
+        "words_min" : 2,        # addressing: "stream message" which are 2 words
+        'help': {
+            'usage': 'stream [json data] where dbms = [dbms name] and table = [table name]',
+            'example': 'stream !json_data where dbms = my_dbms and table = my_table',
+            'text': 'Stream json data into a database ',
+            'keywords': ["streaming"],
+        },
+        'trace': 0,
+    },
+
     'email': {
         'command': utils_output.email_send,
         'help': {
@@ -19753,7 +20044,18 @@ commands = {
         'help': {'usage': 'next',
                      'example': 'next',
                      'text': 'In debug mode, executes the next command',
+                     'link' : 'blob/master/cli.md#the-set-debug-command',
                      'keywords' : ["debug"],
+                 },
+        'trace': 0,
+    },
+    'continue': {
+        'command': _debug_continue,
+        'help': {'usage': 'continue',
+                 'example': 'continue',
+                 'text': 'Terminate debug interactive mode',
+                 'link' : 'blob/master/cli.md#the-set-debug-command',
+                 'keywords': ["debug"],
                  },
         'trace': 0,
     },

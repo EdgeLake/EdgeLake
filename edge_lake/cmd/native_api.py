@@ -57,6 +57,8 @@ def exec_no_wait(status, command, io_buff, wfile):
 # AnyLog command which is not SQL
 # ------------------------------------------------------------------------
 def exec_native_cmd(status, servers, command, timeout):
+    if servers:
+        command = f"run client ({servers}) {command}"
     ret_val = exec_al_cmd(status, command, None, None, timeout)
     return ret_val
 
@@ -344,6 +346,28 @@ def get_from_blockchain(status, bchain_cmd):
         status.add_error(f"Failed to retrieve HTML policy using: '{bchain_cmd}'")
         ret_val = process_status.Policy_not_in_local_file
     return [ret_val, json_policy]
+
+# =======================================================================================================================
+# Return a unified reply from all the participating nodes
+# =======================================================================================================================
+def get_network_reply(status):
+
+    ret_val = process_status.Failed_to_retrieve_network_reply
+    job_id = status.get_job_id()
+    if (job_id != process_status.JOB_INSTANCE_NOT_USED):
+        # job instance was used
+        j_instance = job_scheduler.get_job(job_id)
+        # Mutex such that the job instance is not reused by a different thread in the query process
+        j_instance.data_mutex_aquire(status, 'W')
+        if j_instance.is_job_active() and j_instance.get_unique_job_id() == status.get_unique_job_id():
+            reply_data = j_instance.get_nodes_print_message()
+            ret_val = process_status.SUCCESS
+        j_instance.data_mutex_release(status, 'W')
+
+    if ret_val:
+        reply_data = "Failed to retrieve reply from network servers"
+
+    return [ret_val, reply_data]
 
 
 

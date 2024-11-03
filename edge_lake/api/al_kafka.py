@@ -181,7 +181,7 @@ def pull_data(user_id:int, conditions: dict):
         workers_count = interpreter.get_one_value_or_default(conditions, "threads", 3)      # No. of worjers threads
 
         # Set a pool of workers threads
-        workers_pool = utils_threads.WorkersPool("Kafka Pool", workers_count)
+        workers_pool = utils_threads.WorkersPool("Kafka", workers_count)
 
         is_running = True
 

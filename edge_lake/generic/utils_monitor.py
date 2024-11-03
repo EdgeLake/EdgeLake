@@ -44,7 +44,7 @@ def get_operator_summary(status, cmd_words):
     return output_summary(status)
 
 def get_streaming(status, cmd_words):
-    return streaming_data.show_info("table")
+    return streaming_data.show_info(False, "table")
 
 def get_threads_status(status, cmd_words):
     reply = member_cmd.get_pool_status(status, None, cmd_words, None)
