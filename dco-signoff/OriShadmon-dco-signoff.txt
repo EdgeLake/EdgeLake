@@ -1,0 +1,4 @@
+I, Ori Shadmon hereby sign-off-by all my past commits to this repository subject to the Developer Certificate of Origin
+(DCO), Version 1,1.
+
+In the past I have used emails: oshadmon@gmail.com | ori@anylog.co
