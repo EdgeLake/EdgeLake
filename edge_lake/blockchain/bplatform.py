@@ -61,6 +61,13 @@ def blockchain_connect(status, platform_name, conditions):
     elif platform_name == "hyperledger":
         error_info = "using config file: '%s'" % interpreter.get_one_value_or_default(conditions, "config_file", "")
         ret_val, bobject = hyperledger.connect(status, provider)  # Init an AnyLog Object with the Ethereum info and calls
+    elif platform_name == "optimism":
+        if not provider:
+            status.add_error("Missing providers in 'blockchain connect to optimism' call")
+            ret_val = process_status.ERR_command_struct
+        else:
+            error_info = "using URL: '%s'" % provider   # Display provider on the error message
+            ret_val, bobject = ethereum.connect(status, provider) # Init an AnyLog Object with the Ethereum info and calls
 
     if not ret_val:
         # was connected
@@ -137,7 +144,7 @@ def get_platforms(status, io_buff_in, cmd_words, trace):
             balance = platform.get_balance()
             chain_id = platform.get_chain_id()
 
-            if platform_name == "ethereum":
+            if platform_name == "ethereum" or platform_name == "optimism":
 
                 connect_str = platform.get_provider()
                 public_key = platform.get_public_key()
@@ -152,10 +159,10 @@ def get_platforms(status, io_buff_in, cmd_words, trace):
             balance = "Not Available"
             public_key = "Not Available"
 
-        platforms_used.append((platform_name, str(connect_status), balance, chain_id, connect_str, public_key))
-        platforms_used.append(("","", "", "", contract))
+        platforms_used.append((platform_name, str(connect_status), balance, chain_id, public_key, contract))
+        platforms_used.append(("","", "", "", "", "", connect_str))
     if len(platforms_used):
-        reply = utils_print.output_nested_lists(platforms_used, "Blockchains connected", ["Name", "Active", "Balance", "Chain ID", "URL/Config", "Public Key/Contract"], True, "")
+        reply = utils_print.output_nested_lists(platforms_used, "Blockchains connected", ["Name", "Active", "Balance", "Chain ID", "Public Key", "Contract", "URL/Config"], True, "")
     else:
         reply = "No connections to blockchain platforms"
 

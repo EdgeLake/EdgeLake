@@ -258,7 +258,7 @@ def get_external_ip():
 
     for i in range (2):     # Try twice if failure
         try:
-            external_ip = get('https://api.ipify.org').text
+            external_ip = get('https://api.ipify.org', timeout=3).text      # waits at most 3 seconds to get external ipb
         except:
             external_ip = get_ip()    # no internet connection or  get_ip_addresses(ifname)
         else:

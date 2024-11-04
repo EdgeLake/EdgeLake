@@ -243,6 +243,7 @@ def get_sql_reply_data(status: process_status, logical_dbms: str, io_stream):
     time_columns = select_parsed.get_date_types()  # List of columns that are date-based
     casting_list = select_parsed.get_casting_list()     # The list of casting functions
     casting_columns = select_parsed.get_casting_columns()
+    data_types_list = select_parsed.get_query_data_types()
 
 
     conditions = j_handle.get_conditions()
@@ -271,7 +272,7 @@ def get_sql_reply_data(status: process_status, logical_dbms: str, io_stream):
 
     while get_next:  # read each row - when the rows is read, it is copied to one or more data blocks - see message message_header.copy_data() below.
 
-        get_next, rows_data = db_info.process_fetch_rows(status, dbms_cursor, "Query", 1, title_list, None)
+        get_next, rows_data = db_info.process_fetch_rows(status, dbms_cursor, "Query", 1, title_list, data_types_list)
         if not get_next or not rows_data:
             break
 
