@@ -51,7 +51,7 @@ def blockchain_connect(status, platform_name, conditions):
     provider = interpreter.get_one_value_or_default(conditions, "provider", "")
     ret_val = process_status.BLOCKCHAIN_not_recognized
 
-    if platform_name == "ethereum":
+    if platform_name == "ethereum" or platform_name == "optimism":
         if not provider:
             status.add_error("Missing providers in 'blockchain connect to ethereum' call")
             ret_val = process_status.ERR_command_struct
@@ -137,7 +137,7 @@ def get_platforms(status, io_buff_in, cmd_words, trace):
             balance = platform.get_balance()
             chain_id = platform.get_chain_id()
 
-            if platform_name == "ethereum":
+            if platform_name == "ethereum" or platform_name == "optimism":
 
                 connect_str = platform.get_provider()
                 public_key = platform.get_public_key()
