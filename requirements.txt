@@ -24,7 +24,7 @@ paho-mqtt==1.5
 kafka-python>=0.0
 
 # Blockchain
-# web3>=0.0
+web3==6.15.1
 # py4j>=0.0
 
 # Images + Videos
