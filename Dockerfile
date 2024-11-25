@@ -16,27 +16,42 @@ ENV PYTHONPATH=/app/EdgeLake/ \
     ANYLOG_REST_PORT=32549 \
     LEDGER_CONN=127.0.0.1:32049
 
-WORKDIR /app
+WORKDIR $EDGELAKE_PATH
 
 COPY . EdgeLake
-COPY setup.cfg /app
-COPY LICENSE /app
-COPY README.md /app
+COPY setup.cfg $EDGELAKE_PATH
+
+
+RUN mkdir -p $EDGELAKE_PATH/nebula/configs/
+COPY nebula/configs/* $EDGELAKE_PATH/nebula/configs/
+COPY nebula/config.yml nebula/config_nebula.py nebula/deploy_nebula.sh nebula/export_nebula.sh nebula/validtae_ip_against_cidr.py $EDGELAKE_PATH/nebula/
 
 EXPOSE $ANYLOG_SERVER_PORT $ANYLOG_REST_PORT $ANYLOG_BROKER_PORT
 
-# Install dependencies
-RUN apk update && apk upgrade && \
-    apk add bash git gcc openssh-client python3 python3-dev py3-pip musl-dev build-base libffi-dev py3-psutil && \
-    python3 -m pip install --upgrade pip && \
+RUN apk update && \
+    apk upgrade && \
+    apk add --no-cache bash git openssh-client gcc python3-dev musl-dev && \
+    apk add bash python3 python3-dev py3-pip wget build-base libffi-dev py3-psutil && \
+    apk add --no-cache bash git openssh-client gcc python3-dev build-base libffi-dev musl-dev && \
+    python3 -m pip install --upgrade pip wheel pyinstaller>=0.0 Cython>=0.0 orjson && \
     python3 -m pip install --upgrade -r /app/EdgeLake/requirements.txt && \
-    git clone https://github.com/AnyLog-co/deployment-scripts
+    python3 /app/EdgeLake/setup.py install && \
+    mv $EDGELAKE_PATH/dist/edgelake_v1.3.2411_x86_64 $EDGELAKE_PATH/dist/edgelake && \
+    rm -rf `ls | grep -v dist  | grep -v nebula` && \
+    mkdir -p $EDGELAKE_HOME $EDGELAKE_PATH/dco-signoff && \
+    git clone -b os-dev https://github.com/AnyLog-co/deployment-scripts
+
 
 FROM base AS deployment
+WORKDIR $EDGELAKE_PATH
 
-# Make sure to set the EDGELAKE_HOME environment variable for Python explicitly
-ENV EDGELAKE_HOME=/app/EdgeLake
+COPY setup.cfg $EDGELAKE_HOME
+COPY LICENSE $EDGELAKE_HOME
+COPY README.md $EDGELAKE_HOME
+COPY requirements.txt $EDGELAKE_HOME
+COPY dco-signoff $EDGELAKE_PATH/dco-signoff
+COPY deploy_edgelake.sh  $EDGELAKE_PATH/
 
-# Use exec form of ENTRYPOINT to ensure the environment variables are passed correctly
-# ENTRYPOINT ["/bin/sh"]
-ENTRYPOINT python3 /app/EdgeLake/edge_lake/edgelake.py process /app/deployment-scripts/node-deployment/main.al
+ENTRYPOINT /bin/bash $EDGELAKE_PATH/deploy_edgelake.sh
+# ENTRYPOINT ${EDGELAKE_PATH}/dist/edgelake process deployment-scripts/node-deployment/main.al
+
