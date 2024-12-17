@@ -309,9 +309,9 @@ class IoHandle:
 
         try:
             lines_read = self.file_object.readlines()
-        except IOError as e:
-            errno, strerror = e.args
-            self.last_message = "I/O read data error ({0:d}: {1})".format(errno, strerror)
+        except:
+            errno, value = sys.exc_info()[:2]
+            self.last_message = "I/O read data error %s: %s" % (str(errno), str(value))
             process_log.add("Error", self.last_message)
             self.file_stat = -1  # file error
             lines_read = None

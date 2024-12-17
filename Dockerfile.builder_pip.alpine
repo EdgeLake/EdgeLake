@@ -1,0 +1,24 @@
+FROM python:3.11-alpine as base
+
+# declare params
+WORKDIR /app/
+COPY . EdgeLake
+
+# Install bash
+RUN apk update && apk upgrade && \
+    apk add --no-cache bash && \
+    apk add --no-cache bash git openssh-client gcc python3-dev musl-dev && \
+    apk add bash python3 python3-dev py3-pip wget build-base libffi-dev py3-psutil && \
+    python3 -m pip install --upgrade pip wheel setuptools poetry && \
+    python3 -m pip install --upgrade -r EdgeLake/requirements.txt
+
+# Set the entrypoint to bash
+ENTRYPOINT ["/bin/bash"]
+
+#    python3 -m pip install --upgrade pip wheel && \
+#    python3 -m pip install --upgrade -r /alpine/AnyLog-Network/dockerfiles/requirements.txt && \
+#    apk del build-base libffi-dev && \
+#    python3 /app/AnyLog-Network/setup_pip.py bdist_wheel
+
+# FROM base AS deployment
+# ENTRYPOINT ["/bin/bash"]

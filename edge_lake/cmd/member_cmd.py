@@ -1178,7 +1178,7 @@ def blockchain_push_local(status, io_buff_in, cmd_words, trace, func_params):
 
     if not ret_val:
         compare_to_file = not func_params[1]    # If message to blockchain - this is a master node, avoid compare to local blockchain file
-        ret_val, json_dictionary = prep_policy(status, cmd_words[policy_offset], func_params[0], compare_to_file)
+        ret_val, json_dictionary = prep_policy(status, cmd_words[policy_offset], None, func_params[0], compare_to_file)
 
         if not ret_val:
             # if blockchain table was not created - create table ledger in blockchain dbms
@@ -1289,7 +1289,7 @@ def blockchain_drop_policies(status, io_buff_in, cmd_words, trace, func_params):
             if ret_val:
                 break
     else:
-        ret_val = blockchain_drop_policy(status, cmd_words, words_count, platform_words, platform_name)  # drop a single policy from the blochain in the local database
+        ret_val = blockchain_drop_policy(status, cmd_words, words_count, platform_words, platform_name)  # drop a single policy from the blockchain in the local database
 
     return [ret_val, None]
 # =======================================================================================================================
@@ -9083,7 +9083,7 @@ def blockchain_commit(status, io_buff_in, cmd_words, trace, func_params):
             platform_name = params.get_value_if_available(cmd_words[3])
             json_key = params.get_value_if_available(cmd_words[4])
 
-            ret_val, json_dictionary = prep_policy(status, json_key, b_file, True)
+            ret_val, json_dictionary = prep_policy(status, json_key, None, b_file, True)
 
             if not ret_val:
                 policy_id = utils_json.get_policy_value(json_dictionary, None, "id", None)
@@ -9118,9 +9118,11 @@ def blockchain_update(status, io_buff_in, cmd_words, trace, func_params):
 
             # JSONify policy
             policy_json = utils_json.str_to_json(json_key)
+
             # check if policy is a valid JSON
             if not policy_json:
                 ret_val = process_status.Invalid_policy
+        
             if not ret_val:
                 # Check if new policy contains a policy id
                 key = next(iter(policy_json))
@@ -9128,13 +9130,13 @@ def blockchain_update(status, io_buff_in, cmd_words, trace, func_params):
                     policy_json[key]["id"] = policy_id  # add provided policy id if not included in policy
                 # Check if policy id matches
                 elif policy_id != policy_json[key].get("id"):
+
                     ret_val = process_status.Policy_id_not_match # return error
 
                 if not ret_val:
                     ret_val, json_dictionary = prep_policy(status, json_key, b_file, True)
 
                     if not ret_val:
-
                         json_data = utils_json.to_string(json_dictionary)
                         if json_data:
                             ret_val, reply = bplatform.blockchain_update(status, platform_name, policy_id, json_data,
@@ -9259,7 +9261,7 @@ def blockchain_wait(status, io_buff_in, cmd_words, trace, func_params):
 # =======================================================================================================================
 # Add Missing components to the policy
 # =======================================================================================================================
-def prep_policy(status: process_status, json_key:str, blockchain_file:str, compare_to_file:bool):
+def prep_policy(status: process_status, json_key, json_obj, blockchain_file:str, compare_to_file:bool):
     '''
     Giving a key to the AnyLog dictionary, the value assigned to the key is retrieved.
     If the value represents a Policy, the policy is validated and missing attributes are added:
@@ -9271,18 +9273,21 @@ def prep_policy(status: process_status, json_key:str, blockchain_file:str, compa
     b) With master and operator in a single node, it can reject policies at the master
     '''
 
-    json_data = params.get_value_if_available(json_key)
-    json_data = params.json_str_replace_key_with_value(json_data)  # replace keys with values from dictionary
-
-    json_data = utils_data.replace_string_chars(True, json_data, {'|': '"'})
-
-    json_struct = utils_json.str_to_json(json_data)  # map string to dictionary
-    if isinstance(json_struct, dict):
-        json_dictionary = json_struct
-    elif isinstance(json_struct, list) and len(json_struct) == 1 and isinstance(json_struct[0], dict):
-        json_dictionary = json_struct[0]
+    if json_obj:
+        json_dictionary = json_obj
     else:
-        json_dictionary = None
+        json_data = params.get_value_if_available(json_key)
+        json_data = params.json_str_replace_key_with_value(json_data)  # replace keys with values from dictionary
+
+        json_data = utils_data.replace_string_chars(True, json_data, {'|': '"'})
+
+        json_struct = utils_json.str_to_json(json_data)  # map string to dictionary
+        if isinstance(json_struct, dict):
+            json_dictionary = json_struct
+        elif isinstance(json_struct, list) and len(json_struct) == 1 and isinstance(json_struct[0], dict):
+            json_dictionary = json_struct[0]
+        else:
+            json_dictionary = None
 
     if json_dictionary:
         ret_val = policies.add_json_id_date(json_dictionary)  # if there is no ID to the JSON, add ID
@@ -9665,7 +9670,7 @@ def blockchain_insert(status, io_buff_in, cmd_words, trace, func_params):
     policy = utils_json.str_to_json(json_policy)
 
     if not isinstance(policy, dict):
-        status.add_error("Error in 'blockchain insert': wrong data structure provided: " + json_data)
+        status.add_error("Error in 'blockchain insert': provided policy is not a json object: " + json_data)
         return [process_status.ERR_command_struct, None]
 
     mem_view = memoryview(io_buff_in)
@@ -9757,8 +9762,12 @@ def blockchain_insert_all(status, mem_view, policy, is_local, blockchain_file, m
 
                 if platform and len(platform):
                     for platform_name in platform:
-                        commit_words = ["blockchain", "commit", "to", platform_name, policy_str]
-                        reply_val, reply = blockchain_commit(status, mem_view, commit_words, 0, None) # We ignore errors as the network may be down
+                        if is_local:
+                            # Skipping policy check to avoid duplicate keys in the check of the policies in the local file (the policy was just updated on the local file)
+                            reply_val, reply = bplatform.blockchain_commit(status, platform_name, policy_id, policy_str, 0)  # We ignore errors as the network may be down
+                        else:
+                            commit_words = ["blockchain", "commit", "to", platform_name, policy_str]
+                            reply_val, reply = blockchain_commit(status, mem_view, commit_words, 0, None) # We ignore errors as the network may be down
                         if reply_val and return_err:
                             # if called from the CLI - an error message is returned
                             ret_val = reply_val
@@ -10840,6 +10849,10 @@ def _blockchain_sync(status, io_buff_in, cmd_words, trace):
         elif not bplatform.is_connected(platform_name):
             status.add_error("Blockchain platform '%s' is not connected" % platform_name)
             return process_status.Connection_error
+        ret_val, txn_count = bplatform.get_txn_count(status, platform_name, 'contract') # check if valid smart contract address
+        if ret_val:
+            status.add_error("Provided smart contract address is not valid")
+            return process_status.BLOCKCHAIN_contract_error
     elif source == "dbms":
         pass
     else:
@@ -13155,13 +13168,12 @@ def network_get_info(status, reply_format, io_buff_in, al_cmd, cmd_name, nodes_t
                             aggregate_dict[ip_port]["name"] =  entry["table"]  # The table name if specified
                     else:
                         aggregate_table.add_entry("addr", ip_port, ip_port)  # The first column with the ip and port
-
                         if "policy" in entry:
                             aggregate_table.add_entry("type", ip_port, entry["policy"])  # The policy type
                         else:
                             aggregate_table.add_entry("type", ip_port, nodes_types)  # The policy type defined by the user
 
-                        if "name" in entry:
+                            if "name" in entry:
                             aggregate_table.add_entry("name", ip_port, entry["name"])  # The policy name
                         elif "table" in entry:
                             aggregate_table.add_entry("name", ip_port, entry["table"])  # The table name if specified
@@ -16086,15 +16098,22 @@ def get_cluster_info(status, io_buff_in, cmd_words, trace):
 # ----------------------------------------------------------
 def delete_archive(status, io_buff_in, cmd_words, trace):
 
-    days_str = params.get_value_if_available(cmd_words[5])
-    if not days_str.isdigit():
+    num_of_days = params.get_value_if_available(cmd_words[5])
+    if isinstance(num_of_days, str):
+        if not num_of_days.isdigit():
+            return process_status.ERR_command_struct
+        days = int(num_of_days)
+    elif isinstance(num_of_days, int): # i.e: delete archive where days = !archive_delete.int
+        days = num_of_days
+    else:
         return process_status.ERR_command_struct
+
     if not utils_data.test_words(cmd_words, 2, ["where", "days", "="]):
         return process_status.ERR_command_struct
 
     ret_val = process_status.SUCCESS
 
-    days = int(days_str)
+
     unix_time_seconds = utils_columns.get_current_time_in_sec()
     unix_time_seconds -= (days * 86400)      # 60 * 60 * 24 = 86400 seconds in a day
     path_searator = params.get_path_separator()
