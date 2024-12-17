@@ -9120,9 +9120,9 @@ def blockchain_update(status, io_buff_in, cmd_words, trace, func_params):
             policy_json = utils_json.str_to_json(json_key)
 
             # check if policy is a valid JSON
-            if not isinstance(policy_json, dict):
+            if not policy_json:
                 ret_val = process_status.Invalid_policy
-                status.add_error("Policy is not a valid JSON")
+        
             if not ret_val:
                 # Check if new policy contains a policy id
                 key = next(iter(policy_json))
@@ -9130,10 +9130,12 @@ def blockchain_update(status, io_buff_in, cmd_words, trace, func_params):
                     policy_json[key]["id"] = policy_id  # add provided policy id if not included in policy
                 # Check if policy id matches
                 elif policy_id != policy_json[key].get("id"):
-                    ret_val = process_status.Policy_id_not_match    # return error
-                    status.add_error("Specified policy id does not match")
+
+                    ret_val = process_status.Policy_id_not_match # return error
+
                 if not ret_val:
-                    ret_val, json_dictionary = prep_policy(status, None, policy_json, b_file, True)
+                    ret_val, json_dictionary = prep_policy(status, json_key, b_file, True)
+
                     if not ret_val:
                         json_data = utils_json.to_string(json_dictionary)
                         if json_data:
@@ -13166,13 +13168,12 @@ def network_get_info(status, reply_format, io_buff_in, al_cmd, cmd_name, nodes_t
                             aggregate_dict[ip_port]["name"] =  entry["table"]  # The table name if specified
                     else:
                         aggregate_table.add_entry("addr", ip_port, ip_port)  # The first column with the ip and port
-
                         if "policy" in entry:
                             aggregate_table.add_entry("type", ip_port, entry["policy"])  # The policy type
                         else:
                             aggregate_table.add_entry("type", ip_port, nodes_types)  # The policy type defined by the user
 
-                        if "name" in entry:
+                            if "name" in entry:
                             aggregate_table.add_entry("name", ip_port, entry["name"])  # The policy name
                         elif "table" in entry:
                             aggregate_table.add_entry("name", ip_port, entry["table"])  # The table name if specified
