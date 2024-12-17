@@ -24,10 +24,15 @@ counter_by_topic_ = {}
 is_running = False
 ip_port_ = ""
 
+#----------------------------------------------------------------------------------------#
+# Issue with installing kafka for windows: https://github.com/dpkp/kafka-python/issues/2412
+# for windows: pip install git+https://github.com/dpkp/kafka-python.git
+#----------------------------------------------------------------------------------------#
 try:
     import kafka
     #import confluent_kafka
 except:
+    errno, value = sys.exc_info()[:2]
     kafka_installed = False
 else:
     kafka_installed = True

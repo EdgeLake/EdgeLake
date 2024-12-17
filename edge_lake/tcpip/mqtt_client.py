@@ -1148,7 +1148,7 @@ def get_msg_data(status, topic, topic_info, message):
             ret_val, data_type_str = utils_json.pull_info(status, message, [data_type_info[6:].lstrip()], None, 0)
             data_type_list = utils_json.str_to_list(data_type_str)
             if not data_type_list:
-                status.add_error("Failed to map MQTT message data types to AnyLog format- from topic: %s and message: %s" % (topic, message))
+                status.add_error("Failed to map message data types to AnyLog format- from topic: %s and message: %s" % (topic, message))
                 ret_val = process_status.MQTT_data_err
                 break
 
@@ -1166,7 +1166,7 @@ def get_msg_data(status, topic, topic_info, message):
                 if not attr_val:
                     if is_optional:
                         continue        # ignore this value
-                    status.add_error("Failed to map MQTT message data to AnyLog format - failed to retrieve value from topic: '%s' using: '%s'" % (topic, str(retrieve_info)))
+                    status.add_error(f"Failed to pull info from message - topic '{topic} pulls '{str(retrieve_info)}' which is missing in message - Add: 'opttional = true'")
                     ret_val = process_status.MQTT_data_err
                     break
 
@@ -1176,7 +1176,7 @@ def get_msg_data(status, topic, topic_info, message):
                     if not values_list:
                         if is_optional:
                             continue  # ignore this value
-                        status.add_error("Failed to map MQTT message list to AnyLog format- from topic: %s and message: %s" % (topic, message))
+                        status.add_error("Failed to map message list to AnyLog format- from topic: %s and message: %s" % (topic, message))
                         ret_val = process_status.MQTT_data_err
                         break
                     if data_type_list and len(values_list) != len(data_type_list):

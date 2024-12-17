@@ -440,10 +440,14 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                     html_policy, err_msg = html_reply.url_to_json(status, html_info)  # Get the user info for the HTML page
                     if err_msg or not html_policy:
                         encoded_message = err_msg.encode(encoding='UTF-8')
-                        ret_val = process_status.Wrong_policy_structure
+                        ret_val = process_status.ERR_wrong_json_structure
+                    elif not isinstance(html_policy,dict):
+                        status.add_error("Failed to generate a JSON structure from user's HTML instructions - wrong JSON input structure")
+                        ret_val = process_status.ERR_wrong_json_structure
 
             if not ret_val:
-                encoded_message = html_reply.to_html(status, message, content_type, into_output, html_policy).encode(encoding='UTF-8')
+                is_pdf = get_value_from_headers(self.al_headers, "pdf", "bool")
+                encoded_message = html_reply.to_html(status, message, content_type, into_output, is_pdf, html_policy).encode(encoding='UTF-8')
                 content_type =  "text/html"
 
 
@@ -629,7 +633,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         if into_output:
 
             # Place error in the html and send as HTMP
-            encoded_message = html_reply.to_html(status, reply, "text/html", into_output, None).encode(encoding='UTF-8')
+            encoded_message = html_reply.to_html(status, reply, "text/html", into_output, False, None).encode(encoding='UTF-8')
 
             content_type = "text/html"
             ret_val = self.send_reply_headers(status, REST_OK, None, False, content_type, len(encoded_message),

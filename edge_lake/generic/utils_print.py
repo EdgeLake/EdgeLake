@@ -248,14 +248,14 @@ def output_box(info_string):
 # =======================================================================================================================
 # Print JSON
 # =======================================================================================================================
-def jput(json_data, is_newLine):
+def jput(json_data, is_newLine, indent = 1):
     global new_line_counter
 
     print_mutex.acquire()
 
     try:
         if (is_newLine):
-            pprint.pprint(json_data)
+            pprint.pprint(json_data, indent=indent)
             new_line_counter += 1
             prompt = get_prompt()
             print(prompt, end='', flush=True)

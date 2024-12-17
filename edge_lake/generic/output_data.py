@@ -296,7 +296,17 @@ class OutputManager():
         elif out_dest == "kafka":
             ret_val = al_kafka.send_data(status, self.kafka_producer, self.topic, info_str)
         else:
-            utils_print.output(info_str, False)
+            if info_str[0] == "{" and info_str[-1] == "}":
+                json_struct = utils_json.str_to_json(info_str)
+                if json_struct:
+                    was_printed = True
+                    utils_print.jput(json_struct, True, indent = 4)
+                else:
+                    was_printed = False
+            else:
+                was_printed = False
+            if not was_printed:
+                utils_print.output(info_str, False)
 
         return ret_val
     # --------------------------------------------------------------------------------------
