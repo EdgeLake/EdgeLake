@@ -553,15 +553,12 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     # Each ANyLog command is assigned to an HTTP method. The default method is POST
     # =======================================================================================================================
-    def is_correct_method(self, status, http_method, command):
+    def is_correct_method(self, status, http_method, command_list):
         global http_methods_
-
-        if command == "body":
-            return True         # command is passed in the message body
 
         ret_val = False
         # Test 2 words key
-        command_list = command.split(" ", 3)        # Get 2 first words
+
         if len(command_list) >= 2:
             key = command_list[0].lower() + ' ' + command_list[1].lower()
             if key in http_methods_:
@@ -655,7 +652,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
                 self.send_reply_headers(status, REST_BAD_REQUEST, reply, True, content_type, 0, True, None)
 
-            write_ret_value = utils_io.write_to_stream(status, self.wfile, reply, True, True)
+            write_ret_value = utils_io.write_to_stream(status, self.wfile, reply, False, True)
 
     # =======================================================================================================================
     # Mismatch between REST CALL and AnyLog command - return an error
@@ -764,14 +761,14 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         self.al_headers = set_al_headers(self.headers._headers)
         status = process_status.ProcessStat()
 
-        user_agent, version, user_id = self.get_client()
+        user_agent, version, user_id = self.get_client("get")
 
         if not user_agent and self.raw_requestline:
             # This is an option to place AnyLog header on the URL line.
             # For example: http://10.0.0.78:7849/?command = get_status? User-Agent  = 'AnyLog/1.23',
             ret_val = self.header_from_raw_requestline(status)
             if not ret_val:
-                user_agent, version, user_id = self.get_client()        # Try again for the needed info
+                user_agent, version, user_id = self.get_client("get")        # Try again for the needed info
 
         command = get_value_from_headers(self.al_headers, "command")
 
@@ -843,7 +840,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     # Test is Grafana call
     # =======================================================================================================================
-    def get_client(self):
+    def get_client(self, rest_call):
 
         user_id = 0
         user_agent = get_value_from_headers(self.al_headers, 'User-Agent')
@@ -872,7 +869,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                 if product == "curl":
                     # user did not specify a product - use "anylog"
                     product = "anylog"
-                    if not "command" in self.al_headers:
+                    if rest_call == "get" and not "command" in self.al_headers:
                         self.al_headers["command"] = "get status"   # Default command
                 else:
                     # The product is not recognized
@@ -937,19 +934,19 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         self.al_headers = set_al_headers(self.headers._headers)
         status = process_status.ProcessStat()
         err_msg = None
-        user_agent, version, user_id = self.get_client()
+        user_agent, version, user_id = self.get_client("post")
 
         header_delivered = False
         command = get_value_from_headers(self.al_headers, "command")
         if command and len(command) == 4 and command.lower() == "data":
-            is_data = True
+            mqtt_data = True
         else:
-            is_data = False
+            mqtt_data = False
 
         if self.authenticate_request(status, "POST", command):
 
             if user_agent == "anylog":
-                if is_data:
+                if mqtt_data:
                     if user_id:
                         try:
                             # Send to the MQTT client if registered to the topic
@@ -983,7 +980,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                     self.handle_exception(status, "POST", errno, value, stack_trace)
                     ret_val = process_status.REST_call_err
 
-            elif is_data and user_id:
+            elif mqtt_data and user_id:
                 # Send to the MQTT client if registered to the topic
                 ret_val = self.to_mqtt_client(status, user_agent, user_id)
 
@@ -1009,7 +1006,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                     # A post command  to add data - but there is no client mapping to address the data
                     message = "No client mappint to User-Agent: AnyLog -- use the command 'run mqtt client where broker=rest and user-agent=anylog/1.23 ...' to assign a process the data"
                     status.add_error(err_msg)
-                    self.write_headers_and_msg(self, status, REST_BAD_REQUEST, content_type, message)
+                    self.write_headers_and_msg(status, REST_BAD_REQUEST, content_type, message)
                 else:
                     self.send_reply_headers(status, REST_BAD_REQUEST, err_msg, True, content_type, 0, False, None)
             else:
@@ -1087,7 +1084,10 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         if not command:
             self.write_headers_and_msg(status, REST_BAD_REQUEST, "text", "Missing 'command' attribute in header")
         else:
-            if not self.is_correct_method(status, http_method, command):
+            cmd_words = utils_data.str_to_list(command, 3)
+
+            if cmd_words[0] != "body" and not self.is_correct_method(status, http_method, cmd_words):
+                # when command sas "body", one or mode anylog commands are passed in the message body
 
                 ret_val = self.error_wrong_method(status, http_method, command)
 
@@ -1096,7 +1096,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                 # Update commands_list with a list of commands (main command and commands placed in the msg body)
                 commands_list = []
                 into_output = get_value_from_headers(self.al_headers, "into")  # Push the output as HTML
-                ret_val, with_wait, content_type, is_select, is_stream = self.prepare_commands(status, command, commands_list, into_output)
+                ret_val, with_wait, content_type, is_select, is_stream, file_data = self.prepare_commands(status, command, cmd_words, commands_list, into_output)
 
                 if not ret_val:
                     if with_wait:
@@ -1108,7 +1108,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                     io_buff = bytearray(buff_size)
 
 
-                    ret_val = self.execute_al_commands(status, io_buff, commands_list, into_output)
+                    ret_val = self.execute_al_commands(status, io_buff, commands_list, into_output, file_data)
 
 
                 j_handle = status.get_active_job_handle()  # Need to be done after the execution of the commands
@@ -1215,10 +1215,11 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # 1) the main command in the header
     # 2) Include secondary commands from the body
     # =======================================================================================================================
-    def prepare_commands(self, status, command, commands_list, into_output):
+    def prepare_commands(self, status, command, rest_cmd_words, commands_list, into_output):
         '''
         status - status object
         command - the command from the header
+        rest_cmd_words - split() over command
         command_list - a list to be updated with all commands
         into_output - for example into htm - it disables pass_through
         '''
@@ -1227,6 +1228,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         is_select = False
         is_stream = False
         content_type = 'text/json'
+        file_data = None  # File via a call like: curl -X POST -H "command: file store where dest = !prep_dir/file2.txt" -F "file=@testdata.txt" http://10.0.0.78:7849
 
 
         ret_val, run_client = self.get_run_client()
@@ -1234,14 +1236,17 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
             msg_body = self.get_msg_body(status)
 
-            if command == "body":
+            if rest_cmd_words[0] == "body":
                 # The command is passed in the message body. The example is with the command: set scrippt [file name] [script data]
                 command = msg_body
                 msg_body = None
+                cmd_words = utils_data.str_to_list(command, 3)
+            else:
+                cmd_words = rest_cmd_words
 
 
             is_select = False
-            if command[:4].lower() == "sql ":
+            if cmd_words[0] == "sql":
                 cmd_lower = command[4:].lower()
                 index = cmd_lower.find("select ", 4)
                 if index > 0:
@@ -1252,15 +1257,19 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                         out_format = utils_data.find_next_word(cmd_lower, 4, index, ["format", "="])
                         if out_format == "table":
                             content_type = "text"
-            elif len(command) > 20 and command[:20] == "file retrieve where ":
-                # If streaming - Need to deliver headers first:
-                index = command.find(" stream", 19)
-                if index > -1:
-                    # Test if command includes stream = true
-                    stream_text = command[index + 1:].replace(" ","").lower()       # remove spaces
-                    if stream_text[:11] == "stream=true":
-                        content_type = "video/mp4"
-                        is_stream = True
+            elif len(cmd_words) >= 3:
+                if utils_data.test_words(cmd_words, 0, ["file", "retrieve", "where"]):
+                    # If streaming - Need to deliver headers first:
+                    index = command.find(" stream", 19)
+                    if index > -1:
+                        # Test if command includes stream = true
+                        stream_text = command[index + 1:].replace(" ","").lower()       # remove spaces
+                        if stream_text[:11] == "stream=true":
+                            content_type = "video/mp4"
+                            is_stream = True
+                elif cmd_words[0] == "file" and (cmd_words[1] == "store" or cmd_words[1] == "to"):
+                    ret_val, content_type, file_data = get_user_file_data(status, msg_body)   # the message body is set on the status object as it includes the file to write
+                    msg_body = None         # Message was pushed to the status object
 
             # determine if wait is needed
             if run_client:
@@ -1277,7 +1286,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
             commands_list.append((run_client + command, with_wait))  # Add a flag if needed to wait for a reply
             
-        return [ret_val, with_wait, content_type, is_select, is_stream]
+        return [ret_val, with_wait, content_type, is_select, is_stream, file_data]
 
     # =======================================================================================================================
     # Get the get_run_client info:
@@ -1348,7 +1357,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     # Execute the commands on the command_list and the commandon the header
     # =======================================================================================================================
-    def execute_al_commands(self, status, io_buff, commands_list, into_output):
+    def execute_al_commands(self, status, io_buff, commands_list, into_output, file_data):
         '''
         into_output - when output is organized as HTML
         '''
@@ -1361,7 +1370,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
             if with_reply:
                 ret_val = native_api.exec_al_cmd(status, command, self.wfile, into_output, 20)   # Timeout for a list of commands is the default
             else:
-                ret_val = native_api.exec_no_wait(status, command, io_buff, self.wfile)
+                ret_val = native_api.exec_no_wait(status, command, io_buff, file_data, self.wfile)
             if ret_val:
                 if index != (len(commands_list) - 1):
                     # the command that failed is in the message body (not the header)
@@ -1428,7 +1437,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         status = process_status.ProcessStat()
         self.msg_body = None
         self.al_headers = set_al_headers(self.headers._headers)
-        user_agent, version, user_id = self.get_client()
+        user_agent, version, user_id = self.get_client("put")
 
         if self.authenticate_request(status, "PUT", "Data"):
 
@@ -2230,3 +2239,50 @@ def get_result_set_type(result_set):
     else:
         content_type = 'text'
     return content_type
+
+# ------------------------------------------------------------------------
+# Get the info from a message body, for example when file is copied vie rest
+# ------------------------------------------------------------------------
+def get_user_file_data(status, msg_body):
+
+    ret_val = process_status.Failed_to_parse_input_file
+    content_type = None
+    file_data = None
+
+    if msg_body:
+        # Initialize counters
+        count = 0
+        offsets = []
+
+        # Find the 3rd and 4th occurrences of \r\n
+        split_key = '\r\n' if msg_body[-2:] == "\r\n" else '\n'     # Captures windows or linux
+        len_split_key = len(split_key)
+
+        pos = 0
+        while count < 4:
+            pos = msg_body.find(split_key, pos)  # Find next occurrence, advance position
+            if pos > 0:  # If found
+                pos += 2
+                offsets.append(pos)
+                count += 1
+            else:
+                break
+
+        if count == 4:
+            # All entries up to the file content were found.
+            # Get end of file position:
+            data_offset_end = msg_body.rfind(split_key, 0, -1)     # the offset of the end of the file data in msg_bdy
+            if data_offset_end > offsets[3]:
+                offsets.append(pos)
+
+                metadata = msg_body[offsets[0]:offsets[1]-len_split_key]
+
+                content_type = msg_body[offsets[1]:offsets[2]-len_split_key]
+                if content_type.startswith("Content-Type: "):
+                    content_type = content_type[14:]
+                data_offset_start = offsets[3]
+                file_data = msg_body[data_offset_start:data_offset_end]
+                ret_val = process_status.SUCCESS
+
+
+    return [ret_val, content_type, file_data]

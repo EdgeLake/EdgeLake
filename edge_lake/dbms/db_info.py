@@ -2135,7 +2135,7 @@ def update_local_blockchain_dbms(status, policies, host, print_message):
 # =======================================
 # Insert Blob Data to a database
 # ======================================
-def store_file(status:process_status,  db_name: str, table_name: str, file_path: str, file_name: str, blob_hash_value: str, archive_date:str, ignore_duplicate:bool, trace:int):
+def store_file(status:process_status,  db_name: str, table_name: str, file_path: str, file_name: str, blob_hash_value: str, archive_date:str, ignore_duplicate:bool, struct_fname:bool, trace:int):
     '''
             status - AnyLog status object
             db_name:str - logical database name
@@ -2145,6 +2145,7 @@ def store_file(status:process_status,  db_name: str, table_name: str, file_path:
             blob_hash_value - unique file name
             archive_date - yy-mm-dd to allow search of files by date
             ignore_duplicate - if True, duplicate files do not return an error
+            struct_fname - file name include dbms.table name
     '''
 
     dbms_name = get_blobs_dbms_name(db_name)
@@ -2154,7 +2155,7 @@ def store_file(status:process_status,  db_name: str, table_name: str, file_path:
         status.add_keep_error("DBMS '%s' not connected" % dbms_name)
         ret_val = process_status.ERR_dbms_not_opened
     else:
-        ret_val = db_connect.store_file(status, dbms_name, table_name, file_path, file_name, blob_hash_value, archive_date, ignore_duplicate, trace)
+        ret_val = db_connect.store_file(status, dbms_name, table_name, file_path, file_name, blob_hash_value, archive_date, ignore_duplicate, struct_fname, trace)
 
         if with_connection_pool(dbms_name):
             free_db_connection(dbms_name, db_connect)  # Place the connection on the free list

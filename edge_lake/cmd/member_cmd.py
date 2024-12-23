@@ -10528,16 +10528,92 @@ def get_list_from_storage(status, io_buff_in, cmd_words, trace):
 
     return [ret_val, reply]
 
+
+# ----------------------------------------------------------------------------
+# Writes a user file in a destination folder
+
+# file to !file_dest where source = !my_video
+# file to !prep_dir/testdata2.txt where source = !prep_dir/testdata.txt
+# Using REST:
+# curl -X POST -H "command: file to !my_dest" -F "file=@testdata.txt" http://10.0.0.78:7849
+# curl -X POST -H "command: file to !prep_dir/testdata2.txt where source = !prep_dir/testdata.txt"  http://10.0.0.78:7849
+# ----------------------------------------------------------------------------
+def file_to(status, io_buff_in, cmd_words, trace, func_params):
+    keywords = {
+    #                          Must     Add      Is
+    #                          exists   Counter  Unique
+                "source": ("str", True, False, True),     # Dest file name on disk
+                }
+
+    words_count = len(cmd_words)
+    if words_count > 3:
+        if cmd_words[3] != "where" or words_count < 7:
+            return process_status.ERR_command_struct
+
+
+        ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
+        if ret_val:
+            # conditions not satisfied by keywords or command structure
+            return ret_val
+
+        source_file = interpreter.get_one_value_or_default(conditions, "source", None)
+    else:
+        source_file = None
+
+    dest_file = params.get_value_if_available(cmd_words[2])
+
+    ret_val = process_status.SUCCESS
+
+    # Write the file in a destination directory
+    if source_file:
+        # Source and dest are files on this node
+        # Copy source file to destination
+        if not utils_io.copy_file(source_file, dest_file):
+            ret_val = process_status.File_copy_failed
+
+    elif status.get_active_job_handle().is_rest_caller():
+        # Source was provides in a rest call:  curl -X POST -H "command: file store where dest = !prep_dir/file2.txt" -F "file=@testdata.txt" http://10.0.0.78:7849
+        file_data = status.get_file_data()
+        if file_data:
+            if not utils_io.write_str_to_file(status, file_data, dest_file):
+                ret_val = process_status.File_write_failed
+        else:
+            status.add_error("Missing source file in 'file to' Command")
+            ret_val = process_status.Missing_source_file
+
+    return ret_val
+
 # ----------------------------------------------------------------------------
 # Store a file in a local storage dbms
-# Example: file store where dbms = blobs_edgex and table = video and id = my_video and file = !prep_dir/9439d99e6b0157b11bc6775f8b0e2490.bin
+
+# 1. The database needs to be open:
+#               connect dbms admin where type = mongo and ip = 127.0.0.1 and port= 27017
+# 2. database and table needs to be included in the file name:
+#               test.syslog.0.268367b541e31976bf6a18c6cefbc87c.0.json
+#    or specified in the command line
+
+# Examples:
+#   DBMS and Table in the file name:
+#               file store where source = !prep_dir/admin.files.test.txt
+#   DBMS and table by the user
+#               file store where dbms = admin and table = test and source = !prep_dir/testdata.txt
+
+
+# Using REST:
+
+# curl -X POST -H "command: file store where dbms = admin and table = files and dest = file_rest " -F "file=@testdata.txt" http://10.0.0.78:7849
 # ----------------------------------------------------------------------------
 def file_store(status, io_buff_in, cmd_words, trace, func_params):
 
-    keywords = {"dbms": ("str", True, False, True),
-                "table": ("str", True, False, True),
-                "hash": ("str", True, False, True),
-                "file": ("str", True, False, True),
+
+    keywords = {
+    #                          Must     Add      Is
+    #                          exists   Counter  Unique
+                "dbms": ("str", False, False, True),
+                "table": ("str", False, False, True),
+                "hash": ("str", False, False, True),
+                "source": ("str", False, True, True),        # Source file name
+                "dest": ("str", False, True, True),        # destination file name
                 }
 
     ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 3, 0, keywords, False)
@@ -10545,31 +10621,70 @@ def file_store(status, io_buff_in, cmd_words, trace, func_params):
         # conditions not satisfied by keywords or command structure
         return ret_val
 
-    dbms_name, table_name, hash_value, source_file = interpreter.get_multiple_values(conditions,
-                                                                                  ["dbms", "table", "hash", "file"],
-                                                                                  [None, None, None, None])
+    dbms_name, table_name, hash_value, source_file, dest_file = interpreter.get_multiple_values(conditions,
+                                                                                  ["dbms", "table", "hash", "source", "dest"],
+                                                                                  [None, None, None, None, None])
 
-    file_path, s_file_name, file_type = utils_io.extract_path_name_type(source_file)
 
-    if not s_file_name:
-        ret_val = process_status.Missing_blob_file_name
+    if counter != 1:
+        # Either source file is provided - or with REST, dest name is provided
+        status.add_error("Command failed: 'file store' command requires source file name, or, with HTTP call - a dest file name")
+        return process_status.ERR_command_struct
+
+    if source_file:
+        file_path, s_file_name, file_type = utils_io.extract_path_name_type(source_file)
+        file_name = f"{s_file_name}.{file_type}" if file_type else s_file_name
     else:
-        file_name = s_file_name
-        if file_type:
-            file_name += f".{file_type}"
+        s_file_name = None
+        file_path = None
+        file_name = dest_file
 
-        utc_time = utils_columns.get_current_utc_time("%Y-%m-%dT%H:%M:%S.%fZ")
-        date_time_key = utils_io.utc_timestamp_to_key(utc_time)
 
-        file_name_prefix = dbms_name + '.' + table_name + '.'     # The file name needs to start with dbms.table
-        if len(file_name)<= len(file_name_prefix) or not file_name.startswith(file_name_prefix):
-            message = f"Blobs file name in the wrong format, needs to start with {dbms_name}.{table_name}"
+    if not dbms_name and not table_name:
+        # get from the file name
+        if not s_file_name:
+            status.add_error("Missing database name or table name info in 'file store' command")
+            return process_status.ERR_command_struct
+        file_entries = s_file_name.split('.')
+        if len(file_entries) < 3:
+            message = f"Blobs file name in the wrong format, needs to start with [dbms name].[table name].[fime name] and is: '{s_file_name}'"
             status.add_error(message)
             if trace:
                 utils_print.output(message, True)
-            ret_val = process_status.Error_file_name_struct
+            return process_status.Error_file_name_struct
+
+        # take dbms name and table namee from the file name
+        dbms_name = file_entries[0]
+        table_name = file_entries[1]
+
+    if not dbms_name or not table_name:
+        return process_status.ERR_command_struct
+
+    if not dbms_name.startswith("blobs_"):
+        dbms_name = "blobs_" + dbms_name
+
+    utc_time = utils_columns.get_current_utc_time("%Y-%m-%dT%H:%M:%S.%fZ")
+    date_time_key = utils_io.utc_timestamp_to_key(utc_time)
+
+    if not hash_value:
+        if source_file:
+            got_hash, hash_value = utils_io.get_hash_value(status, source_file, "", None)
+            if not got_hash:
+                message = f"Failed o calculate hash value to file: '{source_file}' or file not accessible"
+                status.add_error(message)
+                if trace:
+                    utils_print.output(message, True)
+                return process_status.ERR_process_failure
         else:
-            ret_val = db_info.store_file(status, dbms_name, table_name, file_path, file_name[len(file_name_prefix):], hash_value, date_time_key, False, trace)
+
+            file_data = status.get_file_data() # Source was provides in a rest call:  curl -X POST -H "command: file store where dest = file2.txt" -F "file=@testdata.txt" http://10.0.0.78:7849
+            if not file_data:
+                status.add_error("File data to 'file store' command is not available")
+                return process_status.ERR_command_struct
+            hash_value = utils_data.get_string_hash('md5', file_data, dbms_name + '.' + table_name)
+
+
+    ret_val = db_info.store_file(status, dbms_name, table_name, file_path, file_name, hash_value, date_time_key, False, False, trace)
 
     return ret_val
 # ----------------------------------------------------------------------------
@@ -17821,17 +17936,28 @@ _file_methods = {
                 },
 
         "store": {'command': file_store,
-                'words_count': 18,
+                'words_min': 6,
                 'help': {
                     'usage': "file store where dbms = [dbms_name] and table = [table name] and hash = [hash value] and file = [path and file name]",
                     'example': "file store where dbms = blobs_edgex and table = video and hash = ce2ee27c4d192a60393c5aed1628c96b and file = !prep_dir/device12atpeak.bin",
                     'text': "Insert a file into the blobs dbms.",
                     'link' : "blob/master/image%20mapping.md#insert-a-file-to-a-local-database",
-                    'keywords' : ["unstructured data"],
+                    'keywords' : ["unstructured data", "file"],
                     }
                 },
+        "to": {'command': file_to,
+              'words_min': 3,
+              'help': {
+                  'usage': "file to [dest file name] where source = [source file name]",
+                  'example': "file to !config_dir/operator_config.al where source = !tmp_dir/new_config.al\n"
+                             "Using REST: curl -X POST -H \"command: file to !my_dest\" -F \"file=@testdata.txt\" http://10.0.0.78:7849",
+                  'text': "Copy  file to a destination folder",
+                  'link': "blob/master/file%20commands.md#copy-a-file-to-a-folder",
+                  'keywords': ["unstructured data", "file"],
+              }
+              },
 
-    "delete": {'command': file_delete,
+        "delete": {'command': file_delete,
             'words_min': 3,
             'help': {
                 'usage': "file delete [file path and name]",

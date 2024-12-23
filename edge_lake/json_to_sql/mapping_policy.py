@@ -961,7 +961,7 @@ def archive_blob_file(status, dbms_name, table_name, blob_data):
             utc_time = utils_columns.get_current_utc_time("%Y-%m-%dT%H:%M:%S.%fZ")
             date_time_key = utils_io.utc_timestamp_to_key(utc_time)
             db_info.store_file(status, "blobs_" + dbms_name, table_name, blobs_dir,
-                                         blob_hash_value + '.blob', blob_hash_value, date_time_key[:6], True, 0)
+                                         blob_hash_value + '.blob', blob_hash_value, date_time_key[:6], True, True, 0)
 
             file_id_name = file_name_prefix + blob_file_name  # database + table + source + name
 

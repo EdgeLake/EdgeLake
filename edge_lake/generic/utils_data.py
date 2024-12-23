@@ -1220,6 +1220,25 @@ def test_words(words_array, offset, test_array):
             return False
     return True
 
+# ======================================================================================================================
+# Get N words in a list - ignore empty entries
+# ======================================================================================================================
+def str_to_list(text_str, words_count):
+    ''''
+    Return a list of words, ignoring spaces
+    '''
+    word_list = []
+    list_size = 0
+    offset = 0
+    while list_size < words_count:
+        offset = get_word_start(text_str, offset)  # Get offset to the value
+        if offset == -1:
+            break   # no more words
+        word_length = get_word_length(text_str, offset)
+        word_list.append(text_str[offset:offset + word_length])
+        offset += (word_length + 1)
+        list_size += 1
+    return word_list
 
 # ======================================================================================================================
 # Split -  Split consider quotations as one word
