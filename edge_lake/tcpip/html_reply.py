@@ -38,6 +38,16 @@ import sys
 import json
 import html
 import re
+import base64
+from io import BytesIO
+try:
+    from xhtml2pdf import pisa
+except:
+    to_pdf_installed = False
+else:
+    to_pdf_installed = True
+
+
 
 html_default_style = {
                     ".center-title" : {
@@ -132,7 +142,7 @@ def get_chart_html(status, message, chart_type, added_html):
         options = create_html_options( counter_sets, chart_type )    # chart.js options
         html_info =  create_html_chart(data_set, options, chart_type, added_html)
     else:
-        html_info = default_html(f"Failed to deploy {chart_type} diagram - database output not in JSON format", False)
+        html_info = default_html(f"Failed to deploy {chart_type} diagram - database output not in JSON format", added_html,False)
 
     return html_info
 
@@ -153,25 +163,103 @@ def json_html(status, json_string, chart_type, added_html):
     else:
         is_json = True
 
-    return default_html(formatted_info, is_json)
+    return default_html(formatted_info, added_html, is_json)
+
+
+# ------------------------------------------------------------------------
+# Set a table in HTML
+# ------------------------------------------------------------------------
+def table_html(status, json_string, chart_type, added_html):
+
+    json_entries = str_to_result_list(status, json_string)
+    if not json_entries:
+        err_message = "Returned data is not in JSON format - include 'format = json' in the SQL params"
+        reply = reply_html_error(err_message)
+        status.add_error(f"Mapping output to HTML failed: {err_message}")
+    else:
+        reply = get_html_table(status, json_entries, added_html)
+    return reply
+# ------------------------------------------------------------------------
+# JSON to a table structure
+# ------------------------------------------------------------------------
+def get_html_table(status, json_entries, added_html):
+    # Extract table headers from keys of the first dictionary
+    # Extract table headers from keys of the first dictionary
+
+    if added_html:
+        # Hook
+        # Get user instructions for the head
+        user_html_head = html_from_json(added_html, "head", None)
+        # Get user instructions for the body
+        user_html_body = html_from_json(added_html, "body", None)
+    else:
+        user_html_head = None
+        user_html_body = None
+
+    headers = json_entries[0].keys()
+
+    # Start building the HTML content
+    html = "<!DOCTYPE html>\n<html>\n<head>\n"
+    html += "  <meta charset='UTF-8'>\n"
+
+    if user_html_head:
+        html += user_html_head
+    if not "<title>" in user_html_head:
+        # Tab title not provided by the user
+        html += "  <title>Query</title>\n"
+
+    html += "  <style>\n"
+    html += "    table { border-collapse: collapse; table-layout: auto;}\n"
+    html += "    th, td { border: 1px solid black; padding: 8px; text-align: left; }\n"
+    html += "    th { background-color: #f2f2f2; }\n"
+    html += "  </style>\n</head>\n<body>\n"
+
+    if user_html_body:
+        html += user_html_body
+
+
+    # Add table
+    html += "<table>\n"
+    html += "  <thead>\n    <tr>\n"
+
+    for header in headers:
+        html += f"      <th>{header}</th>\n"
+
+    html += "    </tr>\n  </thead>\n"
+
+    # Add table rows
+    html += "  <tbody>\n"
+
+    for row in json_entries:
+        html += "    <tr>\n"
+        for header in headers:
+            html += f"      <td>{row.get(header, '')}</td>\n"
+        html += "    </tr>\n"
+    html += "  </tbody>\n</table>\n"
+
+    # Close HTML content
+    html += "</body>\n</html>"
+
+    return html
+
 
 # ------------------------------------------------------------------------
 # Default HTML in text - same size fonts
 # ------------------------------------------------------------------------
 def text_html(status, text_data, chart_type, added_html):
 
-    return default_html(text_data, False)
+    return default_html(text_data, added_html, False)
 
 # -----------------------------------------------------------------------
 #  Create a Gauge
 # -----------------------------------------------------------------------
 def get_gauge_html(status, json_string, chart_type, added_html):
 
-    entries = str_to_result_list(status, json_string, )
+    entries = str_to_result_list(status, json_string)
     if entries:
         html_info = get_gauge(entries, added_html)
     else:
-        html_info = default_html(f"Failed to deploy Gauge diagram - database output not in JSON format", False)
+        html_info = default_html(f"Failed to deploy Gauge diagram - database output not in JSON format", added_html, False)
     return html_info
 
 # ------------------------------------------------------------------------
@@ -183,7 +271,7 @@ def get_on_off_html(status, json_string, chart_type, added_html):
     if entries:
         html_info = on_off_html(entries, added_html)
     else:
-        html_info = default_html(f"Failed to deploy the On Off buttons - database output not in JSON format", False)
+        html_info = default_html(f"Failed to deploy the On Off buttons - database output not in JSON format", added_html, False)
     return html_info
 
 
@@ -203,14 +291,15 @@ chart_types_ = {
                   'json':               ["json", json_html],
                   'gauge':              ["gauge", get_gauge_html],
                   'onoff':              ["onoff", get_on_off_html],
-                  'text':               ["text", text_html]
+                  'text':               ["text", text_html],
+                  'table':               ["text", table_html]
 }
 
 # ------------------------------------------------------------------------
 # Map to HTML Reply
 # ------------------------------------------------------------------------
 
-def to_html( status, message, source_format, type_html, html_info):
+def to_html( status, message, source_format, type_html, to_pdf, html_info):
     '''
     status - AnyLog object
     message - the output to deliver
@@ -229,19 +318,32 @@ def to_html( status, message, source_format, type_html, html_info):
         added_html = None
 
     if type_html[:5] == "html." and len(type_html) > 5 and type_html[5:] in chart_types_:
-        html_reply = chart_types_[type_html[5:]][1](status, message, type_html[5:], added_html)
+        reply_content = chart_types_[type_html[5:]][1](status, message, type_html[5:], added_html)
     else:
-        html_reply = json_html(status, message, "json", added_html)
+        reply_content = json_html(status, message, "json", added_html)
 
-    return html_reply
+    if not reply_content:
+        reply_content = reply_html_error("Failed to generate HTML")
+    elif to_pdf:
+        # Map to PDF
+        if not to_pdf_installed:
+            reply_content = reply_html_error("xhtml2pdf not installed")
+        else:
+            pdf_base64 =  generate_pdf(status, reply_content)
+            if pdf_base64:
+                # Create a html with the PDF
+                html_content = generate_pdf_html(status, pdf_base64)
+                if html_content:
+                    reply_content = html_content
 
-
+    return reply_content
 # ------------------------------------------------------------------------
 # Default HTML reply
 # ------------------------------------------------------------------------
-def default_html(message, is_json):
+def default_html(message, added_html, is_json):
     '''
     message - the message to return
+    added_html - HTML added by the user
     is_json = True for JSON format
     '''
 
@@ -249,8 +351,50 @@ def default_html(message, is_json):
 
     if is_json:
         prefix_html = default_json_html_prefix
+        if added_html:
+            # JSON
+            # Hook
+            # Add user instructions for the head
+            html_user_head = html_from_json(added_html, "head", None)
+            if html_user_head:
+                prefix_html = f"""      
+                        <!DOCTYPE html>
+                        <html lang="en">
+                        <head>
+                        """
+                prefix_html += html_user_head
+
+                prefix_html += """
+                        </head>
+                        <body>
+                            <p>
+                        """
+            html_user_body = html_from_json(added_html, "body", None)
+            if html_user_body:
+                prefix_html += html_user_body  # This could be the title
+
     else:
+        # Text
         prefix_html = default_text_html_prefix
+        if added_html:
+            html_user_head = html_from_json(added_html, "head", None)
+            if html_user_head:
+                prefix_html = f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                    """
+                prefix_html += html_user_head
+
+                prefix_html += """
+                    </head>
+                    <body>
+                        <p style="font-family: 'Courier New', Courier, monospace;">
+                """
+
+            html_user_body = html_from_json(added_html, "body", None)
+            if html_user_body:
+                prefix_html += html_user_body       # This could be the title
 
     return prefix_html + html_msg + default_html_suffix
 
@@ -1141,3 +1285,156 @@ def get_number(value):
     if value == None:
         return 0
     return 1
+
+# -----------------------------------------------------------------------------
+# HTML to PDF
+# -----------------------------------------------------------------------------
+def generate_pdf(status, html_content):
+    """
+    Generates a PDF from HTML content and returns it as a Base64 string.
+
+    Args:
+        html_content (str): The HTML content to convert to PDF.
+
+    Returns:
+        str: Base64-encoded PDF content.
+    """
+    options = {
+        'page-size': 'A4',
+        'encoding': 'UTF-8',
+        'no-outline': None,
+        'quiet': ''
+    }
+
+    try:
+        # Generate PDF in memory
+        pdf_buffer = BytesIO()
+
+        # Convert HTML to PDF
+        result = pisa.CreatePDF(BytesIO(html_content.encode('utf-8')), dest=pdf_buffer)
+
+        if not result.err:
+            # Reset the buffer position to the start
+            pdf_buffer.seek(0)
+            pdf_data = pdf_buffer.getvalue()
+        else:
+            err_msg = f"Failed to generate PDF from HTML: {result.err}"
+            status.add_error(err_msg)
+            pdf_data = None
+
+    except:
+        errno, value = sys.exc_info()[:2]
+        err_msg = f"Failed to generate PDF from HTML: {value}"
+        status.add_error(err_msg)
+        pdf_data = None
+
+    return pdf_data
+
+
+# -----------------------------------------------------------------------------
+# Creating an HTML that allows to download the PDF
+# -----------------------------------------------------------------------------
+def generate_pdf_html(status, pdf_bytes):
+    try:
+        # Convert the PDF bytes into a base64 string
+        pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+    except:
+        errno, value = sys.exc_info()[:2]
+        err_msg = f"Failed to embed PDF inHTML: {value}"
+        status.add_error(err_msg)
+        html_content = None
+    else:
+
+        # Generate the HTML content with embedded PDF
+        html_content = f"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>View and Download PDF</title>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    background-color: #f4f4f4;
+                    margin: 0;
+                    padding: 0;
+                }}
+                .container {{
+                    padding: 20px;
+                    text-align: center;
+                }}
+                #pdf-viewer {{
+                    width: 100%;
+                    height: 500px;
+                    border: 1px solid #ccc;
+                }}
+                .download-btn {{
+                    margin-top: 20px;
+                    padding: 10px 20px;
+                    background-color: #007bff;
+                    color: white;
+                    border: none;
+                    font-size: 16px;
+                    cursor: pointer;
+                }}
+                .download-btn:hover {{
+                    background-color: #0056b3;
+                }}
+            </style>
+        </head>
+        <body>
+    
+        <div class="container">
+            <h1>View PDF and Download</h1>
+    
+            <!-- PDF Viewer -->
+            <embed id="pdf-viewer" type="application/pdf" src="data:application/pdf;base64,{pdf_base64}" width="100%" height="500px" />
+    
+            <!-- Button to download PDF -->
+            <a href="data:application/pdf;base64,{pdf_base64}" download="generated_pdf.pdf">
+                <button class="download-btn">Download PDF</button>
+            </a>
+        </div>
+    
+        </body>
+        </html>
+        """
+
+    return html_content
+
+
+# -----------------------------------------------------------------------------
+# Reply HTML Error
+# -----------------------------------------------------------------------------
+def reply_html_error(err_message):
+
+    err_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Error Message Example</title>
+    <style>
+        .error-message {{
+            color: white;
+            background-color: red;
+            padding: 10px;
+            border-radius: 5px;
+            width: fit-content;
+            margin: 20px auto;
+            text-align: center;
+            font-family: Arial, sans-serif;
+            font-size: 16px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }}
+    </style>
+</head>
+<body>
+    <div class="error-message">
+        {err_message}
+    </div>
+</body>
+</html>
+    """
+    return err_html

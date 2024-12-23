@@ -1035,7 +1035,7 @@ def orgaize_where_condition(source_string, offset):
                 word_value = params.get_value_if_available(key)
             else:
                 word_value = key
-            where_string += word_value if word_value else source_string[offset:offset_next]
+            where_string += str(word_value if word_value else source_string[offset:offset_next]) # word_value can be an int
             previous = where_string[-1]
             where_string += ' '
             char = ' '     # Because char was replaced by dictionary and space is jumped over by  offset += 1 below

@@ -408,7 +408,7 @@ def sync_by_blockchain(status, data_buffer, master_msg_array, old_local_txn_coun
         # Pull from blockchain only if transaction has changed
         ret_val, txn_count = bplatform.get_txn_count(status, connection_, "contract")
 
-        if old_txn_count != txn_count or old_local_txn_count != local_txn_count:
+        if old_txn_count != txn_count or old_local_txn_count != local_txn_count or not utils_io.is_path_exists(blockchain_file):      # Force sync when blockchain file doesn't exist
             # If blockchain data changed - checkout from ethereum
             # Or local updates - test if populated to the blockchain platform
             master_msg_array[3] = connection_

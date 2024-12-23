@@ -112,7 +112,7 @@ class BlockchainNode(ABC):
         platform_name = interpreter.get_one_value(conditions, "platform")
 
         # Ethereum params
-        if platform_name == "ethereum":
+        if platform_name == "ethereum" or platform_name == "optimism":
             private_key = interpreter.get_one_value(conditions, "private_key")
             public_key = interpreter.get_one_value(conditions, "public_key")
             contract = interpreter.get_one_value(conditions, "contract")
