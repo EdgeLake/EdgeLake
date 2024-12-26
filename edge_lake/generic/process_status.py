@@ -332,6 +332,7 @@ Invalid_policy=248
 Not_suppoerted_on_main_thread=249
 Failed_to_parse_input_file = 250
 Missing_source_file = 251
+HTTP_failed_to_decode = 252
 
 
 # note that message is at location of error value + 1 (exit is set at 0)
@@ -588,6 +589,7 @@ status_text = ["Terminating node processes",
                "Command not suppoerted on main thread", # 249
                "Failed to parse input file",            # 250
                "Missing_source_file",                   # 251
+               "HTTP Request: failed to decode message body",  # 252
                ]
 
 

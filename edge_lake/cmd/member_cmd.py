@@ -16772,28 +16772,42 @@ def set_echo_queue(status, io_buff_in, cmd_words, trace):
     return ret_val
 
 # --------------------------------------------------------------
-# set traceback on / off
-# set traceback on "which is not a member of the cluster"
+# Enable/disable REST exception
+# set exception traceback on / off
+
+# Enable/disable Error exception
+# set error traceback on / off
+# set error traceback on "which is not a member of the cluster"
 # --------------------------------------------------------------
 def set_traceback(status, io_buff_in, cmd_words, trace):
 
     words_count = len(cmd_words)
 
     ret_val = process_status.SUCCESS
-    if cmd_words[2] == "on":
-        if words_count == 3:
-            process_status.with_traceback_ = True
-            process_status.traceback_text_ = ""    # All error calls will show traceback
-        elif words_count == 4:
-            process_status.with_traceback_ = True
-            process_status.traceback_text_ = cmd_words[3]  # only error calls that include the text provided
+
+    if cmd_words[1] == "error":
+        # Print the stack for an error
+        if cmd_words[3] == "on":
+            if words_count == 3:
+                process_status.with_traceback_ = True
+                process_status.traceback_text_ = ""    # All error calls will show traceback
+            elif words_count == 4:
+                process_status.with_traceback_ = True
+                process_status.traceback_text_ = cmd_words[4]  # only error calls that include the text provided
+            else:
+                ret_val = process_status.ERR_command_struct
+        elif words_count == 3 and cmd_words[3] == "off":
+            process_status.traceback_text_ = ""
+            process_status.with_traceback_ = False
         else:
             ret_val = process_status.ERR_command_struct
-    elif words_count == 3 and cmd_words[2] == "off":
-        process_status.traceback_text_ = ""
-        process_status.with_traceback_ = False
-    else:
-        ret_val = process_status.ERR_command_struct
+    elif cmd_words[1] == "exception":
+        if cmd_words[3] == "on":
+            http_server.with_traceback_ = True
+        elif cmd_words[3] == "off":
+            http_server.with_traceback_ = False
+        else:
+            ret_val = process_status.ERR_command_struct
     return ret_val
 
 # --------------------------------------------------------------
@@ -17749,16 +17763,25 @@ _set_methods = {
                         'keywords' : ["high availability"],
                         }
                     },
-        "traceback": {'command': set_traceback,
-                    'words_min' : 3,
+        "error traceback": {'command': set_traceback,
+                    'words_min' : 4,
                     'help': {
-                         'usage': "set traceback [on/off] [optional text]",
-                         'example': "set traceback on\n"
-                                    "set traceback on \"which is not a member of the cluster\"",
-                         'text': "Prints stack trace when messages are added to the error log. If the text is specified, stacktrace is added only if the text is a sustring in the error message",
+                         'usage': "set error traceback [on/off] [optional text]",
+                         'example': "set error traceback on\n"
+                                    "set error traceback on \"which is not a member of the cluster\"",
+                         'text': "Print stack trace when messages are added to the error log. If the text is specified, stacktrace is added only if the text is a sustring in the error message",
                          'keywords' : ["debug"],
                         }
                     },
+        "exception traceback": {'command': set_traceback,
+                        'words_min': 4,
+                        'help': {
+                            'usage': "set exception traceback [on/off] [optional text]",
+                            'example': "set exception traceback on\n",
+                            'text': "Prints stack trace with a codde exception",
+                            'keywords': ["debug"],
+                        }
+                        },
         "reply ip": {'command': set_replacement_ip,
                   'words_min': 5,
                   'help': {

@@ -309,9 +309,14 @@ def process_event(status, readings, policy_inner, policy_id, dbms_name, table_na
                             #                }
                             if bring_key == '*' or (isinstance(data_entry, dict) and bring_key in data_entry):
                                 if bring_key == '*':
-                                    input_columns = data_entry
+                                    source_columns = data_entry
                                 else:
-                                    input_columns = data_entry[bring_key]   # The attribute values to include
+                                    source_columns = data_entry[bring_key]   # The attribute values to include
+                                if isinstance(source_columns, str) and len(source_columns):
+                                    input_columns = utils_json.str_to_json(source_columns)
+                                else:
+                                    input_columns = source_columns
+
                                 if isinstance(input_columns, dict):
                                     for attr_name, column_val in input_columns.items():
                                         data_type = type(column_val).__name__

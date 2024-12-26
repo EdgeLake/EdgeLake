@@ -11,6 +11,7 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 import sys
 import ssl
 import os
+import traceback
 with_profiler_ = True if os.getenv("PROFILER", "False").lower() == "true" else False      # Needs to return True - otherwise will be False
 if with_profiler_:
     import edge_lake.generic.profiler as profiler
@@ -123,6 +124,7 @@ http_methods_ = {
 
 rest_stat_ = {}         # Collect statistics
 
+with_traceback_ = False     # On an exception - show error file and line, enabled with: set exception traceback on
 
 # ---------------------------------------------------------
 # Get the IP and port which is used by the server
@@ -339,6 +341,21 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     def handle_exception(self, status, rest_type, errno, value, stack_trace):
 
         try:
+            stack_list = traceback.format_tb(stack_trace)
+            lines_to_print = 2 if len(stack_list) > 1 else 1
+            part_stack = "".join(stack_list[-lines_to_print:])   # Print 1 or 2 lines
+
+            utils_print.output_box(f"\nFailed line: {part_stack}")
+
+            if with_traceback_:
+                # This option is enabled by the command:
+                #       set exception traceback on
+                full_traceback = ''.join(stack_list)
+                utils_print.output("\r\n" + full_traceback, True)
+        except:
+            pass
+
+        try:
             message = "HTTP %s call exception from IP: %s" % (rest_type, str(self.client_address))
             process_log.add("Error", message)
         except:
@@ -497,6 +514,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
             error_type, error_value = sys.exc_info()[:2]
             err_msg = "REST failed to write reply header: {} - {}".format(error_type, error_value)
             status.add_error(err_msg)
+            utils_print.output_box(err_msg)
             ret_val = process_status.REST_header_err
         else:
             ret_val = process_status.SUCCESS
@@ -972,13 +990,14 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
             elif user_agent == "grafana":
 
-                msg_body = self.get_msg_body(status)
-                try:
-                    ret_val = al_grafana.grafana_post(status, self, msg_body, http_server_info.timeout)
-                except:
-                    errno, value, stack_trace = sys.exc_info()[:3]
-                    self.handle_exception(status, "POST", errno, value, stack_trace)
-                    ret_val = process_status.REST_call_err
+                ret_val, msg_body, err_msg = self.get_msg_body(status)
+                if not ret_val:
+                    try:
+                        ret_val = al_grafana.grafana_post(status, self, msg_body, http_server_info.timeout)
+                    except:
+                        errno, value, stack_trace = sys.exc_info()[:3]
+                        self.handle_exception(status, "POST", errno, value, stack_trace)
+                        ret_val = process_status.REST_call_err
 
             elif mqtt_data and user_id:
                 # Send to the MQTT client if registered to the topic
@@ -1039,38 +1058,39 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         else:
 
             # Publish the data as an MQTT topic
-            msg_body = self.get_msg_body(status).strip()
+            ret_val, msg_body, err_msg = self.get_msg_body(status)
+            if not ret_val:
 
-            if msg_body and msg_body[0] == '[':
-                messages_list = utils_json.str_to_list(msg_body)
-                if messages_list:
-                    # List of messages
-                    for message in messages_list:
-                        msg_str = utils_json.to_string(message)
+                if msg_body and msg_body[0] == '[':
+                    messages_list = utils_json.str_to_list(msg_body)
+                    if messages_list:
+                        # List of messages
+                        for message in messages_list:
+                            msg_str = utils_json.to_string(message)
 
-                        try:
-                            ret_val = mqtt_client.process_message(topic, user_id, msg_str)
-                        except:
-                            errno, value, stack_trace = sys.exc_info()[:3]
-                            self.handle_exception(status, "POST", errno, value, stack_trace)
-                            ret_val = process_status.REST_call_err
-                            if len(message) > 200:
-                                utils_print.output_box("Failed to process message: %s" % message[:200] + ' . . .')
-                            else:
-                                utils_print.output_box("Failed to process message: %s" % message)
+                            try:
+                                ret_val = mqtt_client.process_message(topic, user_id, msg_str)
+                            except:
+                                errno, value, stack_trace = sys.exc_info()[:3]
+                                self.handle_exception(status, "POST", errno, value, stack_trace)
+                                ret_val = process_status.REST_call_err
+                                if len(message) > 200:
+                                    utils_print.output_box("Failed to process message: %s" % message[:200] + ' . . .')
+                                else:
+                                    utils_print.output_box("Failed to process message: %s" % message)
 
-                        if ret_val:
-                            break
+                            if ret_val:
+                                break
+                    else:
+                        status.add_error("Failed to map data to a list")
+                        ret_val = process_status.ERR_wrong_data_structure
                 else:
-                    status.add_error("Failed to map data to a list")
-                    ret_val = process_status.ERR_wrong_data_structure
-            else:
-                # One message
-                ret_val = mqtt_client.process_message(topic, user_id, msg_body)
-            if ret_val:
-                ret_code = REST_BAD_REQUEST
-            else:
-                ret_code = REST_OK
+                    # One message
+                    ret_val = mqtt_client.process_message(topic, user_id, msg_body)
+                if ret_val:
+                    ret_code = REST_BAD_REQUEST
+                else:
+                    ret_code = REST_OK
 
         return ret_val
 
@@ -1234,57 +1254,58 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         ret_val, run_client = self.get_run_client()
         if not ret_val:
 
-            msg_body = self.get_msg_body(status)
+            ret_val, msg_body, err_msg = self.get_msg_body(status)
+            if not ret_val:
 
-            if rest_cmd_words[0] == "body":
-                # The command is passed in the message body. The example is with the command: set scrippt [file name] [script data]
-                command = msg_body
-                msg_body = None
-                cmd_words = utils_data.str_to_list(command, 3)
-            else:
-                cmd_words = rest_cmd_words
+                if rest_cmd_words[0] == "body":
+                    # The command is passed in the message body. The example is with the command: set scrippt [file name] [script data]
+                    command = msg_body
+                    msg_body = None
+                    cmd_words = utils_data.str_to_list(command, 3)
+                else:
+                    cmd_words = rest_cmd_words
 
 
-            is_select = False
-            if cmd_words[0] == "sql":
-                cmd_lower = command[4:].lower()
-                index = cmd_lower.find("select ", 4)
-                if index > 0:
-                    char_before = cmd_lower[index - 1]
-                    if char_before == ' ' or char_before == '"':
-                        is_select = True
-                        # A select stmt - find output format to determine content-type
-                        out_format = utils_data.find_next_word(cmd_lower, 4, index, ["format", "="])
-                        if out_format == "table":
-                            content_type = "text"
-            elif len(cmd_words) >= 3:
-                if utils_data.test_words(cmd_words, 0, ["file", "retrieve", "where"]):
-                    # If streaming - Need to deliver headers first:
-                    index = command.find(" stream", 19)
-                    if index > -1:
-                        # Test if command includes stream = true
-                        stream_text = command[index + 1:].replace(" ","").lower()       # remove spaces
-                        if stream_text[:11] == "stream=true":
-                            content_type = "video/mp4"
-                            is_stream = True
-                elif cmd_words[0] == "file" and (cmd_words[1] == "store" or cmd_words[1] == "to"):
-                    ret_val, content_type, file_data = get_user_file_data(status, msg_body)   # the message body is set on the status object as it includes the file to write
-                    msg_body = None         # Message was pushed to the status object
+                is_select = False
+                if cmd_words[0] == "sql":
+                    cmd_lower = command[4:].lower()
+                    index = cmd_lower.find("select ", 4)
+                    if index > 0:
+                        char_before = cmd_lower[index - 1]
+                        if char_before == ' ' or char_before == '"':
+                            is_select = True
+                            # A select stmt - find output format to determine content-type
+                            out_format = utils_data.find_next_word(cmd_lower, 4, index, ["format", "="])
+                            if out_format == "table":
+                                content_type = "text"
+                elif len(cmd_words) >= 3:
+                    if utils_data.test_words(cmd_words, 0, ["file", "retrieve", "where"]):
+                        # If streaming - Need to deliver headers first:
+                        index = command.find(" stream", 19)
+                        if index > -1:
+                            # Test if command includes stream = true
+                            stream_text = command[index + 1:].replace(" ","").lower()       # remove spaces
+                            if stream_text[:11] == "stream=true":
+                                content_type = "video/mp4"
+                                is_stream = True
+                    elif cmd_words[0] == "file" and (cmd_words[1] == "store" or cmd_words[1] == "to"):
+                        ret_val, content_type, file_data = get_user_file_data(status, msg_body)   # the message body is set on the status object as it includes the file to write
+                        msg_body = None         # Message was pushed to the status object
 
-            # determine if wait is needed
-            if run_client:
-                # For SQL command
-                if command[:5] != "file ":
-                    # No wait for file copy
-                    # if data goes to HTML, it needs to go into a file to be pulled to one HTML doc.
-                    with_wait = True  # Place thread on wait for reply
+                # determine if wait is needed
+                if run_client:
+                    # For SQL command
+                    if command[:5] != "file ":
+                        # No wait for file copy
+                        # if data goes to HTML, it needs to go into a file to be pulled to one HTML doc.
+                        with_wait = True  # Place thread on wait for reply
 
-            # Execute the command (or commands in message body)
-            if msg_body:
-                # These are assignments of values or pre=processed commands
-                self.get_msg_body_cmds(status, commands_list, msg_body)
+                # Execute the command (or commands in message body)
+                if msg_body:
+                    # These are assignments of values or pre=processed commands
+                    self.get_msg_body_cmds(status, commands_list, msg_body)
 
-            commands_list.append((run_client + command, with_wait))  # Add a flag if needed to wait for a reply
+                commands_list.append((run_client + command, with_wait))  # Add a flag if needed to wait for a reply
             
         return [ret_val, with_wait, content_type, is_select, is_stream, file_data]
 
@@ -1386,7 +1407,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     def get_timeout(self):
 
         ret_val = process_status.SUCCESS
-
+        sec_timeout = 0
         timeout = get_value_from_headers(self.al_headers, 'timeout')  # overwrite the default timeout
         if timeout:
             # timeout can be a number or number + unit
@@ -1464,21 +1485,32 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     def al_put(self, status):
 
+
+        content_type = 'text/json'
+
         headers_info = request_info()
 
         headers_info.rest_status = REST_API_OK
 
-        msg_body = self.get_msg_body(status)
-        ret_val, msg_data, row_counter = utils_json.make_json_rows(status, msg_body)
+        ret_val, msg_body, err_msg = self.get_msg_body(status)
+        if not ret_val:
+            ret_val, msg_data, row_counter = utils_json.make_json_rows(status, msg_body)
+
         if ret_val:
-            if not msg_body:
-                err_msg = "Failed to process JSON data: Message Body is empty"
-            else:
-                err_msg = "Failed to process JSON data"
-            status.add_error(err_msg)
-        elif not msg_data:
-            status.add_error("REST PUT command without new data")
+            if not err_msg:
+                if not msg_body:
+                    err_msg = "Failed to process JSON data: Message Body is empty"
+                else:
+                    err_msg = "Failed to process JSON data"
+                status.add_error(err_msg)
             headers_info.rest_status = REST_API_MISSING_BODY
+            content_type = 'text'
+        elif not msg_data:
+            err_msg = "REST PUT command without new data"
+            content_type = 'text'
+            status.add_error(err_msg)
+            headers_info.rest_status = REST_API_MISSING_BODY
+            ret_val = process_status.Failed_to_analyze_json
         else:
             prep_dir = params.get_value_if_available("!prep_dir")  # dir where the data will be written
             watch_dir = params.get_value_if_available("!watch_dir")  # dir where the data will be written
@@ -1496,25 +1528,23 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
 
         # determine returned message
-        if headers_info.rest_status != REST_API_OK:
-            result_set = get_rest_stat_msg(headers_info)
-        elif ret_val:
-            err_msg = status.get_saved_error()  # try detailed message
-            if err_msg == "":
-                err_msg = process_status.get_status_text(ret_val)  # get generic message
-
-            result_set = "{\"AnyLog.error on REST server\":\"%s\"}" % (err_msg)
-        else:
-            result_set = "{\"AnyLog.status\":\"Success\", \"AnyLog.hash\": \"%s\" }" % hash_value   # Return the hash of the added file
-
         if ret_val:
             response_code = REST_INTERNAL_SERVER_ERROR
+
+            echo_msg = process_status.get_status_text(ret_val)      # The value to return with the headers
+            if not err_msg:
+                err_msg = status.get_saved_error()  # try detailed message
+                if not err_msg:
+                    err_msg = "{\"AnyLog.error on REST server\":\"%s\"}" % (echo_msg) # get generic message
+            result_set = err_msg
         else:
+            result_set = "{\"AnyLog.status\":\"Success\", \"AnyLog.hash\": \"%s\" }" % hash_value   # Return the hash of the added file
+            echo_msg = None
             response_code = REST_OK
 
 
         encoded_result_set = result_set.encode(encoding='UTF-8')
-        ret_val = self.send_reply_headers(status, response_code, None, False, 'text/json', len(encoded_result_set), False, None)
+        ret_val = self.send_reply_headers(status, response_code, echo_msg, True, content_type, len(encoded_result_set), False, None)
         if not ret_val:
             write_ret_value = utils_io.write_encoded_to_stream(status, self.wfile, encoded_result_set)
 
@@ -1533,18 +1563,33 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # Get the message body
     # =======================================================================================================================
     def get_msg_body(self, status):
-        msg_body_length = get_value_from_headers(self.al_headers, 'Content-Length')
-        if msg_body_length and msg_body_length.isnumeric():
-            msg_body = utils_io.read_from_stream(status, self.rfile, int(msg_body_length))
-            if len(msg_body) == 2:
-                decode_body = msg_body[1].decode('iso-8859-1')
-                self.msg_body = decode_body     # Save the decoded body - being used in case of an error to provide error info
-            else:
-                decode_body = None
-        else:
-            decode_body = None
 
-        return decode_body
+        self.msg_body = None
+        err_msg = None
+        ret_val = process_status.SUCCESS
+
+        msg_body_length = get_value_from_headers(self.al_headers, 'Content-Length') # Get the message lengthe from the headers
+
+        if msg_body_length and msg_body_length.isnumeric():
+            msg_info = utils_io.read_from_stream(status, self.rfile, int(msg_body_length))
+            if len(msg_info) == 2:
+                # The message body is a list with 2 entries:
+                # msg_info[0] is the Content length
+                # msg_info[1] is the content
+                try:
+                    self.msg_body = msg_info[1].decode('iso-8859-1')    # Save the decoded body - being used in case of an error to provide error info
+                except:
+                    self_command = (self.command + "\r\n") if hasattr(self, 'command') else ""
+                    err_msg = f"Failed to decode message body:{self_command}\r\n'Content-Length': {msg_body_length}\r\nmsg_info[0]: {msg_info[0]}\r\nmsg_info[1]: {msg_info[1]}"
+                    status.add_error(err_msg)
+                    utils_print.output_box(err_msg)
+                    ret_val = process_status.HTTP_failed_to_decode
+                else:
+                    if len(self.msg_body) and (self.msg_body[0] == ' ' or self.msg_body[-1] == ' '):
+                        self.msg_body = self.msg_body.strip()
+
+
+        return [ret_val, self.msg_body, err_msg]
 
     # =======================================================================================================================
     # Send headers and Query the local database

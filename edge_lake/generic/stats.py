@@ -499,11 +499,11 @@ def get_operator_info(service, topic):
     return reply
 # ---------------------------------------------------------------------------------------------
 # Get dictionary for output
-# --------------------------------------------------------------------------            -------------------
+# ---------------------------------------------------------------------------------------------
 def get_stat_dict_output(service, topic):
     source_object = statistics_[service][topic]
     if isinstance(source_object, dict):
-        # A dictionary like a p     olicy
+        # A dictionary like a policy
         entries_list = [source_object]  # A single dictionary (like [operator][summary])
     else:
         # as a list (like [operator][error]
