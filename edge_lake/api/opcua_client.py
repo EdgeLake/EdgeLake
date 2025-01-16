@@ -78,6 +78,8 @@ def opcua_values(status, io_buff_in, cmd_words, trace):
                 "include":                  ("str",     False,  False, False),      # Additional attributes: name, SourceTimestamp, ServerTimestamp, StatusCode
                 "node":                     ("str",     False,  True,  False),      # One or more namespace + id: "ns=2;i=1002"
                 "nodes":                    ("str",     False,  True,  True),       # A list of nodes: nodes = ["ns=2;i=1", "ns=2;i=2"]
+                "method":                   ("str",     False,  False,  True),      # 2 options: "collection" - 1) a single call to all points 2) "single" - a call for each node
+                "failures":                 ("bool",    False,  False, True),       # Default is false. If set to True and executed with method = individual, only errors are returned
                 }
 
 
@@ -94,18 +96,10 @@ def opcua_values(status, io_buff_in, cmd_words, trace):
     user = interpreter.get_one_value_or_default(conditions, "user", None)
     password = interpreter.get_one_value_or_default(conditions, "password", None)
 
-    # Establish connection to the OPC-UA server
-    client = declare_connection(status=status, url=url, user=user, password=password)
-    if not client:
-        return [process_status.Failed_OPC_CONNECT, None]
-
-    nodes_list = interpreter.get_one_value_or_default(conditions, "nodes", None)
-    if nodes_list:
-        # A list specified in the command line  (Option B)
-        id_nodes = utils_json.str_to_json(nodes_list)
-    else:
-        # User is not using a list (Option A)
-        id_nodes = conditions["node"]
+    read_method = interpreter.get_one_value_or_default(conditions, "method", "collection")
+    if read_method != "collection" and read_method != "individual":
+        status.add_error("Get OPCUA values command method must be 'collection' or 'individual'")
+        return [process_status.ERR_command_struct, None]
 
     attr_included = conditions.get("include", None)
     if attr_included:
@@ -120,8 +114,25 @@ def opcua_values(status, io_buff_in, cmd_words, trace):
     else:
         title = ["value"]
 
+    # If set to True and executed with method = individual, only errors are returned
+    failures = interpreter.get_one_value_or_default(conditions, "failures", False)
 
-    multiple_values = get_multiple_value(status, client, id_nodes, attr_included)
+    # Establish connection to the OPC-UA server
+    client = declare_connection(status=status, url=url, user=user, password=password)
+    if not client:
+        return [process_status.Failed_OPC_CONNECT, None]
+
+    nodes_list = interpreter.get_one_value_or_default(conditions, "nodes", None)
+    if nodes_list:
+        # A list specified in the command line  (Option B)
+        id_nodes = utils_json.str_to_json(nodes_list)
+    else:
+        # User is not using a list (Option A)
+        id_nodes = conditions["node"]
+
+
+
+    multiple_values = get_multiple_opcua_values(status, client, id_nodes, attr_included, read_method, failures)
 
     if not multiple_values:
         ret_val = process_status.Failed_opcua_process
@@ -225,10 +236,10 @@ def opcua_struct(status, io_buff_in, cmd_words, trace):
                 "depth":                    ("int",     False, False,   True),      # Limit the depth of the traversal
                 "class":                    ("str",     False, False,   False),     # classes to consider: i.e. object, variable
                 "format":                   ("str",     False, False,   True),      # the type of output - "tree" (default), "get value", "run client"
-                "frequency":                ("str",     False, True,   True),      # If output generates "run_client" - the frequency of the "run client" command
-                "table":                    ("str",     False, True,   True),      # If output generates "run_client" - the table name of the "run client" command
-                "dbms":                     ("str",     False, True,   True),      # If output generates "run_client" - the dbms name of the "run client" command
-
+                "frequency":                ("str",     False, True,    True),      # If output generates "run_client" - the frequency of the "run client" command
+                "table":                    ("str",     False, True,    True),      # If output generates "run_client" - the table name of the "run client" command
+                "dbms":                     ("str",     False, True,    True),      # If output generates "run_client" - the dbms name of the "run client" command
+                "validate":                 ("bool",    False, False,   True),      # If output generates "run_client" - the dbms name of the "run client" command
                 }
 
 
@@ -247,6 +258,7 @@ def opcua_struct(status, io_buff_in, cmd_words, trace):
     max_depth = interpreter.get_one_value_or_default(conditions, "depth", 0)        # Limit the depth of the traversal
     node_class = conditions["class"] if "class" in conditions else None              # Filter by namespace
     output_format = interpreter.get_one_value_or_default(conditions, "format", "tree")
+    validate_value = interpreter.get_one_value_or_default(conditions, "validate", False)
 
     valid_formats = ["tree", "get_value", "run_client"]
     if not output_format in valid_formats:
@@ -264,6 +276,7 @@ def opcua_struct(status, io_buff_in, cmd_words, trace):
         "referencetype" : 0,
         "datatype" : 0,
         "view" : 0,
+        "read_failure" : 0,
         "unknown" : 0,
     }
 
@@ -316,6 +329,7 @@ def opcua_struct(status, io_buff_in, cmd_words, trace):
 
         "file_handle"   : file_handle,           # Output file or None
 
+        "@counter": 0, # Counter nodes visited
         "@tmp1": 0,  # Counter used in printing status, not returned to the user
         "@tmp2": 0,  # Counter used in printing status, not returned to the user
         "@limit": limit,  # Max nodes to visit
@@ -323,7 +337,7 @@ def opcua_struct(status, io_buff_in, cmd_words, trace):
 
     }
     output_txt = None
-    ret_val = navigate_tree(status, connection, root, 0, navigation_info, type_dict)  # Start navigating from the root node
+    ret_val = navigate_tree(status, connection, root, 0, navigation_info, type_dict, validate_value)  # Start navigating from the root node
 
 
     # Disconnect from the OPC-UA server after browsing
@@ -355,6 +369,8 @@ def opcua_struct(status, io_buff_in, cmd_words, trace):
             file_handle.write_from_buffer(output_txt)
             output_txt = None
         file_handle.close_file()
+
+    utils_print.output("\r\n", True)    # Because of the printout of the bar
 
     return [ret_val, output_txt]
 
@@ -392,59 +408,112 @@ def get_one_value(status, client, node_id):
     :param node_id: Node ID of the target node i.e. "ns=0;i=2257"
     """
     try:
-        node = client.get_node(node_id)
-        value = node.get_value()
+        one_node = client.get_node(node_id)
+        one_value = one_node.get_data_value()
     except:
         errno, value = sys.exc_info()[:2]
         status.add_error(f'Failed to retrieve node value from {node_id} (Error: {value})')
-        value = None
+        one_node = None
+        one_value = f"ERROR: {value}"
 
-    return value
+    return [one_node, one_value]
 
 # ---------------------------------------------------------------------------------------
 # Get multiple values in a single call
 # ---------------------------------------------------------------------------------------
-def get_multiple_value(status, client, id_nodes, attr_included):
+def get_multiple_opcua_values(status, client, id_nodes, attr_included, read_method, failures):
     """
     Fetch the value of a specific node given its Node ID.
     :param status: thread status object
     :param client: OPC-UA client
     :param id_nodes: A list of Node IDs  i.e. ["ns=0;i=2257", "ns=0;i=2258"]
     :param attr_included: return a list of attributes
+    :param read_method: "collection" - a single call for the entire collection OR "individual" - a single call for each point
+    :param failures: If set to True and executed with method = individual, only errors are returned
+
 
     return the list of the nodes names + the list of values
     """
     try:
 
-        opcua_nodes = [client.get_node(node_id) for node_id in id_nodes]
-        nodes = [node.nodeid for node in opcua_nodes]
-        multiple_results = client.uaclient.get_attributes(nodes, ua.AttributeIds.Value)          # Reads in a single call multiple values
 
-        if not attr_included:
-            # SEE HOW IT IS ORGANIZED IN:       multiple_values = client.get_values(opcua_nodes)
-            result_list =  [(result.Value.Value,) for result in multiple_results]
+        if read_method == "collection":
+            # A single call for all the nodes
+            opcua_nodes = [client.get_node(node_id) for node_id in id_nodes]
+            nodes = [node.nodeid for node in opcua_nodes]
+
+            multiple_results = client.uaclient.get_attributes(nodes, ua.AttributeIds.Value)          # Reads in a single call multiple values
+            if not attr_included:
+                # SEE HOW IT IS ORGANIZED IN:       multiple_values = client.get_values(opcua_nodes)
+                result_list = [(result.Value.Value,) for result in multiple_results]
+
         else:
+            # individual calls
+            opcua_nodes = []
+            multiple_results = []
+            result_list = []
+            for node_id in id_nodes:
+                one_node, one_value = get_one_value(status, client, node_id)
+
+                if failures and one_node:
+                    # only output failures
+                    continue
+
+                if not attr_included:
+                    if one_node:
+                        result_list.append((one_value.Value.Value,))
+                    else:
+                        result_list.append((one_value,))
+                else:
+                    opcua_nodes.append(one_node)
+                    multiple_results.append(one_value)
+
+        if attr_included:
             result_list = []
             # Include additional attributes
             for index, entry in enumerate(multiple_results):
 
                 if "all" in attr_included:
-                    # Save the if
-                    result_list.append((id_nodes[index], opcua_nodes[index].get_browse_name().Name, entry.SourceTimestamp, entry.ServerTimestamp, entry.StatusCode.name, entry.Value.Value))
+                    # Save the attribute values
+                    if opcua_nodes[index]:
+                        if failures:
+                            # only output failures
+                            continue
+                        # Node is available and was read from the OPCUA
+                        result_list.append((id_nodes[index], opcua_nodes[index].get_browse_name().Name, entry.SourceTimestamp, entry.ServerTimestamp, entry.StatusCode.name, entry.Value.Value))
+                    else:
+                        result_list.append((id_nodes[index], None, None, None, None, multiple_results[index]))
                 else:
                     entry_info = []
                     if "id" in attr_included:  # The tag id
                         entry_info.append(id_nodes[index])
-                    if "name" in attr_included:     # The attribute name
-                        entry_info.append(opcua_nodes[index].get_browse_name().Name)
-                    if "source_timestamp" in attr_included:     #  The timestamp of the value as determined by the data source (e.g., a sensor or device).
-                        entry_info.append(entry.SourceTimestamp)
-                    if "server_timestamp" in attr_included:     # The timestamp assigned by the OPC UA server when the data value was received or processed.
-                        entry_info.append(entry.ServerTimestamp)
-                    if "status_code" in attr_included:          # The status of the value (e.g., Good, Bad, Uncertain).
-                        entry_info.append(entry.StatusCode.name)
+                    if opcua_nodes[index]:
+                        if failures:
+                            # only output failures
+                            continue
+                        # A value was retrieved from the OPCUA
+                        if "name" in attr_included:     # The attribute name
+                            entry_info.append(opcua_nodes[index].get_browse_name().Name)
+                        if "source_timestamp" in attr_included:     #  The timestamp of the value as determined by the data source (e.g., a sensor or device).
+                            entry_info.append(entry.SourceTimestamp)
+                        if "server_timestamp" in attr_included:     # The timestamp assigned by the OPC UA server when the data value was received or processed.
+                            entry_info.append(entry.ServerTimestamp)
+                        if "status_code" in attr_included:          # The status of the value (e.g., Good, Bad, Uncertain).
+                            entry_info.append(entry.StatusCode.name)
 
-                    entry_info.append(entry.Value.Value)
+                        entry_info.append(entry.Value.Value)
+                    else:
+                        # A value was retrieved from the OPCUA
+                        if "name" in attr_included:  # The attribute name
+                            entry_info.append(None)
+                        if "source_timestamp" in attr_included:  # The timestamp of the value as determined by the data source (e.g., a sensor or device).
+                            entry_info.append(None)
+                        if "server_timestamp" in attr_included:  # The timestamp assigned by the OPC UA server when the data value was received or processed.
+                            entry_info.append(None)
+                        if "status_code" in attr_included:  # The status of the value (e.g., Good, Bad, Uncertain).
+                            entry_info.append(None)
+
+                        entry_info.append(multiple_results[index])
 
                     result_list.append(entry_info)
 
@@ -467,15 +536,16 @@ def get_multiple_value(status, client, id_nodes, attr_included):
 # Value (for Variable nodes):           The actual data stored in the node.
 # ---------------------------------------------------------------------------------------
 
-def navigate_tree(status, connection, node, depth, navigation_info, type_dict):
+def navigate_tree(status, client, node, depth, navigation_info, type_dict, validate_value):
     """
     Navigate the OPC-UA tree interactively, displaying options and fetching values.
     :param status: Status object
-    :param connection: OPC-UA client
+    :param client: OPC-UA client
     :param node: Current node in the tree
     :param depth: Current depth in the tree (used for indentation)
     :param navigation_info: a dictionary with navigation rules
     :param type_dict: Number of nodes in the tree - a dictionary for statistics
+    :param validate_value: If True - read a value before adding the node to the output list
     """
 
 
@@ -511,13 +581,23 @@ def navigate_tree(status, connection, node, depth, navigation_info, type_dict):
 
         file_handle = navigation_info["file_handle"]
 
+        if validate_value:
+            # READ a value, if read fails, ignore node
+            read_status, one_value = get_one_value(status, client, node.get_node_identifier())
+            if read_status is None:
+                type_dict["read_failure"] += 1
+        else:
+            read_status = True
+
         if output_format == "tree":
-            ret_val = node.print_info(status, file_handle, navigation_info["attributes"], depth)      # Output the node info on stdout
+            ret_val = node.print_info(status, file_handle, validate_value, read_status, navigation_info["attributes"], depth)      # Output the node info on stdout
             if ret_val:
                 return ret_val
         else:
             # Collect the nodes to a list
-            navigation_info["@nodes"].append(node.get_node_identifier())
+
+            if read_status:
+                navigation_info["@nodes"].append(node.get_node_identifier())
 
         if output_format != "tree" or file_handle:
             # If printing a command or if output is to a file - print bar showing navigation status
@@ -537,7 +617,7 @@ def navigate_tree(status, connection, node, depth, navigation_info, type_dict):
         if len(children):
             # Visit the children
             for child in children:
-                ret_val = navigate_tree(status, connection, child, depth + 1, navigation_info, type_dict)
+                ret_val = navigate_tree(status, client, child, depth + 1, navigation_info, type_dict, validate_value)
                 if ret_val:
                     break
 
@@ -748,7 +828,7 @@ def process_data(status, client, id_nodes, topic_name, user_id, prep_dir, watch_
 
     ret_val = process_status.SUCCESS
 
-    multiple_values = get_multiple_value(status, client, id_nodes, ["all"])
+    multiple_values = get_multiple_opcua_values(status, client, id_nodes, ["all"], "collection", False)
 
 
     if multiple_values:
@@ -861,11 +941,15 @@ def get_opcua_clients(status, io_buff_in, cmd_words, trace):
 # Print a bar showing an asterisk every 100 nodes visited
 # ----------------------------------------------------------------------
 def print_bar(navigation_info, type_dict):
+    navigation_info["@counter"] += 1  # Used for the printout
     navigation_info["@tmp1"] += 1  # Used for the printout
     navigation_info["@tmp2"] += 1  # Used for the printout
     if (navigation_info["@tmp1"] == 1):
         # Print a message on the next 1000 nodes to be visited
-        utils_print.output(f"\rProcessing nodes #{type_dict['total']:,} - #{type_dict['total'] + 1000 - 1:,}  [{' ' * 50}]" + "{'\b' * 51}",False)
+        if navigation_info["@counter"] == 1:
+            utils_print.output("\r\n\n", False)
+        backspaces = '\b' * 51
+        utils_print.output(f"\rProcessing nodes #{type_dict['total']:,} - #{type_dict['total'] + 1000 - 1:,}  [{' ' * 50}]" + backspaces,False)
     if navigation_info["@tmp1"] >= 1000:
         navigation_info["@tmp1"] = 0  # Used for the printout
         navigation_info["@tmp2"] = 0  # Used for the printout

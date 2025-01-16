@@ -61,7 +61,7 @@ class ParsedNode(ABC):
     def get_children(self):
         return self.children
 
-    def print_info(self, status, file_handle, attributes, depth):
+    def print_info(self, status, file_handle, validate_value, read_status, attributes, depth):
         '''
         :param depth: Current depth in the tree (used for indentation)
         '''
@@ -154,9 +154,11 @@ class OpcuaNode (ParsedNode):
     # -----------------------------------------------------------------------------------
     # Print the node info and attributes
     # -----------------------------------------------------------------------------------
-    def print_info(self, status, file_handle, attributes = None, depth=0):
+    def print_info(self, status, file_handle, validate_value, read_status, attributes = None, depth=0):
         '''
         :param file_handle: if data written to file
+        :param validate_value: If True - the value is read to identify success or failure
+        :param read_status: The read status
         :param attributes: specific attributes include in the output
         :param depth: Current depth in the tree (used for indentation)
         '''
@@ -166,7 +168,10 @@ class OpcuaNode (ParsedNode):
 
         node_class = self.get_node_class()
 
-        info_str = f"\r\n{indentation}[{node_class}], (ns={self.get_namespace()};{self.get_id()}, name={self.get_name()}, datatype={self.get_node_data_type()})"
+
+        read_info = f", validate={'success' if read_status else 'FAILURE'}" if validate_value else ""
+
+        info_str = f"\r\n{indentation}[{node_class}], (ns={self.get_namespace()};{self.get_id()}, name={self.get_name()}, datatype={self.get_node_data_type()}{read_info})"
 
         if file_handle:
             if not file_handle.append_data(info_str):
