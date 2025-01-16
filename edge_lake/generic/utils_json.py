@@ -174,7 +174,13 @@ def str_to_list(data: str):
 # Validate JSON Format. Return True if a vakid JSON format
 # JSON requires double quotes for its strings -  there are no single quotes in a JSON string
 # =======================================================================================================================
-def str_to_json(data: str):
+def str_to_json(in_data: str):
+
+    if len(in_data) > 2 and in_data[0] == in_data[-1] and (in_data[0] == '"' or in_data[0] == "'"):
+        # The input string contains escaped double quotes (\") around the keys and values.
+        data = in_data[1:-1]
+    else:
+        data = in_data
 
     try:
         json_object = orjson.loads(data)    # fast process
@@ -220,8 +226,6 @@ def str_to_json(data: str):
                 json_object = None
 
     return json_object
-
-
 # =======================================================================================================================
 # Try to fix the JSON data:
 # 1) Connect strings on multiple lines - parenthesis without commas are connected
@@ -240,10 +244,14 @@ def change_json_data(data_str):
     paren_status = 0
     modified = ""
     copied_offset = 0
+    last_offset = len(data)
     for offset, char in enumerate(data):
 
         if char == '\\':
-            modified += (data[copied_offset:offset] + ".")
+            if offset == last_offset or data[offset + 1] == '"':
+                modified += (data[copied_offset:offset])        # Double quote before quotation are ignored
+            else:
+                modified += (data[copied_offset:offset] + ".")
             copied_offset = offset + 1  # next copy will start after the slash
             continue
 

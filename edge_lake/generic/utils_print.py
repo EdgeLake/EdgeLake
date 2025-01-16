@@ -421,6 +421,7 @@ def format_dictionary(the_dictionary: dict, key_first, is_print, is_sort, title)
     for key_entry, val in the_dictionary.items():
         key = str(key_entry)
         value = str(val)
+
         if key_first:
             if len(key) > max_length:
                 max_length = len(key)
@@ -628,7 +629,7 @@ def output_nested_lists(nested_lists: list, header, column_names, get_info_str: 
                     if column_names and format_values[index] == '-':
                         continue  # Skip this column
                     length = columns_length[index]
-                    if col_data != None:
+                    if col_data is not None:
                         if column_names and format_values[index]:
                             # Format instructions after \t mark
                             try:
@@ -660,6 +661,7 @@ def output_nested_lists(nested_lists: list, header, column_names, get_info_str: 
                         extension = ' '.ljust(length) + '|'
                         prefix += extension
                         out_str += extension
+
                 if get_info_str:
                     ret_str += out_str
                 else:
@@ -740,7 +742,7 @@ def output_lines(title, info, new_line_prefix, add_al_prompt, get_info_str):
     return out_str
 
 # =======================================================================================================================
-# Print star fro wait time
+# Print star from wait time
 # =======================================================================================================================
 def time_star_print(text, sleep_time, intervals, elements):
     '''

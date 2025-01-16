@@ -1406,18 +1406,20 @@ def subscribe(dummy: str, conditions: dict, client_id:int):
             if client_sbscr.is_exit():
                 break
 
-        subscript_mutex[client_id].acquire_write()     # Wait for processing to completed (message server might be sending data)
+    subscript_mutex[client_id].acquire_write()     # Wait for processing to completed (message server might be sending data)
 
+    if client:
+        # Will skip if client failed to initiate
         client.loop_stop()                              # Stop the dedicated thread
 
         client.disconnect()
 
-        # Need to be after disconnect - Update the list of topics for each broker
-        end_subscription(client_id, False)
+    # Need to be after disconnect - Update the list of topics for each broker
+    end_subscription(client_id, False)
 
-        subscript_mutex[client_id].release_write()
+    subscript_mutex[client_id].release_write()
 
-        process_log.add_and_print("event", "MQTT Client process terminated")
+    process_log.add_and_print("event", "MQTT Client process terminated")
 
 
 # ------------------------------------------------------------------------------------------------------------
@@ -1681,7 +1683,7 @@ def connect_to_broker(operation_type, conditions:dict, user_id, thread_name):
 # Between the user data and the database tables.
 # Returns a key that identifies the mapping dictionary. This key is passed to every on_message call.
 
-#  if message_flush is True - Topic info is not provided in parenthesis - data will be flushed to disk.
+#  if message_flush is True - Topic info is not provided in parentheses - data will be flushed to disk.
 # ------------------------------------------------------------------------------------------------------------
 def register(status, conditions):
 

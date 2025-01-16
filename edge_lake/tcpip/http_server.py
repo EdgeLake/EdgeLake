@@ -606,9 +606,10 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         else:
             if len(command_list) == 1:
                 key = command_list[0]  # One word command
-                if http_methods_[key] == http_method:
-                    # correct key was used
-                    ret_val = True
+                if key in http_methods_:
+                    if http_methods_[key] == http_method:
+                        # correct key was used
+                        ret_val = True
             else:
                 key = "Command not provided"
 
@@ -1249,7 +1250,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         is_stream = False
         content_type = 'text/json'
         file_data = None  # File via a call like: curl -X POST -H "command: file store where dest = !prep_dir/file2.txt" -F "file=@testdata.txt" http://10.0.0.78:7849
-
+        is_binary_data = get_value_from_headers(self.al_headers, "Content-Type") == "application/octet-stream"
 
         ret_val, run_client = self.get_run_client()
         if not ret_val:
@@ -1289,8 +1290,17 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                                 content_type = "video/mp4"
                                 is_stream = True
                     elif cmd_words[0] == "file" and (cmd_words[1] == "store" or cmd_words[1] == "to"):
-                        ret_val, content_type, file_data = get_user_file_data(status, msg_body)   # the message body is set on the status object as it includes the file to write
-                        msg_body = None         # Message was pushed to the status object
+                        # The file can be provided in 2 ways:
+                        # 1) By identifying a source file: 'command': f'file store where dbms = {dbms} and table = {table} and source = {filename}'
+                        # 2) by a buffer in the message body
+                        if msg_body:
+                            if is_binary_data:
+                                file_data = msg_body        # Transfer binary data as is
+                            else:
+                                # If with msg body byu not binary
+                                # The path is provided from the msg body
+                                ret_val, content_type, file_data = get_user_file_data(status, msg_body)   # the message body is set on the status object as it includes the file to write
+                                msg_body = None         # Message was pushed to the status object
 
                 # determine if wait is needed
                 if run_client:
@@ -1301,7 +1311,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                         with_wait = True  # Place thread on wait for reply
 
                 # Execute the command (or commands in message body)
-                if msg_body:
+                if msg_body and not is_binary_data:
                     # These are assignments of values or pre=processed commands
                     self.get_msg_body_cmds(status, commands_list, msg_body)
 
@@ -1572,21 +1582,27 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
         if msg_body_length and msg_body_length.isnumeric():
             msg_info = utils_io.read_from_stream(status, self.rfile, int(msg_body_length))
+
+
             if len(msg_info) == 2:
                 # The message body is a list with 2 entries:
                 # msg_info[0] is the Content length
                 # msg_info[1] is the content
-                try:
-                    self.msg_body = msg_info[1].decode('iso-8859-1')    # Save the decoded body - being used in case of an error to provide error info
-                except:
-                    self_command = (self.command + "\r\n") if hasattr(self, 'command') else ""
-                    err_msg = f"Failed to decode message body:{self_command}\r\n'Content-Length': {msg_body_length}\r\nmsg_info[0]: {msg_info[0]}\r\nmsg_info[1]: {msg_info[1]}"
-                    status.add_error(err_msg)
-                    utils_print.output_box(err_msg)
-                    ret_val = process_status.HTTP_failed_to_decode
+                if get_value_from_headers(self.al_headers, "Content-Type") == "application/octet-stream":
+                    # Specify binary content  - keep unchanged
+                    self.msg_body = msg_info[1]
                 else:
-                    if len(self.msg_body) and (self.msg_body[0] == ' ' or self.msg_body[-1] == ' '):
-                        self.msg_body = self.msg_body.strip()
+                    try:
+                        self.msg_body = msg_info[1].decode('iso-8859-1')    # Save the decoded body - being used in case of an error to provide error info
+                    except:
+                        self_command = (self.command + "\r\n") if hasattr(self, 'command') else ""
+                        err_msg = f"Failed to decode message body:{self_command}\r\n'Content-Length': {msg_body_length}\r\nmsg_info[0]: {msg_info[0]}\r\nmsg_info[1]: {msg_info[1]}"
+                        status.add_error(err_msg)
+                        utils_print.output_box(err_msg)
+                        ret_val = process_status.HTTP_failed_to_decode
+                    else:
+                        if len(self.msg_body) and (self.msg_body[0] == ' ' or self.msg_body[-1] == ' '):
+                            self.msg_body = self.msg_body.strip()
 
 
         return [ret_val, self.msg_body, err_msg]

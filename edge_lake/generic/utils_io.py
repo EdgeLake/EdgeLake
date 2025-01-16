@@ -251,6 +251,9 @@ class IoHandle:
         self.file_stat = 0  # 0 is close, 1 is open
         self.status = False  # open sets to true, failure sets to false
 
+    def get_file_name(self):
+        return self.file_name
+
     def open_file(self, file_type: str, fname: str):
 
         ret_val = True
@@ -2873,12 +2876,12 @@ def read_json_strings(status: process_status, json_file: str):
 # ==================================================================
 #
 # Given a dictionary, check if it has dictionaries within it. If so,
-# seperate the dictionary such that we only have information regarding
+# separate the dictionary such that we only have information regarding
 # the sub-dictionary
 #
 # Example:
-#    Given:  {'readinging: {'bandwith_in': 3, 'bandwith_out':4}}
-#    Output: {'bandwith_in': 3, 'bandwith_out':4}
+#    Given:  {'reading: {'bandwidth_in': 3, 'bandwidth_out':4}}
+#    Output: {'bandwidth_in': 3, 'bandwidth_out':4}
 #
 # ==================================================================
 def format_reading(status: process_status, data):
@@ -2894,15 +2897,14 @@ def format_reading(status: process_status, data):
 
     if not isinstance(data, dict):
         jdata = str_to_json(data)
-        if not jdata:
+        if not isinstance(jdata, dict):
+            status.add_error(f"Invalid input JSON entry processed - Not convertible to JSON format: {data}")
             return None
-
+        if not len(jdata):
+            status.add_error(f"Empty entry in JSON input file:  {data}")
+            return None
     else:
-        status.add_error("Invalid input JSON Data: <%s>" % (str(data)))
-        return None
-
-    if not len(jdata):
-        status.add_error("Empty input row in file")
+        status.add_error(f"Invalid input - JSON entry is not a dictionary: {data}")
         return None
 
     # Find keys with dict values & note them
