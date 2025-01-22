@@ -192,6 +192,8 @@ test_active_ = {
     "smtp": ("SMTP", utils_output.is_smtp_running, utils_output.get_smtp_info),
     "streamer": ("Streamer", streaming_data.is_active, streaming_data.get_info),
     "query pool": ("Query Pool", is_query_pool_active, get_query_pool_info),
+  
+  
     "kafka consumer": ("Kafka Consumer", al_kafka.is_active, al_kafka.get_info),
     "gRPC": ("gRPC", grpc_client.is_running, grpc_client.get_status_string),
 }
