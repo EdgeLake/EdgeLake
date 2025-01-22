@@ -72,15 +72,6 @@ contract AnyLog2 {
         emit updated_policy_event(policy_id, json);
     }
 
-    function updatePolicy(string calldata policy_id, string calldata json) external {
-        require(policy_store[policy_id].exists, "Policy ID does not exist");
-        require(policy_store[policy_id].policy_owner == address(msg.sender), "Only policy owner can update policy");
-        policy_store[policy_id] = Policy(json, policy_store[policy_id].policies_index, msg.sender, true); // update policies map
-        policies[policy_store[policy_id].policies_index] = json; // update policies list
-        transaction_count += 1;
-        emit updated_policy_event(policy_id, json);
-    }
-
     function getPolicyOwner(string calldata policy_id) external {
         emit get_policy_owner_event(policy_store[policy_id].policy_owner);
     }

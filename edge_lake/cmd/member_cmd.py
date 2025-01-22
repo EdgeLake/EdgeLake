@@ -9120,7 +9120,7 @@ def blockchain_update(status, io_buff_in, cmd_words, trace, func_params):
 
             # JSONify policy
             policy_json = utils_json.str_to_json(json_key)
-            
+
             # check if policy is a valid JSON
             if not isinstance(policy_json, dict):
                 ret_val = process_status.Invalid_policy
