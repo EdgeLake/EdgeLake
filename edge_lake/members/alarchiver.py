@@ -161,7 +161,7 @@ def data_archiver(dummy: str, conditions: dict):
                 if file_exists:
                     if update_dbms:
                         # UPDATE THE DBMS
-                        ret_val = db_info.store_file(status,  "blobs_" + dbms_name, table_name, blobs_dir, blob_hash_value, blob_hash_value, date_time_key[:6], True, True, trace_level)
+                        ret_val = db_info.store_file(status,  "blobs_" + dbms_name, table_name, blobs_dir, blob_hash_value, blob_hash_value, date_time_key[:6], True, trace_level)
                         if ret_val:
                             break
 

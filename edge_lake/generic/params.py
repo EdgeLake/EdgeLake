@@ -354,12 +354,8 @@ def get_value_if_available(key_type: str):
     global os_wind
     # replace word if available in dictionary
 
-    if not len(key_type):
-        return ""           # Needs to be with some length
-
     data_type = None
     output_flag = 0
-    with_offsets = False
 
     str_len = len(key_type)
     if str_len > 4 and key_type[-4:] in al_func_ :     # test for int or float and not !! assignment (to be set on a different node)
@@ -374,33 +370,6 @@ def get_value_if_available(key_type: str):
             # 2 - Get the length of the object
             # 3 - Get the number of nodes replied
             # 4 - Get the number of nodes missing
-        else:
-            key = key_type
-    elif key_type[-1] == ']':
-        # Example !data_str[1:5]
-        offset_start = key_type.find('[')
-        if offset_start > 2:
-            offset_colon = key_type.find(':',offset_start+1)
-            if offset_colon != -1:
-                key = key_type[:offset_start]
-                try:
-                    start_str = key_type[offset_start +1:offset_colon]
-                    if start_str == "":
-                        from_offset = 0
-                    else:
-                        from_offset = int(start_str)
-
-                    end_str = key_type[offset_colon + 1: -1]
-                    if end_str == "":
-                        to_offeset = None      # it is the end of the string
-                    else:
-                        to_offeset = int(end_str)
-                except:
-                    pass
-                else:
-                    with_offsets = True                 # Take an offset from the string
-            else:
-                key = key_type
         else:
             key = key_type
 
@@ -424,7 +393,7 @@ def get_value_if_available(key_type: str):
             #if not value:
                 # Removed because "if $abc" returns True whereas $abc is not set
                 #value = key  # needs to be kept as source as $X may be processed by the OS even without system param defined
-        elif len(key) > 1 and key[0] == '\\' and key[1] == '"':
+        elif key[0] == '\\' and key[1] == '"':
             # translate including quotations
             if len(key) > 5 and key[2] == '!' and key[-2:] == '\\"':
                 # translate word and keep quotation
@@ -492,9 +461,6 @@ def get_value_if_available(key_type: str):
                     type_value = data_type(value)
                 except:
                     type_value = ""   # Return Null string
-        elif with_offsets:
-            # for example !license[1:100]
-            type_value = value[from_offset:to_offeset] if to_offeset else value[from_offset:]
         else:
             type_value = value
     else:

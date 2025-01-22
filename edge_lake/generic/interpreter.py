@@ -312,9 +312,6 @@ def process_value(status, key, input_value, data_type):
     elif data_type == "int.storage":
         # translate to bytes from KB, MB, GB
         ret_val, new_value = get_storage(status, key, value)
-    elif data_type == "int.frequency":
-        # translate hz to seconds
-        ret_val, new_value = get_hz(status, key, value)
     elif data_type == "ip.port":
         index = value.find(':')
         if index > 1 and index < (len(value) - 1) and value[index + 1:].isnumeric():
@@ -363,33 +360,6 @@ def process_value(status, key, input_value, data_type):
             new_value = value
 
     return [ret_val, new_value]
-
-# =======================================================================================================================
-# Translate to a fractin of a second
-# =======================================================================================================================
-def get_hz(status, key, value):
-
-    number_length = value.find('hz')
-    if number_length > 0:
-        value_str = value[:number_length].strip()
-        hz = True
-    else:
-        value_str = value
-        hz = False
-
-    if value_str.isnumeric():
-        new_value = int(value_str)
-        if hz:
-            # fraction of seconds
-            new_value = 0 if not new_value else 1 / new_value
-        ret_val = process_status.SUCCESS
-    else:
-        status.add_error("Value '%s' (for key '%s') is not numeric" % (value, key))
-        new_value = ""
-        ret_val = process_status.ERR_command_struct
-
-    return [ret_val, new_value]
-
 # =======================================================================================================================
 # Translate data storage units to bytes
 # =======================================================================================================================

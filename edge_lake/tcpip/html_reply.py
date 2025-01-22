@@ -47,6 +47,8 @@ except:
 else:
     to_pdf_installed = True
 
+
+
 html_default_style = {
                     ".center-title" : {
                         "display" : "flex;",
@@ -189,7 +191,7 @@ def get_html_table(status, json_entries, added_html):
         # Get user instructions for the head
         user_html_head = html_from_json(added_html, "head", None)
         # Get user instructions for the body
-        user_html_body = html_from_json(added_html, "body", "top")
+        user_html_body = html_from_json(added_html, "body", None)
     else:
         user_html_head = None
         user_html_body = None
@@ -202,8 +204,7 @@ def get_html_table(status, json_entries, added_html):
 
     if user_html_head:
         html += user_html_head
-
-    if not user_html_head or not "<title>" in user_html_head:
+    if not "<title>" in user_html_head:
         # Tab title not provided by the user
         html += "  <title>Query</title>\n"
 
@@ -297,6 +298,7 @@ chart_types_ = {
 # ------------------------------------------------------------------------
 # Map to HTML Reply
 # ------------------------------------------------------------------------
+
 def to_html( status, message, source_format, type_html, to_pdf, html_info):
     '''
     status - AnyLog object
@@ -367,7 +369,7 @@ def default_html(message, added_html, is_json):
                         <body>
                             <p>
                         """
-            html_user_body = html_from_json(added_html, "body", "top")
+            html_user_body = html_from_json(added_html, "body", None)
             if html_user_body:
                 prefix_html += html_user_body  # This could be the title
 
@@ -390,7 +392,7 @@ def default_html(message, added_html, is_json):
                         <p style="font-family: 'Courier New', Courier, monospace;">
                 """
 
-            html_user_body = html_from_json(added_html, "body", "top")
+            html_user_body = html_from_json(added_html, "body", None)
             if html_user_body:
                 prefix_html += html_user_body       # This could be the title
 
@@ -1283,6 +1285,7 @@ def get_number(value):
     if value == None:
         return 0
     return 1
+
 # -----------------------------------------------------------------------------
 # HTML to PDF
 # -----------------------------------------------------------------------------
@@ -1399,6 +1402,7 @@ def generate_pdf_html(status, pdf_bytes):
         """
 
     return html_content
+
 
 # -----------------------------------------------------------------------------
 # Reply HTML Error

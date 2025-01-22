@@ -130,15 +130,6 @@ assignment_attr = [
     ("signature",   str,        None,               None,           True,       False, None),
 ]
 
-license_attr = [
-    # Connect member to permissions
-    # attr name *           attr type * child attributes * default value * must exists *  is-unique
-    ("activation_key",      str,        None,               None,           True,       True,  None),       # license
-    ("company",             str,        None,               None,           True,       True,  None),       # license
-    ("expiration",          str,        None,               None,           True,       True,  None),       # license
-    ("type",                str,        None,               None,           True,       True,  None),       # license
-]
-
 # ------------------------------------------------------------------------------------
 # Unique attributes in policies
 # ------------------------------------------------------------------------------------
@@ -580,13 +571,6 @@ def new_transform_policy(status, policy_type, policy_obj, blockchain_file):
     ret_val = test_key_val(status, policy_type, policy_obj, transform_attr, blockchain_file)
 
     return ret_val
-
-# =======================================================================================================================
-# Test that the policy has all components and complete missing values
-# =======================================================================================================================
-def new_license_policy(status, policy_type, policy_obj, blockchain_file):
-    ret_val = test_key_val(status, policy_type, policy_obj, license_attr, blockchain_file)
-    return ret_val
 # =======================================================================================================================
 # Test that the policy has all components and complete missing values
 # =======================================================================================================================
@@ -671,7 +655,6 @@ new_policies = {          # The process to execute when a new policy is added
     "member" : new_member_policy,
     "permissions" : new_permission_policy,      # Permission policy determines commands and databases allowed
     "assignment" :  new_assignment_policy,      # Connect member to permissions
-    "license" :  new_license_policy,      # Connect member to permissions
 }
 
 # =======================================================================================================================

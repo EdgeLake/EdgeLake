@@ -606,10 +606,6 @@ def is_with_par_field(condition, par_field):
 # YYYY-MM-DD HH
 # ---------------------------------------------------------------
 def is_valid_date_time(date_str, time_unit):
-
-    if not date_str:
-        return False
-
     if time_unit not in time_units.keys():
         return False
 
