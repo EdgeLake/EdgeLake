@@ -420,6 +420,10 @@ def increment_function(select_parsed, projection, function_id, remote_dbms, remo
 
     column_type = db_info.get_column_type(remote_dbms, remote_table, column_name)
 
+    if not column_type:
+        # Wrong column name
+        return ["", ""]
+
     new_field_name = function + "_" + str(function_id)
 
     remote_query = get_remote_query_increment(select_parsed, time_unit, trunc_time, column_name, time_interval)

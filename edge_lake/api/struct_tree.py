@@ -167,9 +167,7 @@ class OpcuaNode (ParsedNode):
         indentation = ' ' * depth * 2
 
         node_class = self.get_node_class()
-
-
-        read_info = f", validate={'success' if read_status else 'FAILURE'}" if validate_value else ""
+        read_info = f', validate={"success" if read_status else "FAILURE"}' if validate_value else ""
 
         info_str = f"\r\n{indentation}[{node_class}], (ns={self.get_namespace()};{self.get_id()}, name={self.get_name()}, datatype={self.get_node_data_type()}{read_info})"
 

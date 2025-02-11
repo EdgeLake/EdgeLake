@@ -949,7 +949,7 @@ def print_bar(navigation_info, type_dict):
         if navigation_info["@counter"] == 1:
             utils_print.output("\r\n\n", False)
         backspaces = '\b' * 51
-        utils_print.output(f"\rProcessing nodes #{type_dict['total']:,} - #{type_dict['total'] + 1000 - 1:,}  [{' ' * 50}]" + backspaces,False)
+        utils_print.output(f"\rProcessing nodes #{type_dict['total']:,} - #{type_dict['total'] + 1000 - 1:,}  [{' ' * 50}]" + f"{backspaces}",False)
     if navigation_info["@tmp1"] >= 1000:
         navigation_info["@tmp1"] = 0  # Used for the printout
         navigation_info["@tmp2"] = 0  # Used for the printout

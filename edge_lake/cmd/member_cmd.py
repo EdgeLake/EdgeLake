@@ -65,6 +65,7 @@ import edge_lake.generic.stats as stats
 import edge_lake.generic.version as version
 import edge_lake.generic.profiler as profiler
 import edge_lake.generic.trace_func as trace_func
+import edge_lake.api.opcua_client as opcua_client
 
 from edge_lake.json_to_sql.suggest_create_table import *
 from edge_lake.dbms.dbms import connect_dbms, get_real_dbms_name
@@ -192,10 +193,9 @@ test_active_ = {
     "smtp": ("SMTP", utils_output.is_smtp_running, utils_output.get_smtp_info),
     "streamer": ("Streamer", streaming_data.is_active, streaming_data.get_info),
     "query pool": ("Query Pool", is_query_pool_active, get_query_pool_info),
-  
-  
     "kafka consumer": ("Kafka Consumer", al_kafka.is_active, al_kafka.get_info),
     "gRPC": ("gRPC", grpc_client.is_running, grpc_client.get_status_string),
+    "opcus": ("OPC-UA Client", opcua_client.is_running, opcua_client.get_status_string),
 }
 
 
@@ -816,7 +816,7 @@ def process_bring(status, json_data, cmd_words, offset, bring_methods):
     counter_fields = words_count - (
                 offset + offset_condition)  # number of fields to add to the dynamic string from each considered object
 
-    ret_val, dynamic_string = utils_json.pull_info(status, json_data, cmd_words[offset:offset + counter_fields],
+    ret_val, dynamic_string = utils_json.pull_info(status, params, json_data, cmd_words[offset:offset + counter_fields],
                                                    conditions, bring_methods)
 
     return [ret_val, dynamic_string]
@@ -6569,11 +6569,9 @@ def _exit(status, io_buff_in, cmd_words, trace):
 
     words_count = len(words_array)
 
-    process_name = words_array[1]
-
     ret_val = process_status.SUCCESS
 
-    if words_count == 2 and process_name == "node":
+    if words_count == 2 and words_array[1] == "node":
         # EXIT ANYLOG
         # disconnect dbms
         dbms_list = db_info.get_dbms_array()  # array with all databases
@@ -6590,53 +6588,61 @@ def _exit(status, io_buff_in, cmd_words, trace):
 
         grpc_client.exit("all")        # Exit All processes
 
+        opcua_client.exit("all")  # exit all clients
+
         ret_val = process_status.EXIT
         for sleep_event in process_status.process_sleep_event.values():
             # the thread can be signaled to exit sleep
             sleep_event.set()
 
-    elif words_count == 2 and process_status.set_exit(process_name):  # <-- Exit Flag set
-        if process_name == "rest":
+    elif words_count == 2 and process_status.set_exit(words_array[1]):  # <-- Exit Flag set
+        if words_array[1] == "rest":
             # wake the Rest server
             http_server.signal_rest_server()
-        elif process_name == "scripts":
+        elif words_array[1] == "scripts":
             # End script - end a single script
             # Exit scripts - end current and callers scripts
             ret_val = process_status.EXIT_SCRIPTS # Return the value to the app
 
-    elif words_count == 2 and process_name == "workers":
+    elif words_count == 2 and words_array[1] == "workers":
         # End query threads
         if workers_pool:
             workers_pool.exit()  # exit query threads
 
-    elif words_count == 2 and process_name == "smtp":
+    elif words_count == 2 and words_array[1] == "smtp":
         utils_output.exit_smtp()     # exit SMTP Client
 
-    elif words_count == 2 and process_name == "mqtt":
-        mqtt_client.exit(0)     # exit all clients
-
-    elif words_count == 3 and process_name == "mqtt" and words_array[2].isdecimal():
-        client_id = int(words_array[2])
-        if mqtt_client.is_subscription(client_id):
-            if mqtt_client.is_local_subscription(client_id):
-                ret_val = message_server.unsubscribe_mqtt_topics(status, client_id)
-                if not ret_val:
-                    ret_val = mqtt_client.end_subscription(client_id, True)
+    elif words_count == 4 and words_array[1] == "msg" and words_array[2] == "client":
+        if words_array[3] == "all":
+            mqtt_client.exit(0)     # exit all clients  -- EXIT all MQTT clients
+        elif words_array[3].isdecimal():
+            # EXIT specific MQTT
+            client_id = int(words_array[3])
+            if mqtt_client.is_subscription(client_id):
+                if mqtt_client.is_local_subscription(client_id):
+                    ret_val = message_server.unsubscribe_mqtt_topics(status, client_id)
+                    if not ret_val:
+                        ret_val = mqtt_client.end_subscription(client_id, True)
+                else:
+                    ret_val = mqtt_client.exit(client_id)   # Exit one client
             else:
-                ret_val = mqtt_client.exit(client_id)   # Exit one client
-        else:
-            status.add_error("No MQTT subscription for client: %u" % client_id)
-            ret_val = process_status.MQTT_wrong_client_id
+                status.add_error("No MQTT subscription for client: %u" % client_id)
+                ret_val = process_status.MQTT_wrong_client_id
 
-    elif words_count == 3 and process_name == "grpc":
+    elif words_count == 3 and words_array[1] == "grpc":
         ret_val = grpc_client.exit(words_array[2])
 
-    elif words_count == 3 and process_name == "scheduler" and words_array[2].isdecimal():
+    elif words_count == 3 and words_array[1] == "opcua":
+        # exit opcus dbms.table
+        # exit opcus policy_id
+        ret_val = opcua_client.exit(words_array[2])
+
+    elif words_count == 3 and words_array[1] == "scheduler" and words_array[2].isdecimal():
         # exit specific scheduler
         task_scheduler.set_not_active(int(words_array[2]))
 
     else:
-        status.add_error("Process name '%s' in 'exit' command is not valid" % process_name)
+        status.add_error("Process name '%s' in 'exit' command is not valid" % ' '.join(words_array))
         ret_val = process_status.ERR_command_struct
 
 
@@ -8174,6 +8180,64 @@ def _rest_client(status, io_buff_in, cmd_words, trace):
     return ret_val
 
 
+# =======================================================================================================================
+# Run REST server thread
+# Example: run opcua client where url = opc.tcp://10.0.0.111:53530/OPCUA/SimulationServer and frequency = 20 hz and dbms = nov and table = sensor and node = "ns=0;i=2257" and node = "ns=0;i=2258"
+# =======================================================================================================================
+def _run_opcua_client(status, io_buff_in, cmd_words, trace):
+    words_count = len(cmd_words)
+
+
+    if words_count < 7 or cmd_words[3] != "where":
+        return process_status.ERR_command_struct
+
+    keywords = {"url":                      ("str",     True,   False,  True),      # OPCUA URL
+                "user":                     ("str",     False,  False,  True),      # Username  (optional)
+                "password":                 ("str",     False,  False,  True),      # Password (optional)
+                "frequency":                ("int.frequency",   True,   False,  False),     # Read frequency in seconds or hz
+                "node":                     ("str",     False,  False,   False),  # One or multiple nodes
+                "nodes":                    ("str",     False,  False, True),  # A list with one or more nodes
+                "policy":                   ("str",     False,  False,   True),   # A policy (if nodes are not specified)
+                "dbms":                     ("str",     False,  True,  True),  # DBMS name (if not provided in the policy)
+                "table":                    ("str",     False,  True, True),  # Table name (if not provided in a policy)
+                "topic":                    ("str",     False,  False, True),  # Assign the data to a topic
+                }
+
+
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
+    if ret_val:
+        # conditions not satisfied by keywords or command structure
+        return ret_val
+
+    if counter:
+        # With a database name and a table name
+        if counter != 2:
+            status.add_error("Run OPCUA cmd: Missing a database and a table name pair for OPCUA client")
+            return process_status.Error_command_params
+    else:
+        if not interpreter.get_one_value_or_default(conditions, "policy", None):
+            # user need to provide a dbms + table or policy id
+            status.add_error("Run OPCUA cmd: Missing policy id for OPCUA client")
+            return process_status.Error_command_params
+
+    node =  interpreter.get_one_value_or_default(conditions, "node", None)      # one or more node = ...
+    nodes = interpreter.get_one_value_or_default(conditions, "nodes", None)     # Optional a list of nodes
+
+    if not node and not nodes:
+        status.add_error("Run OPCUA cmd: Missing node = '[node id]' or a list of IDs")
+        return process_status.Error_command_params
+    if node and nodes:
+        status.add_error("Run OPCUA cmd: only one type of nodes declaration are allowed")
+        return process_status.Error_command_params
+
+    # p = multiprocessing.Process(target=opcua_client.run_opcua_client, args=("dummy", conditions) )
+    # p.start()
+
+    t = threading.Thread(target=opcua_client.run_opcua_client, args=("dummy", conditions))
+    t.start()
+
+
+    return process_status.SUCCESS
 # =======================================================================================================================
 # Run REST server thread
 # Example: run rest server where internal_ip = !ip and internal_port = 7849 and timeout = 0 and threads = 6 and ssl = true and ca_org = AnyLog and server_org = "Node 128"
@@ -9999,7 +10063,7 @@ def _to_json(status, io_buff_in, cmd_words, trace):
                 else:
                     # Pull the value from the message
 
-                    ret_val, ret_data = utils_json.pull_info(status, [json_struct], [cmd_words[offset + 2]], None, 0)
+                    ret_val, ret_data = utils_json.pull_info(status, params, [json_struct], [cmd_words[offset + 2]], None, 0)
                     if ret_val:
                         ret_data = ""
 
@@ -10530,16 +10594,92 @@ def get_list_from_storage(status, io_buff_in, cmd_words, trace):
 
     return [ret_val, reply]
 
+
+# ----------------------------------------------------------------------------
+# Writes a user file in a destination folder
+
+# file to !file_dest where source = !my_video
+# file to !prep_dir/testdata2.txt where source = !prep_dir/testdata.txt
+# Using REST:
+# curl -X POST -H "command: file to !my_dest" -F "file=@testdata.txt" http://10.0.0.78:7849
+# curl -X POST -H "command: file to !prep_dir/testdata2.txt where source = !prep_dir/testdata.txt"  http://10.0.0.78:7849
+# ----------------------------------------------------------------------------
+def file_to(status, io_buff_in, cmd_words, trace, func_params):
+    keywords = {
+    #                          Must     Add      Is
+    #                          exists   Counter  Unique
+                "source": ("str", True, False, True),     # Dest file name on disk
+                }
+
+    words_count = len(cmd_words)
+    if words_count > 3:
+        if cmd_words[3] != "where" or words_count < 7:
+            return process_status.ERR_command_struct
+
+
+        ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
+        if ret_val:
+            # conditions not satisfied by keywords or command structure
+            return ret_val
+
+        source_file = interpreter.get_one_value_or_default(conditions, "source", None)
+    else:
+        source_file = None
+
+    dest_file = params.get_value_if_available(cmd_words[2])
+
+    ret_val = process_status.SUCCESS
+
+    # Write the file in a destination directory
+    if source_file:
+        # Source and dest are files on this node
+        # Copy source file to destination
+        if not utils_io.copy_file(source_file, dest_file):
+            ret_val = process_status.File_copy_failed
+
+    elif status.get_active_job_handle().is_rest_caller():
+        # Source was provides in a rest call:  curl -X POST -H "command: file store where dest = !prep_dir/file2.txt" -F "file=@testdata.txt" http://10.0.0.78:7849
+        file_data = status.get_file_data()
+        if file_data:
+            if not utils_io.write_str_to_file(status, file_data, dest_file):
+                ret_val = process_status.File_write_failed
+        else:
+            status.add_error("Missing source file in 'file to' Command")
+            ret_val = process_status.Missing_source_file
+
+    return ret_val
+
 # ----------------------------------------------------------------------------
 # Store a file in a local storage dbms
-# Example: file store where dbms = blobs_edgex and table = video and id = my_video and file = !prep_dir/9439d99e6b0157b11bc6775f8b0e2490.bin
+
+# 1. The database needs to be open:
+#               connect dbms admin where type = mongo and ip = 127.0.0.1 and port= 27017
+# 2. database and table needs to be included in the file name:
+#               test.syslog.0.268367b541e31976bf6a18c6cefbc87c.0.json
+#    or specified in the command line
+
+# Examples:
+#   DBMS and Table in the file name:
+#               file store where source = !prep_dir/admin.files.test.txt
+#   DBMS and table by the user
+#               file store where dbms = admin and table = test and source = !prep_dir/testdata.txt
+
+
+# Using REST:
+
+# curl -X POST -H "command: file store where dbms = admin and table = files and dest = file_rest " -F "file=@testdata.txt" http://10.0.0.78:7849
 # ----------------------------------------------------------------------------
 def file_store(status, io_buff_in, cmd_words, trace, func_params):
 
-    keywords = {"dbms": ("str", True, False, True),
-                "table": ("str", True, False, True),
-                "hash": ("str", True, False, True),
-                "file": ("str", True, False, True),
+
+    keywords = {
+    #                          Must     Add      Is
+    #                          exists   Counter  Unique
+                "dbms": ("str", False, False, True),
+                "table": ("str", False, False, True),
+                "hash": ("str", False, False, True),
+                "source": ("str", False, True, True),        # Source file name
+                "dest": ("str", False, True, True),        # destination file name
                 }
 
     ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 3, 0, keywords, False)
@@ -10547,31 +10687,70 @@ def file_store(status, io_buff_in, cmd_words, trace, func_params):
         # conditions not satisfied by keywords or command structure
         return ret_val
 
-    dbms_name, table_name, hash_value, source_file = interpreter.get_multiple_values(conditions,
-                                                                                  ["dbms", "table", "hash", "file"],
-                                                                                  [None, None, None, None])
+    dbms_name, table_name, hash_value, source_file, dest_file = interpreter.get_multiple_values(conditions,
+                                                                                  ["dbms", "table", "hash", "source", "dest"],
+                                                                                  [None, None, None, None, None])
 
-    file_path, s_file_name, file_type = utils_io.extract_path_name_type(source_file)
 
-    if not s_file_name:
-        ret_val = process_status.Missing_blob_file_name
+    if counter != 1:
+        # Either source file is provided - or with REST, dest name is provided
+        status.add_error("Command failed: 'file store' command requires source file name, or, with HTTP call - a dest file name")
+        return process_status.ERR_command_struct
+
+    if source_file:
+        file_path, s_file_name, file_type = utils_io.extract_path_name_type(source_file)
+        file_name = f"{s_file_name}.{file_type}" if file_type else s_file_name
     else:
-        file_name = s_file_name
-        if file_type:
-            file_name += f".{file_type}"
+        s_file_name = None
+        file_path = None
+        file_name = dest_file
 
-        utc_time = utils_columns.get_current_utc_time("%Y-%m-%dT%H:%M:%S.%fZ")
-        date_time_key = utils_io.utc_timestamp_to_key(utc_time)
 
-        file_name_prefix = dbms_name + '.' + table_name + '.'     # The file name needs to start with dbms.table
-        if len(file_name)<= len(file_name_prefix) or not file_name.startswith(file_name_prefix):
-            message = f"Blobs file name in the wrong format, needs to start with {dbms_name}.{table_name}"
+    if not dbms_name and not table_name:
+        # get from the file name
+        if not s_file_name:
+            status.add_error("Missing database name or table name info in 'file store' command")
+            return process_status.ERR_command_struct
+        file_entries = s_file_name.split('.')
+        if len(file_entries) < 3:
+            message = f"Blobs file name in the wrong format, needs to start with [dbms name].[table name].[fime name] and is: '{s_file_name}'"
             status.add_error(message)
             if trace:
                 utils_print.output(message, True)
-            ret_val = process_status.Error_file_name_struct
+            return process_status.Error_file_name_struct
+
+        # take dbms name and table namee from the file name
+        dbms_name = file_entries[0]
+        table_name = file_entries[1]
+
+    if not dbms_name or not table_name:
+        return process_status.ERR_command_struct
+
+    if not dbms_name.startswith("blobs_"):
+        dbms_name = "blobs_" + dbms_name
+
+    utc_time = utils_columns.get_current_utc_time("%Y-%m-%dT%H:%M:%S.%fZ")
+    date_time_key = utils_io.utc_timestamp_to_key(utc_time)
+
+    if not hash_value:
+        if source_file:
+            got_hash, hash_value = utils_io.get_hash_value(status, source_file, "", None)
+            if not got_hash:
+                message = f"Failed o calculate hash value to file: '{source_file}' or file not accessible"
+                status.add_error(message)
+                if trace:
+                    utils_print.output(message, True)
+                return process_status.ERR_process_failure
         else:
-            ret_val = db_info.store_file(status, dbms_name, table_name, file_path, file_name[len(file_name_prefix):], hash_value, date_time_key, False, trace)
+
+            file_data = status.get_file_data() # Source was provides in a rest call:  curl -X POST -H "command: file store where dest = file2.txt" -F "file=@testdata.txt" http://10.0.0.78:7849
+            if not file_data:
+                status.add_error("File data to 'file store' command is not available")
+                return process_status.ERR_command_struct
+            hash_value = utils_data.get_string_hash('md5', file_data, dbms_name + '.' + table_name)
+
+
+    ret_val = db_info.store_file(status, dbms_name, table_name, file_path, file_name, hash_value, date_time_key, False, False, trace)
 
     return ret_val
 # ----------------------------------------------------------------------------
@@ -11273,6 +11452,8 @@ def _process_task(status, io_buff_in, cmd_words, trace):
 # wait 5
 # wait 5 for !my_param
 # wait 5 for !my_param.len > 1
+
+# wait 10 for sync          # wait for the blockchain sync
 # =======================================================================================================================
 def _wait(status, io_buff_in, cmd_words, trace):
 
@@ -11293,19 +11474,32 @@ def _wait(status, io_buff_in, cmd_words, trace):
     result = "False"
 
     if (len(cmd_words) + offset) >= 4 and cmd_words[ offset + 2] == "for":
-        # wait for condition
-        condition = ["wait_result_878", "=", "if"] + cmd_words[ offset + 3:]
+
+        if cmd_words[ offset + 3] == "sync" and len(cmd_words) == 4:
+            # wait 20 for sync  # wait for blockchain su=ync or up to 20 seconds
+            condition = None
+            merge_counter = blockchain.get_merge_counter()    # The number of times the metadata wmerge was done
+        else:
+            # wait for condition
+            condition = ["wait_result_878", "=", "if"] + cmd_words[ offset + 3:]
+            merge_counter = None
         try:
             for i in range (sleep_time):
-                ret_val = _process_if(status, io_buff_in, condition, trace)
+                if condition:
+                    ret_val = _process_if(status, io_buff_in, condition, trace)
 
-                if ret_val:
-                    # Error in the if condition
-                    break
+                    if ret_val:
+                        # Error in the if condition
+                        break
 
-                if params.get_value_if_available("!wait_result_878") == "True":
-                    result = "True"
-                    break   # Condition satisfied
+                    if params.get_value_if_available("!wait_result_878") == "True":
+                        result = "True"
+                        break  # Condition satisfied
+
+                else:
+                    # test blockchain did a merge process
+                    if merge_counter != blockchain.get_merge_counter():
+                        break
 
                 time.sleep(1)
         except:
@@ -13979,7 +14173,7 @@ def _process_if(status, io_buff_in, cmd_words, trace, json_struct = None):
         return ret_val
 
     # test_condition returns: a) offset to then, b) 0 (False), 1 (True), -1 (Error)
-    next_word, ret_code = params.process_analyzed_if(status, cmd_words, offset, offset_then, with_paren, conditions_list, json_struct)
+    next_word, ret_code = params.process_analyzed_if(status, params, cmd_words, offset, offset_then, with_paren, conditions_list, json_struct)
 
     if ret_code == -1:
         return process_status.ERR_command_struct
@@ -15355,7 +15549,7 @@ def get_servers(status, io_buff_in, cmd_words, trace):
                 if bring_offset:
                     if len(operators_list):
                         # pull the data out
-                        ret_val, reply = utils_json.pull_info(status, operators_list, cmd_words[bring_offset + 1:], None, 0)
+                        ret_val, reply = utils_json.pull_info(status, params, operators_list, cmd_words[bring_offset + 1:], None, 0)
 
                 elif not reply:
                     # not in the metadata - search in the blockchain file
@@ -16659,28 +16853,42 @@ def set_echo_queue(status, io_buff_in, cmd_words, trace):
     return ret_val
 
 # --------------------------------------------------------------
-# set traceback on / off
-# set traceback on "which is not a member of the cluster"
+# Enable/disable REST exception
+# set exception traceback on / off
+
+# Enable/disable Error exception
+# set error traceback on / off
+# set error traceback on "which is not a member of the cluster"
 # --------------------------------------------------------------
 def set_traceback(status, io_buff_in, cmd_words, trace):
 
     words_count = len(cmd_words)
 
     ret_val = process_status.SUCCESS
-    if cmd_words[2] == "on":
-        if words_count == 3:
-            process_status.with_traceback_ = True
-            process_status.traceback_text_ = ""    # All error calls will show traceback
-        elif words_count == 4:
-            process_status.with_traceback_ = True
-            process_status.traceback_text_ = cmd_words[3]  # only error calls that include the text provided
+
+    if cmd_words[1] == "error":
+        # Print the stack for an error
+        if cmd_words[3] == "on":
+            if words_count == 3:
+                process_status.with_traceback_ = True
+                process_status.traceback_text_ = ""    # All error calls will show traceback
+            elif words_count == 4:
+                process_status.with_traceback_ = True
+                process_status.traceback_text_ = cmd_words[4]  # only error calls that include the text provided
+            else:
+                ret_val = process_status.ERR_command_struct
+        elif words_count == 3 and cmd_words[3] == "off":
+            process_status.traceback_text_ = ""
+            process_status.with_traceback_ = False
         else:
             ret_val = process_status.ERR_command_struct
-    elif words_count == 3 and cmd_words[2] == "off":
-        process_status.traceback_text_ = ""
-        process_status.with_traceback_ = False
-    else:
-        ret_val = process_status.ERR_command_struct
+    elif cmd_words[1] == "exception":
+        if cmd_words[3] == "on":
+            http_server.with_traceback_ = True
+        elif cmd_words[3] == "off":
+            http_server.with_traceback_ = False
+        else:
+            ret_val = process_status.ERR_command_struct
     return ret_val
 
 # --------------------------------------------------------------
@@ -17636,16 +17844,25 @@ _set_methods = {
                         'keywords' : ["high availability"],
                         }
                     },
-        "traceback": {'command': set_traceback,
-                    'words_min' : 3,
+        "error traceback": {'command': set_traceback,
+                    'words_min' : 4,
                     'help': {
-                         'usage': "set traceback [on/off] [optional text]",
-                         'example': "set traceback on\n"
-                                    "set traceback on \"which is not a member of the cluster\"",
-                         'text': "Prints stack trace when messages are added to the error log. If the text is specified, stacktrace is added only if the text is a sustring in the error message",
+                         'usage': "set error traceback [on/off] [optional text]",
+                         'example': "set error traceback on\n"
+                                    "set error traceback on \"which is not a member of the cluster\"",
+                         'text': "Print stack trace when messages are added to the error log. If the text is specified, stacktrace is added only if the text is a sustring in the error message",
                          'keywords' : ["debug"],
                         }
                     },
+        "exception traceback": {'command': set_traceback,
+                        'words_min': 4,
+                        'help': {
+                            'usage': "set exception traceback [on/off] [optional text]",
+                            'example': "set exception traceback on\n",
+                            'text': "Prints stack trace with a codde exception",
+                            'keywords': ["debug"],
+                        }
+                        },
         "reply ip": {'command': set_replacement_ip,
                   'words_min': 5,
                   'help': {
@@ -17823,17 +18040,28 @@ _file_methods = {
                 },
 
         "store": {'command': file_store,
-                'words_count': 18,
+                'words_min': 6,
                 'help': {
                     'usage': "file store where dbms = [dbms_name] and table = [table name] and hash = [hash value] and file = [path and file name]",
                     'example': "file store where dbms = blobs_edgex and table = video and hash = ce2ee27c4d192a60393c5aed1628c96b and file = !prep_dir/device12atpeak.bin",
                     'text': "Insert a file into the blobs dbms.",
                     'link' : "blob/master/image%20mapping.md#insert-a-file-to-a-local-database",
-                    'keywords' : ["unstructured data"],
+                    'keywords' : ["unstructured data", "file"],
                     }
                 },
+        "to": {'command': file_to,
+              'words_min': 3,
+              'help': {
+                  'usage': "file to [dest file name] where source = [source file name]",
+                  'example': "file to !config_dir/operator_config.al where source = !tmp_dir/new_config.al\n"
+                             "Using REST: curl -X POST -H \"command: file to !my_dest\" -F \"file=@testdata.txt\" http://10.0.0.78:7849",
+                  'text': "Copy  file to a destination folder",
+                  'link': "blob/master/file%20commands.md#copy-a-file-to-a-folder",
+                  'keywords': ["unstructured data", "file"],
+              }
+              },
 
-    "delete": {'command': file_delete,
+        "delete": {'command': file_delete,
             'words_min': 3,
             'help': {
                 'usage': "file delete [file path and name]",
@@ -18018,6 +18246,56 @@ _query_status_methods = {
 }
 
 _get_methods = {
+
+        'opcua': {
+            'command': opcua_client.get_opcua_clients,
+            'words_count': 3,
+            'help': {
+                'usage': 'get opcua clients',
+                'example': 'get opcua clients',
+                'text': 'Retrieve info on the OPC-UA clients that process data',
+                'link' : 'blob/master/opcua.md#client-status',
+                'keywords': ["streaming", "configuration"],
+            },
+            'trace': 0,
+        },
+
+        'opcua values': {
+                'command': opcua_client.opcua_values,
+                'words_min': 7,
+                'help': {
+                    'usage': 'get opcua values where url = [connect string] and user = [username] and password = [password] and node = [node id]',
+                    'example': 'get opcua values where url = opc.tcp://10.0.0.111:53530/OPCUA/SimulationServer and node = "ns=0;i=2257" and node = "ns=0;i=2258"',
+                    'text': 'Connect to OPCUA and retrieve the value from one or multiple nodes',
+                    'link': 'blob/master/opcua.md#the-opcua-values',
+                    'keywords': ["streaming", "configuration"],
+                    },
+                'trace': 0,
+        },
+
+        'opcua namespace': {
+                'command': opcua_client.opcua_namespace,
+                'words_min': 7,
+                'help': {'usage': 'get opcua namespace where url = [connect string] and user = [username] and password = [password]',
+                         'example': 'get opcua namespace where url = opc.tcp://10.0.0.111:53530/OPCUA/SimulationServer and user = user1 and password = my_password',
+                         'text': 'Connect to OPCUA and retrieve the namespace',
+                         'link' : 'blob/master/opcua.md#the-opcua-namespace',
+                         'keywords': ["streaming", "configuration"],
+                         },
+                'trace': 0,
+        },
+
+        'opcua struct': {
+            'command': opcua_client.opcua_struct,
+            'words_min': 7,
+            'help': {'usage': 'get opcua struct where url = [connect string] and ...',
+                     'example': 'get opcua struct where url = opc.tcp://10.0.0.111:53530/OPCUA/SimulationServer',
+                     'text': 'Connect to OPCUA and retrieve the tree structure',
+                     'link' : 'blob/master/opcua.md#the-opcua-namespace',
+                     'keywords': ["streaming", "configuration"],
+                     },
+            'trace': 0,
+        },
 
         'profiler': {
             'command': get_profiler_output,
@@ -19488,6 +19766,19 @@ commands = {
         'trace': 0,
     },
 
+    'run opcua client': {
+        'command': _run_opcua_client,
+        'words_min': 7,
+        'help': {
+            'usage': 'run opcua client where url = [connect string] and frequency = [frequency] and dbms = [dbms name] and table = [table name] and node = [node id]]',
+            'example': 'run opcua client where url = opc.tcp://10.0.0.111:53530/OPCUA/SimulationServer and frequency = 20',
+            'text': 'Continuously read from an OPCUA and stream into a database table',
+            'keywords': ["configuration", "background processes"],
+        },
+
+        'trace': 0,
+    },
+
     'run msg client': {
         'command': _run_msg_client,
         'help': {'usage': 'run msg client where broker = [url] and port = [port] and user = [user] and password = [password] and topic = (name = [topic name] and dbms = [dbms name] and table = [table name] and [participating columns info])',
@@ -19991,11 +20282,14 @@ commands = {
                             'exit scripts\r\n'
                             'exit scheduler\r\n'
                             'exit synchronizer\r\n'
-                            'exit mqtt\r\n'
+                            'exit msg client 1\r\n'
+                            'exit msg client all\r\n'
                             'exit kafka\r\n'
                             'exit smtp\r\n'
                             'exit workers\r\n'
-                            'exit grpc all',
+                            'exit grpc all'
+                            'exit opcua 1\r\n'
+                            'exit opcua all',
                  'text': 'exit node - terminate all process and shutdown\r\n'
                          'exit tcp - terminate the TCP listener thread\r\n'
                          'exit rest - terminate the REST listener thread\r\n'

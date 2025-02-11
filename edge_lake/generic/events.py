@@ -26,6 +26,7 @@ drop_par = {"dbms_name": ("str", True, False, True),
             "max_size": ("int.storage", True, False, True),
             }
 
+in_merge_ = False         # A flag indicating a merge process
 
 partitions_dropped = {}  # statistics on partitions dropped
 
@@ -198,10 +199,23 @@ def use_new_blockchain_file(status, io_buff_in, old_file, blockchain_file, new_f
                     active ledger to the new ledger + update source platform
     '''
 
+    global in_merge_
+
     if trace:
         utils_print.output( f"New Blockchain: Sync with new ledger at: {new_file}", True)
 
     utils_io.write_lock("new")
+
+    if in_merge_:
+        # A different thread is doing merge
+        # We don't want this thread to be on wait as if multiple threads are on wait, we may get them in the wrong order.
+        # Ignore this process and wait to the next thread
+        utils_io.write_unlock("new")
+        return process_status.SUCCESS   # The next sync will get the updates
+
+    in_merge_ = True
+
+    utils_io.write_unlock("new")
 
     if merge_ledgers:
         # Test if the old file includes updates not included on the new file.
@@ -268,10 +282,10 @@ def use_new_blockchain_file(status, io_buff_in, old_file, blockchain_file, new_f
 
             utils_io.write_unlock("blockchain")
 
-    utils_io.write_unlock("new")
+
+    in_merge_ = False
 
     return ret_val
-
 
 # ----------------------------------------------------------
 # Process to delete the oldest partitions
