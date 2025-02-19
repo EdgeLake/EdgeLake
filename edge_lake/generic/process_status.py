@@ -49,6 +49,7 @@ IGNORE_ATTRIBUTE = 1020       # get the next attribute (called by a mapping poli
 IGNORE_EVENT = 1021       # Get the next event (called by a mapping policy script)
 IGNORE_SCRIPT = 1022      # STop processing the policy script
 CHANGE_POLICY = 1023    # Use a different policy (from the policies that are declared as import)
+UPDATE_BOUNDS = 1024    # Update Min and Max in aggregations
 
 control_text = [
     "",
@@ -336,7 +337,9 @@ HTTP_failed_to_decode = 252
 Failed_OPC_CONNECT = 253
 Failed_opcua_process = 254
 Unrecognized_source_node = 255
-
+Missing_aggregation_info = 256
+Missing_aggregation_fields = 257
+Wrong_aggregation_col = 258
 
 # note that message is at location of error value + 1 (exit is set at 0)
 status_text = ["Terminating node processes",
@@ -596,6 +599,9 @@ status_text = ["Terminating node processes",
                "Failed to connect to OPCUA",           # 253
                "Failed OPCUA process",                   # 254
                "Unrecognized source node",             # 255
+               "Missing aggregation info",              # 256
+               "Missing aggregation fields in data",    # 257
+               "Wrong aggregation column name",         #258
                ]
 
 

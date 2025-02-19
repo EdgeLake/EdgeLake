@@ -705,7 +705,7 @@ def process_if_code(status, mapping, policy_id, key, json_msg):
     status - object status
     mapping - a dictionary with the if statement
     policy_id - the id of the policy with the if statement
-    key - the key to retieve the if statement
+    key - the key to retrieve the if statement
     json_msg - The dictionary with the data to validate
     '''
 

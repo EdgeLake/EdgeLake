@@ -13,7 +13,6 @@ import copy
 from difflib import SequenceMatcher
 
 import edge_lake.cmd.monitor as monitor
-import edge_lake.cmd.data_monitor as data_monitor
 import edge_lake.api.al_kafka as al_kafka
 import edge_lake.tcpip.http_client as http_client
 import edge_lake.tcpip.http_server as http_server
@@ -27,7 +26,6 @@ import edge_lake.tcpip.grpc_client as grpc_client
 import edge_lake.generic.utils_print as utils_print
 import edge_lake.generic.utils_timer as utils_timer
 import edge_lake.generic.params as params
-import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.utils_sql as utils_sql
 import edge_lake.generic.utils_output as utils_output
 import edge_lake.generic.utils_python as utils_python
@@ -154,6 +152,20 @@ sql_commands = {
     "create" : 1,
 }
 
+script_commands_ = {
+    # Commands that provide unique return value to a script
+    "ignore" : {
+        "script" : process_status.IGNORE_SCRIPT,
+        "attribute" : process_status.IGNORE_ATTRIBUTE,
+        "event" : process_status.IGNORE_EVENT,  # Skip the row
+    },
+    "change" : {
+        "policy"  : process_status.CHANGE_POLICY
+    },
+    "update": {
+        "bounds": process_status.UPDATE_BOUNDS      # Update Min and Max in aggregations
+    },
+}
 
 
 nodes_options_ = ['operator','publisher','query','master']
@@ -5838,17 +5850,14 @@ def _stop_thread(status, io_buff_in, cmd_words, trace):
 # =======================================================================================================================
 def policy_script(status, io_buff_in, cmd_words, trace):
 
+    global script_commands_
     ret_val = process_status.ERR_in_script_cmd
-    if cmd_words[2] == "ignore":
-        if  cmd_words[3] == "script":
-            ret_val = process_status.IGNORE_SCRIPT
-        elif cmd_words[3] == "attribute":
-            ret_val = process_status.IGNORE_ATTRIBUTE
-        elif cmd_words[3] == "event":
-            ret_val = process_status.IGNORE_EVENT  # Skip the row
-    elif cmd_words[2] == "change":
-        if  cmd_words[3] == "policy":
-            ret_val = process_status.CHANGE_POLICY
+
+    first_word = cmd_words[2]
+    second_word = cmd_words[3]
+    if first_word in script_commands_:
+        if second_word in script_commands_[first_word]:
+            ret_val = script_commands_[first_word][second_word]
 
     return ret_val
 # =======================================================================================================================
@@ -17891,18 +17900,6 @@ _set_methods = {
                      }
                  },
 
-
-        "threshold": {'command': data_monitor.set_threshold,
-                      'words_min': 10,
-                      'help': {
-                          'usage': "set threshold where dbms = [dbms name] and table = [table name] and alert = [threshold info]",
-                          'example': "set threshold where dbms = dmci and table = sensor_table and min = value\n"
-                                     "set threshold where dbms = dmci and table = sensor_table and min = value",
-                          'text': "Set a threshold on monitored data",
-                          'keywords' : ["monitor"],
-                        }
-                      },
-
 }
 
 _test_methods = {
@@ -18848,7 +18845,7 @@ _get_methods = {
                         }
                    },
 
-    "databases": {'command': get_databases,
+        "databases": {'command': get_databases,
                    'key_only': True,
                    'with_format': True,
                    'help': {
@@ -18882,7 +18879,7 @@ _get_methods = {
                      }
                      },
 
-    "query mode": {'command': get_query_params,
+        "query mode": {'command': get_query_params,
                 'key_only': True,
                 'help': {
                     'usage': "get query mode",
@@ -19306,16 +19303,7 @@ _get_methods = {
                           'keywords' : ["configuration", "monitor"],
                         }
                       },
-        "data monitored": {'command': data_monitor.get_info,
-                      'words_min': 3,
-                      'help': {
-                          'usage': "get data monitored",
-                          'example': "get data monitored\n"
-                                     "get data monitored where dbms = dmci and table = sensor_reading",
-                          'text': "Provide the info on the monitored data",
-                          'keywords' : ["monitor", "data"],
-                        }
-                      },
+
         "operator execution": {'command': get_operator_exec,
                        'words_min': 3,
                        'help': {
@@ -20044,16 +20032,6 @@ commands = {
         'trace': 0,
     },
 
-    'data monitor': {
-            'command': data_monitor.data_monitoring,
-            'help': {'usage': 'data monitor where dbms = [dbms name] and table = [table name] intervals = [counter] and time = [interval time length] and value_column = [column name]',
-                     'example': ' data monitor where dbms = dmci and table = sensor_table and intervals = 8 and time = 1 minute and value_column = value',
-                     'text': 'Defines a monitoring process over the streaming data',
-                     'link' : 'blob/master/monitoring%20data.md#monitoring-streaming-data',
-                     'keywords' : ["monitor", "streaming"],
-                     },
-            'trace': 0,
-    },
 
     'schedule': {
         'command': _schedule,

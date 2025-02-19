@@ -16,8 +16,10 @@ import edge_lake.generic.interpreter as interpreter
 import edge_lake.dbms.db_info as db_info
 import edge_lake.cmd.member_cmd as member_cmd
 import edge_lake.generic.streaming_conditions as streaming_conditions
+import edge_lake.generic.version as version
 from edge_lake.json_to_sql.map_json_to_insert import buffered_json_to_sql
 from edge_lake.generic.process_log import add_and_print
+
 
 bufferd_data_ = {}  # A dictionary to maintain buffered data as a f(dbms + table + source + instruction + type)
 streaming_mutex = threading.Lock()  # global mutex to sync threads creating states
@@ -382,8 +384,20 @@ def update_tsd_table(status, stream_info, dbms_name, table_name, source, instruc
 # Add data to watch dir by first writing to PREP DIR and then Moving the data to the WATCH DIR
 # =======================================================================================================================
 def add_data_prep_to_watch_dir(status, prep_dir, watch_dir, err_dir, dbms_name, table_name, source, instructions, tsd_file_name, file_type,
-                          new_data, hash_value, trace_level):
+                          user_data, hash_value, trace_level):
 
+    if version.prep_aggregations(dbms_name, table_name):  # Sets the monitored struct - or returns false if not monitored
+        # Update the aggregations object for this table
+        json_data = utils_json.str_to_json("[" + user_data.replace("\n",',') + ']')
+        if json_data:
+            ret_val, updated_data = version.process_agg_events(status, dbms_name, table_name, None, json_data)
+            if ret_val ==  process_status.UPDATE_BOUNDS:
+                # restructure as a string
+                new_data = utils_json.to_string(updated_data)[1:-1].replace("},", "}\n")
+            else:
+                new_data = user_data
+    else:
+        new_data = user_data
 
     if tsd_file_name:
         # With write immediate - needs to add the TSD info

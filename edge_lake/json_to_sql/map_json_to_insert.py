@@ -18,7 +18,6 @@ import edge_lake.generic.stats as stats
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.process_log as process_log
 import edge_lake.cmd.member_cmd as member_cmd
-import edge_lake.cmd.data_monitor as data_monitor
 import edge_lake.json_to_sql.mapping_policy as mapping_policy
 
 from edge_lake.json_to_sql.suggest_create_table import policy_to_columns_list
@@ -341,9 +340,12 @@ def map_json_list_to_sql(status: process_status, tsd_name, tsd_id, dbms_name, ta
         if not rows_count:
             status.add_keep_error("Failed to retrieve data from JSON file: Time column and Value column not identified: for database: '%s' and table '%s'" % (dbms_name, table_name))
             ret_val = False
-        elif data_monitor.set_monitoring(dbms_name, table_name):    # Sets the monitored struct - or returns false if not monitored
+        '''
+        # Replacing the data here is possible, but will fail HA
+        elif aggregations.set_monitoring(dbms_name, table_name):    # Sets the monitored struct - or returns false if not monitored
             # Update the data_monitor struct
-            data_monitor.process_monitored_data(dbms_name, table_name, columns_list, insert_columns)
+            aggregations.process_events(status, dbms_name, table_name, columns_list, insert_columns)
+        '''
 
     sql_file_list = []  # keep the list of sql files created
     if ret_val:
