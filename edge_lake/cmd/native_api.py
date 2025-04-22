@@ -38,11 +38,12 @@ def exec_sql_stmt(status, servers, dbms_name, conditions, sql_stmt, timeout):
 # ------------------------------------------------------------------------
 # AnyLog command that does not return data
 # ------------------------------------------------------------------------
-def exec_no_wait(status, command, io_buff, wfile):
+def exec_no_wait(status, command, io_buff, file_data, wfile):
 
     end_job(status)  # If multiple queries are executed in the same session/report
     public_key = status.get_public_key()
     status.reset(public_key)  # Keep the same public key with multiple queries (on the same sessions)
+    status.set_file_data(file_data)
 
     status.get_job_handle().set_rest_caller()
     status.get_job_handle().set_output_socket(wfile)  # Queries executed locally will use the socket to transfer data

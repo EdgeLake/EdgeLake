@@ -16,6 +16,7 @@ import edge_lake.generic.utils_data as utils_data
 import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.utils_columns as utils_columns
 import edge_lake.cmd.member_cmd as member_cmd
+from edge_lake.tcpip.net_utils import get_dns
 
 # List of chars that terminate a key
 end_key_chars = {
@@ -38,6 +39,8 @@ cond_signs = {
     "!=" : 1,
     "not" : 1,
     "contains" : 1,
+    "startswith" : 1,
+    "endswith" : 1,
 }
 
 al_func_ = {        # ANyLog Functions
@@ -71,10 +74,20 @@ else:
     os_wind = False
 
 def init(home_path):
-    add_param("ip",tcpip_server.get_ip() )  # add default IP
-    add_param("external_ip", tcpip_server.get_external_ip())  # add external IP
+
+    local_ip = tcpip_server.get_ip()
+    add_param("ip",local_ip )  # add default IP
+    external_ip = tcpip_server.get_external_ip()
+    add_param("external_ip", external_ip)  # add external IP
     add_param("anylog_server_port", str(2048))  # add sever default port
     add_param("anylog_rest_port", str(2148))  # add RESTful API port
+
+    local_dns = get_dns("127.0.0.0")
+    if local_dns:
+        add_param("dns", local_dns)  # The dns name of the local network
+    external_dns = get_dns(external_ip)
+    if external_dns:
+        add_param("external_dns", external_dns)  # the public dns name
 
     add_param("io_buff_size", str(TCP_BUFFER_SIZE))  # add default port
 
@@ -354,8 +367,12 @@ def get_value_if_available(key_type: str):
     global os_wind
     # replace word if available in dictionary
 
+    if not len(key_type):
+        return ""           # Needs to be with some length
+
     data_type = None
     output_flag = 0
+    with_offsets = False
 
     str_len = len(key_type)
     if str_len > 4 and key_type[-4:] in al_func_ :     # test for int or float and not !! assignment (to be set on a different node)
@@ -370,6 +387,33 @@ def get_value_if_available(key_type: str):
             # 2 - Get the length of the object
             # 3 - Get the number of nodes replied
             # 4 - Get the number of nodes missing
+        else:
+            key = key_type
+    elif key_type[-1] == ']':
+        # Example !data_str[1:5]
+        offset_start = key_type.find('[')
+        if offset_start > 2:
+            offset_colon = key_type.find(':',offset_start+1)
+            if offset_colon != -1:
+                key = key_type[:offset_start]
+                try:
+                    start_str = key_type[offset_start +1:offset_colon]
+                    if start_str == "":
+                        from_offset = 0
+                    else:
+                        from_offset = int(start_str)
+
+                    end_str = key_type[offset_colon + 1: -1]
+                    if end_str == "":
+                        to_offeset = None      # it is the end of the string
+                    else:
+                        to_offeset = int(end_str)
+                except:
+                    pass
+                else:
+                    with_offsets = True                 # Take an offset from the string
+            else:
+                key = key_type
         else:
             key = key_type
 
@@ -393,7 +437,7 @@ def get_value_if_available(key_type: str):
             #if not value:
                 # Removed because "if $abc" returns True whereas $abc is not set
                 #value = key  # needs to be kept as source as $X may be processed by the OS even without system param defined
-        elif key[0] == '\\' and key[1] == '"':
+        elif len(key) > 1 and key[0] == '\\' and key[1] == '"':
             # translate including quotations
             if len(key) > 5 and key[2] == '!' and key[-2:] == '\\"':
                 # translate word and keep quotation
@@ -461,6 +505,9 @@ def get_value_if_available(key_type: str):
                     type_value = data_type(value)
                 except:
                     type_value = ""   # Return Null string
+        elif with_offsets:
+            # for example !license[1:100]
+            type_value = value[from_offset:to_offeset] if to_offeset else value[from_offset:]
         else:
             type_value = value
     else:
@@ -533,9 +580,11 @@ def get_path(path_encoded):
             path += value
             start_substr = -1
 
+    if path.startswith("http") and path_separator != '/' and  (path.startswith("http://" ) or path.startswith("https://")):
+        # set URL separation
+        path = path.replace(path_separator, "/")
+
     return path
-
-
 
 # =======================================================================================================================
 # break conditions with multiple "and" statements
@@ -609,7 +658,7 @@ def analyze_if(status, cmd_words, offset_start, conditions_list):
 # a) Next word,
 # b) compare result -1 (error) or 0 (False) or 1 (True)
 # =======================================================================================================================
-def process_analyzed_if(status, cmd_words, offset_start, offset_then, with_paren, conditions_list, json_struct):
+def process_analyzed_if(status, user_params, cmd_words, offset_start, offset_then, with_paren, conditions_list, json_struct):
     '''
     cmd_words - the if stmt
     offset_start - the "if" offset
@@ -655,7 +704,7 @@ def process_analyzed_if(status, cmd_words, offset_start, offset_then, with_paren
             if not isinstance(cond_words, list):
                 status.add_error("Failed to parse in \"if\" stmt, missing parenthesis: %s" % ' '.join(cmd_words[offset_start:]))
                 return [0, -1]
-            compare_result = test_conditions_sequentially(status, ["if"] + cond_words + ["then"], 0, len(cond_words), json_struct)
+            compare_result = test_conditions_sequentially(status, user_params, ["if"] + cond_words + ["then"], 0, len(cond_words), json_struct)
 
             if compare_result == 1:
                 if conditions[0] == "or":
@@ -667,7 +716,7 @@ def process_analyzed_if(status, cmd_words, offset_start, offset_then, with_paren
                     break   #  not satisfied but required
 
     else:
-        compare_result = test_conditions_sequentially(status, cmd_words, offset_start, offset_then,json_struct)
+        compare_result = test_conditions_sequentially(status, user_params, cmd_words, offset_start, offset_then,json_struct)
 
     reply = [offset_start + offset_then, compare_result]
 
@@ -675,7 +724,7 @@ def process_analyzed_if(status, cmd_words, offset_start, offset_then, with_paren
 # =======================================================================================================================
 # break conditions with multiple "and" statements
 # =======================================================================================================================
-def test_conditions_sequentially(status, cmd_words, offset_start, offset_then, json_struct):
+def test_conditions_sequentially(status, user_params, cmd_words, offset_start, offset_then, json_struct):
 
     words_count = len(cmd_words)
     from_word = offset_start + 1
@@ -686,7 +735,7 @@ def test_conditions_sequentially(status, cmd_words, offset_start, offset_then, j
         word = cmd_words[offset]
 
         if word == 'or':
-            compare_result = test_condition(status, cmd_words, from_word, counter_words, json_struct)
+            compare_result = test_condition(status, user_params, cmd_words, from_word, counter_words, json_struct)
             if compare_result == 1:
                 # Up to 'or' was success
                 counter_words = offset_then - counter_words
@@ -699,7 +748,7 @@ def test_conditions_sequentially(status, cmd_words, offset_start, offset_then, j
             if (offset + 1) == words_count and word != "then":
                 counter_words += 1      # include last word
 
-            compare_result = test_condition(status, cmd_words, from_word, counter_words, json_struct)
+            compare_result = test_condition(status, user_params, cmd_words, from_word, counter_words, json_struct)
             if compare_result <= 0 or word == "then": # failed (0) or error (1):
                 break   # Comparison failed
             # New comparison
@@ -713,7 +762,7 @@ def test_conditions_sequentially(status, cmd_words, offset_start, offset_then, j
 # =======================================================================================================================
 # Return ret_val, the data type and value. For example !a.int returns the dictionary value for !a and "int"
 # =======================================================================================================================
-def get_value_type(status, word, json_struct):
+def get_value_type(status, user_params, word, json_struct):
     ret_val = process_status.SUCCESS
     value  = get_value_if_available(word)
     if isinstance(value, str):
@@ -730,9 +779,9 @@ def get_value_type(status, word, json_struct):
         ret_val = process_status.Unrecognized_data_type
 
     if not ret_val and data_type == "str" and len(value) and value[0] == '[' and json_struct:
-        is_key, key, is_list, next_key = utils_json.make_pull_keys(value)
+        is_key, key, is_list, next_key = utils_json.make_pull_keys(user_params, value)
         if is_key:
-            ret_val, new_word = utils_json.get_object_data(status, json_struct, key, False, "", False, None, False, "", False, 1)
+            ret_val, new_word = utils_json.get_object_data(status, user_params, json_struct, key, False, "", False, None, False, "", False, 1)
         else:
             new_word = value
     else:
@@ -770,7 +819,7 @@ def get_entry_length( entry ):
 # If A > B Then  -->    > or < or >= or <= or == or !=
 # returns words considered AND -1 - error, 0 - False, 1 - True
 # =======================================================================================================================
-def test_condition(status, cmd_words, offset_start, words_count, json_struct):
+def test_condition(status, user_params, cmd_words, offset_start, words_count, json_struct):
 
     # json_struct is a json policy
 
@@ -778,7 +827,7 @@ def test_condition(status, cmd_words, offset_start, words_count, json_struct):
 
     if words_count == 1:
         # this is the case of If A then
-        ret_val, data_type, value = get_value_type(status, cmd_words[offset], json_struct)
+        ret_val, data_type, value = get_value_type(status, user_params, cmd_words[offset], json_struct)
         if ret_val:
             return ret_val
         is_value = test_value(data_type, value)
@@ -791,7 +840,7 @@ def test_condition(status, cmd_words, offset_start, words_count, json_struct):
             status.add_error(err_msg)
             return -1
 
-        ret_val, data_type, value = get_value_type(status, cmd_words[offset+1], json_struct)
+        ret_val, data_type, value = get_value_type(status, user_params, cmd_words[offset+1], json_struct)
         if ret_val:
             return ret_val
         is_value = test_value(data_type, value)  # returns 1 for numeric which is not 0 or non null string
@@ -825,10 +874,10 @@ def test_condition(status, cmd_words, offset_start, words_count, json_struct):
         return -1
 
 
-    ret_val, data_type1, value1 = get_value_type(status, word1, json_struct)
+    ret_val, data_type1, value1 = get_value_type(status, user_params, word1, json_struct)
     if ret_val:
         return ret_val
-    ret_val, data_type2, value2 = get_value_type(status, word2, json_struct)
+    ret_val, data_type2, value2 = get_value_type(status, user_params, word2, json_struct)
     if ret_val:
         return ret_val
 
@@ -1133,8 +1182,6 @@ def get_translated_string(my_array, from_entry, to_enty, space_to_tab):
             break           # Was not translated
 
     return new_string
-
-
 # =======================================================================================================================
 # Return a string from an array of words with + sign between substrings
 # =======================================================================================================================

@@ -99,7 +99,7 @@ def start_new_job():
 def copy_job_handle_info(dest_handle: job_handle, src_handle: job_handle):
     dest_handle.set_output_socket(src_handle.get_output_socket())
     dest_handle.set_output_into(src_handle.get_output_into())           # If output generates HTML file
-    if src_handle.is_rest_caller():
+    if src_handle.is_rest_caller() and src_handle.is_signal_needed():   # Rest caller can ask to ignore signaling on a particular call.
         dest_handle.set_rest_caller()
     dest_handle.copy_cmd_conditions(src_handle.get_conditions())  # needs to be a deep copy
     dest_handle.set_subset(src_handle.is_subset())       # If subset flag is True, provide partial results (even if not all nodes replied)

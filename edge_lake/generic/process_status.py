@@ -49,6 +49,8 @@ IGNORE_ATTRIBUTE = 1020       # get the next attribute (called by a mapping poli
 IGNORE_EVENT = 1021       # Get the next event (called by a mapping policy script)
 IGNORE_SCRIPT = 1022      # STop processing the policy script
 CHANGE_POLICY = 1023    # Use a different policy (from the policies that are declared as import)
+UPDATE_BOUNDS = 1024    # Update Min and Max in aggregations
+AGGREGATE = 1025
 
 control_text = [
     "",
@@ -75,6 +77,8 @@ control_text = [
     "Ignore Event",       # 1021
     "Ignore Script",       # 1022
     "Use a different policy",       # 1023
+    "UPDATE BOUNDS",  # 1024
+    "AGGREGATE",  # 1025
 ]
 
 JOB_INSTANCE_NOT_USED = -1
@@ -330,7 +334,19 @@ Failed_to_retrieve_network_reply = 246
 Policy_id_not_match=247
 Invalid_policy=248
 Not_suppoerted_on_main_thread=249
-
+Failed_to_parse_input_file = 250
+Missing_source_file = 251
+HTTP_failed_to_decode = 252
+Failed_OPC_CONNECT = 253
+Failed_opcua_process = 254
+Unrecognized_source_node = 255
+Missing_aggregation_info = 256
+Missing_aggregation_fields = 257
+Wrong_aggregation_col = 258
+Subprocess_failed = 259
+Failed_to_retrieve_dns_name = 260
+Error_in_msg_format = 261
+Local_cmd_only = 262
 
 # note that message is at location of error value + 1 (exit is set at 0)
 status_text = ["Terminating node processes",
@@ -584,6 +600,19 @@ status_text = ["Terminating node processes",
                "Provided policy id does not match the policy", # 247
                "Policy is invalid",                     # 248
                "Command not suppoerted on main thread", # 249
+               "Failed to parse input file",            # 250
+               "Missing_source_file",                   # 251
+               "HTTP Request: failed to decode message body",  # 252
+               "Failed to connect to OPCUA",           # 253
+               "Failed OPCUA process",                  # 254
+               "Unrecognized source node",              # 255
+               "Missing aggregation info",              # 256
+               "Missing aggregation fields in data",    # 257
+               "Wrong aggregation column name",         # 258
+               "Subprocess Failed",                     # 259
+               "Failed to retrieve DNS name",           # 260
+               "Error in msg format",                   # 261
+               "Needs to be executed locally",          # 262
                ]
 
 
@@ -1023,6 +1052,12 @@ class ProcessStat:
         return self.job_handle
 
     # =======================================================================================================================
+    # enable/disable the process to signal to rest thead on wait
+    # =======================================================================================================================
+    def set_signal_status(self, value: bool):
+        self.job_handle.set_signal_status(value)
+
+    # =======================================================================================================================
     # Get the active job handle that is used with this status object
     # =======================================================================================================================
     def get_active_job_handle(self):
@@ -1189,6 +1224,16 @@ class ProcessStat:
     def get_pub_key(self):
         return self.public_key
     # =======================================================================================================================
+    # Store file data provided by a curl command
+    # =======================================================================================================================
+    def set_file_data(self, file_data):
+        self.file_data = file_data
+    # =======================================================================================================================
+    # Get file data provided by a curl command
+    # =======================================================================================================================
+    def get_file_data(self):
+        return self.file_data
+    # =======================================================================================================================
     # Reset - Every thread have a dedicated job handle, that may be switched during the processing of data -->
     # --> return original object on reset
     # =======================================================================================================================
@@ -1212,6 +1257,8 @@ class ProcessStat:
         self.task_id = 0      # task ID
 
         self.rest_wait = False     # Set to true is REST thread is placed on wait
+
+        self.file_data = None      # File data provided using curl -X POST -H "command: file store where dest = !prep_dir/file2.txt" -F "file=@testdata.txt" http://10.0.0.78:7849
 
         if pub_key:
             self.validate_permissions = True

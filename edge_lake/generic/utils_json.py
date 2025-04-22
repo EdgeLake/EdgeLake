@@ -14,6 +14,7 @@ import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_python as utils_python
 import edge_lake.generic.utils_data as utils_data
 import edge_lake.cmd.member_cmd as member_cmd
+
 # =======================================================================================================================
 # Chars not supported in JSON string
 # =======================================================================================================================
@@ -52,12 +53,22 @@ bring_types_ = {
     "max"   :   2048,
 }
 
+ignored_keyword_ = {
+    "id"        :   1,
+    "type"      :   1,
+    "class"     :   1,
+    "except"    :   1,
+    "pass"      :   1,
+    "raise"     :   1,
+
+}
+
 pattern_bring = re.compile('[ []{}:"]')  # Find any of these occurrences - to void the bring
 
 pattern_any_ = re.compile(r'[{}"\'\n\t\r]')  # Find any of these occurrences
 pattern_include_comma_ = re.compile(r'[{}"\'\n\t\r,]')  # Find any of these occurrences
-pattern_single_ = re.compile(r'[\'\n\t\r]')  # Single queotation
-pattern_double_ = re.compile(r'["\n\t\r]')  # Single queotation
+pattern_single_ = re.compile(r'[\'\n\t\r]')  # Single quotation
+pattern_double_ = re.compile(r'["\n\t\r]')  # Single quotation
 
 
 # =======================================================================================================================
@@ -163,18 +174,32 @@ def to_formatted_string(json_obj, intent_bytes):
 # String to list
 # =======================================================================================================================
 def str_to_list(data: str):
+    global ignored_keyword_
 
-    try:
-        list_obj = list(eval(data))
-    except:
+    if len(data) >= 3:
+        if not data[1:-1] in ignored_keyword_:
+            try:
+                list_obj = list(eval(data))
+            except:
+                list_obj = None
+        else:
+            list_obj = None
+    else:
         list_obj = None
+
     return list_obj
 
 # =======================================================================================================================
 # Validate JSON Format. Return True if a vakid JSON format
 # JSON requires double quotes for its strings -  there are no single quotes in a JSON string
 # =======================================================================================================================
-def str_to_json(data: str):
+def str_to_json(in_data: str):
+
+    if len(in_data) > 2 and in_data[0] == in_data[-1] and (in_data[0] == '"' or in_data[0] == "'"):
+        # The input string contains escaped double quotes (\") around the keys and values.
+        data = in_data[1:-1]
+    else:
+        data = in_data
 
     try:
         json_object = orjson.loads(data)    # fast process
@@ -220,8 +245,6 @@ def str_to_json(data: str):
                 json_object = None
 
     return json_object
-
-
 # =======================================================================================================================
 # Try to fix the JSON data:
 # 1) Connect strings on multiple lines - parenthesis without commas are connected
@@ -240,10 +263,14 @@ def change_json_data(data_str):
     paren_status = 0
     modified = ""
     copied_offset = 0
+    last_offset = len(data)
     for offset, char in enumerate(data):
 
         if char == '\\':
-            modified += (data[copied_offset:offset] + ".")
+            if offset == last_offset or data[offset + 1] == '"':
+                modified += (data[copied_offset:offset])        # Double quote before quotation are ignored
+            else:
+                modified += (data[copied_offset:offset] + ".")
             copied_offset = offset + 1  # next copy will start after the slash
             continue
 
@@ -409,7 +436,7 @@ def is_bring(bring_name, bring_value):
 #    "bring.json": 5,
 #}
 # ======================================================================================================================
-def pull_info(status, json_data, pull_instruct, conditions, bring_type):
+def pull_info(status, user_params, json_data, pull_instruct, conditions, bring_type):
     ret_val = process_status.SUCCESS
 
     out_json = is_bring("json", bring_type)
@@ -513,10 +540,10 @@ def pull_info(status, json_data, pull_instruct, conditions, bring_type):
                 is_list = False     # Returned value is the policy type not a list
                 next_key = ""
             else:
-                is_key, key, is_list, next_key = make_pull_keys(word_str)  # validate the structure of the key used to pull from the JSON
+                is_key, key, is_list, next_key = make_pull_keys(user_params, word_str)  # validate the structure of the key used to pull from the JSON
 
             if is_key:
-                ret_val, out_value = get_object_data(status, obj, key, is_list, next_key, out_json, new_json, separator_event, separator, False, bring_type)
+                ret_val, out_value = get_object_data(status, user_params, obj, key, is_list, next_key, out_json, new_json, separator_event, separator, False, bring_type)
                 if ret_val:
                     break
                 if not out_value:
@@ -612,7 +639,7 @@ def is_replace_result(existing_value, new_value, is_max):
 # ======================================================================================================================
 # Get data from a JSON object, given an object and a key
 # ======================================================================================================================
-def get_object_data(status, obj, key, is_list, next_key, out_json, new_json, separator_event, separator, add_quotation, bring_type):
+def get_object_data(status, user_params, obj, key, is_list, next_key, out_json, new_json, separator_event, separator, add_quotation, bring_type):
 
     ret_val = process_status.SUCCESS
     new_string = ""
@@ -631,6 +658,20 @@ def get_object_data(status, obj, key, is_list, next_key, out_json, new_json, sep
             if policy_type:
                 key = "[\"%s\"]" % policy_type + key[5:]
 
+    if len(key) > 6 and key[-3] == ')':
+        # This is an example of extra instructions: [tag][path(prefix(/))]
+        match = re.match(r'(\["[^"]+"\])(\["[^"]+"\])', key)
+
+        if match:
+            # Part 1: Clean up the second part to remove the parentheses content
+            key = match.group(1) + re.sub(r'\(.*\)', '', match.group(2))  # Combines [tag] and [path]
+            # Part 2: Extract the content inside parentheses from the second group, including parentheses
+            mapping = re.search(r'\([^)]*\)', match.group(2)).group(0)  # Use group(0) to include parentheses
+        else:
+            mapping = None
+    else:
+        mapping = None
+
     try:
         if key == "":
             # if bring key was [] --> get the policy type
@@ -646,6 +687,8 @@ def get_object_data(status, obj, key, is_list, next_key, out_json, new_json, sep
             new_json[json_key] = ""
 
     else:
+        if mapping:
+            ret_val, out_value = apply_mapping(status, out_value, mapping)  # Modify the value by the mapping
         if is_list:
             # The value pulled is a list
             if not isinstance(out_value, list):
@@ -653,12 +696,12 @@ def get_object_data(status, obj, key, is_list, next_key, out_json, new_json, sep
                 ret_val = process_status.ERR_wrong_json_structure
             else:
                 if next_key:
-                    is_key, key, is_list, new_key = make_pull_keys(next_key)  # validate the structure of the key used to pull from the JSON
+                    is_key, key, is_list, new_key = make_pull_keys(user_params, next_key)  # validate the structure of the key used to pull from the JSON
                     if is_key:
                         # Pull the attribute value from each of the key entries
                         new_string = "["
                         for index, entry in enumerate(out_value):
-                            ret_val, list_str = get_object_data(status, entry, key, is_list, next_key, out_json, new_json, separator_event, separator, True, bring_type)
+                            ret_val, list_str = get_object_data(status, user_params, entry, key, is_list, next_key, out_json, new_json, separator_event, separator, True, bring_type)
                             new_string += list_str + ','
                         new_string += "]"
                 else:
@@ -687,6 +730,45 @@ def get_object_data(status, obj, key, is_list, next_key, out_json, new_json, sep
 
 
     return [ret_val, new_string]
+
+
+# ======================================================================================================================
+# Modify the value of the string
+# For example:
+# [tag][path( rfind(/))]   # substring from last slash to the end
+# [tag][path( find(/))]   # substring from start to slash
+# [tag][prefix(10)]   # first 10 chars
+# [tag][suffix(10)]   # last 10 chars
+
+# ======================================================================================================================
+def apply_mapping(status, out_value, mapping):
+
+    ret_val = process_status.SUCCESS
+    new_val = ""
+    if out_value and isinstance(out_value,str):
+        if mapping.startswith("(rfind("):
+            params = mapping[7:-1]
+            index = out_value.rfind(params)
+            if index != -1:
+                new_val = out_value[index + len(params):]
+        elif mapping.startswith("(find("):
+            params = mapping[6:-1]
+            index = out_value.find(params)
+            if index != -1:
+                new_val = out_value[:index]
+        elif mapping.startswith("(prefix("):
+            params = mapping[8:-1]
+            if params.isdigit():
+                number = int(params)
+                new_val = out_value[:number]
+        elif mapping.startswith("(suffix("):
+            params = mapping[8:-1]
+            if params.isdigit():
+                number = int(params)
+                new_val = out_value[-number:]
+
+    return [ret_val, new_val]
+
 
 # ======================================================================================================================
 # Test that the provided string is unique, otherwise update the unique dictionary
@@ -827,7 +909,7 @@ def get_object_id(json):
 # blockchain get table bring [table][name] "\t" [table][create] separator = "\n"
 # --> blockchain get table bring ["table"]["name"] "\t" ["table"]["create"] separator = "\n"
 # ======================================================================================================================
-def make_pull_keys(word_str):
+def make_pull_keys(user_params, word_str):
 
     is_list = False
     next_key = ""
@@ -879,7 +961,13 @@ def make_pull_keys(word_str):
                     key_string += entry + ']'
                 else:
                     # Add quotation
-                    key_string += "[\"%s\"]" %  entry[1:]
+                    inner_key = entry[1:]
+                    if len(inner_key) > 1 and inner_key[0] == '!':
+                        dict_key = user_params.get_value_if_available(inner_key)
+                        if dict_key != "":
+                            inner_key = dict_key
+
+                    key_string += "[\"%s\"]" % inner_key
     else:
         is_key = False
 
@@ -891,9 +979,9 @@ def make_pull_keys(word_str):
 # ------------------------------------------------------------
 # Given a JSON object, and nested keys - test the value
 # ------------------------------------------------------------
-def test_nested_key_value(src_obj, key, value):
+def test_nested_key_value(user_params, src_obj, key, value):
 
-    ret_val, key_string, is_list, next_key  = make_pull_keys(key)   # the key to pull from the JSON structure
+    ret_val, key_string, is_list, next_key  = make_pull_keys(user_params, key)   # the key to pull from the JSON structure
 
     if ret_val:
         ret_val = False
@@ -1006,6 +1094,27 @@ def get_policy_type(json):
             key = None          # Multiple values in layer 1 - there is no policy type!
 
     return key
+
+# ======================================================================================================================
+# Get the policy ID
+# ======================================================================================================================
+def get_policy_id(json):
+
+    try:
+        policy_type = next(iter(json))
+    except:
+        reply = None
+    else:
+        if len(json) != 1:
+            reply = None
+        else:
+            if not "id" in json[policy_type]:
+                reply = None
+            else:
+                reply = json[policy_type]["id"]
+
+
+    return reply   # Return policy_id
 
 # ======================================================================================================================
 # Get the policy type and the id

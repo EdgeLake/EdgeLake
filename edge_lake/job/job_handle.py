@@ -168,6 +168,19 @@ class JobHandle:
         return self.rest_caller
 
     # =======================================================================================================================
+    # signal_needed can be set to false is the rest thread is not managing the wait.
+    # For example a rest thread issue a command to the netwoprk and waits by time:
+    # In a nested call:
+    # abc{} = run client (dbms=nov and table=t13) get rows count  where dbms = nov and table = t13 and estimate = true and format = json
+    # wait_cmd = f"wait 3 for !abc.diff == 0"  # wait 3 seconds or until the nodes replies - whichever is first
+    # In the above example,  the wait command triggers the wait
+    # =======================================================================================================================
+    def is_signal_needed(self):
+        return self.signal_needed
+    def set_signal_status(self, value):
+        self.signal_needed = value      # True or false
+
+    # =======================================================================================================================
     # Copy the SQL Command conditions - Shallow copy
     # =======================================================================================================================
     def set_conditions(self, conditions):
@@ -402,6 +415,7 @@ class JobHandle:
         self.output_into = None    # can indicate to translate output to HTML
         self.stream_file = None     # the name of the file that is streamed to a browser or an app in a REST call
         self.rest_caller = False
+        self.signal_needed = True   # By default REST callers are signaled
         self.results_set = []    # An array with query result
 
         self.timer.start(0)  # monitor the process time

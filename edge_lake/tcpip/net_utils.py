@@ -12,6 +12,8 @@ import errno
 import ipaddress
 from time import sleep
 import traceback  # Enable for stacktrace
+import dns.resolver
+import dns.reversename
 
 import edge_lake.generic.utils_print as utils_print
 import edge_lake.generic.utils_json as utils_json
@@ -480,7 +482,7 @@ def test_ipv4(ip_addr, port_str:str):
 # ---------------------------------------------------------
 # Test the IP and port string
 # ---------------------------------------------------------
-def is_valid_ip_port(ip_port):
+def is_valid_host_and_port(ip_port):
     if not ip_port:
         return False
     ip_port = ip_port.split(':')
@@ -488,13 +490,13 @@ def is_valid_ip_port(ip_port):
         return False
     if not ip_port[1].isnumeric():
         return False
-    return test_ipaddr(ip_port[0], int(ip_port[1]))
+    return test_network_addr(ip_port[0], int(ip_port[1]))
 
 
 # =======================================================================================================================
 # Test IPv4 and IPv6 formats and port value
 # =======================================================================================================================
-def test_ipaddr(ip_addr: str, port: int):
+def test_network_addr(addr: str, port: int):
 
     # If port is 0, we ignore the test although the value is wrong
     if port > 65535:
@@ -504,7 +506,13 @@ def test_ipaddr(ip_addr: str, port: int):
 
     #if re.match('^[0-9\.]*$',ip_addr):  # Added because Kubernetes virtual addresses fail i.e.: anylog-svs2.default.svc.cluster.local
 
-    return is_valid_ip_addr(ip_addr)
+    if is_valid_ip_addr(addr):
+        ret_val = True
+    else:
+        ret_val = is_valid_dns_name(addr)
+
+    return ret_val
+
 
 # =======================================================================================================================
 # Test if IP is valid
@@ -518,6 +526,17 @@ def is_valid_ip_addr(ip_addr):
         ret_val = True
     return ret_val
 
+# =======================================================================================================================
+# Test if dns is valid
+# =======================================================================================================================
+def is_valid_dns_name(dns_name):
+    try:
+        ip_address = socket.gethostbyname(dns_name)
+    except:
+        ret_val = False
+    else:
+        ret_val = True
+    return ret_val
 # =======================================================================================================================
 # Is message source - return True is this node is the source of the message:
 # If a message send from node A to node B and a reply is returned to node A (A-->B-->A)
@@ -902,6 +921,57 @@ def get_port():
     return port
 
 # ----------------------------------------------------------------
+# Get the DNS name by an IP.
+# get dns name where ip = 127.132.145.12
+# ----------------------------------------------------------------
+def get_dns_name(status, io_buff_in, cmd_words, trace):
+
+    ret_val = process_status.SUCCESS
+    dns_name = None
+    words_count = len(cmd_words)
+    if words_count == 3:
+        ip_address = '127.0.0.1'
+    elif words_count == 7 and cmd_words[3:-1] == ["where", "ip", "="]:
+        ip_address = params.get_value_if_available(cmd_words[6])
+    else:
+        ret_val = process_status.ERR_command_struct
+
+    if not ret_val:
+        dns_name = get_dns(ip_address)
+        if not dns_name:
+            ret_val = process_status.Failed_to_retrieve_dns_name  # No DNS name found
+
+    return [ret_val, dns_name]
+
+# ----------------------------------------------------------------
+# Return the DNS Name
+# ----------------------------------------------------------------
+def get_dns(ip_address):
+    try:
+        # Local IP
+        if is_local_network(ip_address):
+            ret_val, dns_name = get_local_host_name(None, None, None, None)
+            if ret_val:
+                err_msg = f"Failed to retrieve local host Name for IP: {ip_address}"
+                process_log.add("Error", err_msg)
+                dns_name = None
+            else:
+                dns_name = dns_name + '.local'
+        else:
+            # global IP
+            rev_name = dns.reversename.from_address(ip_address)
+            dns_name = str(dns.resolver.resolve(rev_name, "PTR")[0])
+            if dns_name and dns_name[-1] == '.':
+                dns_name = dns_name[:-1]
+    except:
+        errno, value = sys.exc_info()[:2]
+        err_msg = f"Failed to retrieve DNS Name for IP: {ip_address} : error : {errno} : {value}"
+        process_log.add("Error", err_msg)
+        dns_name = None
+
+    return dns_name
+
+# ----------------------------------------------------------------
 # Test the host and port
 # ----------------------------------------------------------------
 def test_host_port(ip_port):
@@ -1001,14 +1071,14 @@ def add_connection(connect_id, url_external, port_external, url_internal, port_i
     if url_external:
         connections_key_external = url_external + ":" + str(port_external)
 
-        if not is_valid_ip_port(connections_key_external):
+        if not is_valid_host_and_port(connections_key_external):
             utils_print.output_box("Warning: The IP and port are not valid: '%s'" % connections_key_external)
     else:
         connections_key_external = f"0.0.0.0:{port_bind}"
 
     if url_internal and port_internal:
         connections_key_internal = url_internal + ":" + str(port_internal)
-        if not is_valid_ip_port(connections_key_internal):
+        if not is_valid_host_and_port(connections_key_internal):
             utils_print.output_box("Warning: The IP and port are not valid: '%s'" % connections_key_internal)
     else:
         connections_key_internal = connections_key_external

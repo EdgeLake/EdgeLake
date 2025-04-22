@@ -411,8 +411,14 @@ def save_data(status, destination, data_obj):
             ret_val = process_status.ERR_process_failure
     else:
         # Keep in global dictionary
+        if isinstance(data_obj,dict) or isinstance(data_obj,list):
+            str_data = utils_json.to_string(data_obj)
+            if str_data == None:
+                str_data = str(data_obj)
+        else:
+            str_data =str(data_obj)
         ret_val = process_status.SUCCESS
-        params.add_param(destination, str(data_obj))
+        params.add_param(destination, str_data)
 
     return ret_val
 

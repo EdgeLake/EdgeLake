@@ -25,6 +25,16 @@ increment_date_types = {
     "year": ""
 }
 
+increment_units_ = [            # Define thresholds for converting to human-readable units
+    ("year", 365.25 * 24 * 3600),
+    ("month", 30.44 * 24 * 3600),
+    ("week", 7 * 24 * 3600),
+    ("day", 24 * 3600),
+    ("hour", 3600),
+    ("minute", 60),
+    ("second", 1),
+]
+
 supported_instruct = {
     "where": 1,
     "order": 1,
@@ -407,22 +417,30 @@ def trace_sql(dbms_type, sql_stmt, ret_val, ignore_error, error_msg):
     ignore_error - status of flag
     '''
 
-    formatted_sql = sql_stmt.replace("\r"," ").replace("\n"," ").replace("  "," ")
+    if error_msg or get_trace_level() > 1:
 
-    output_trace = True
-    if trace_command_:
-        if not formatted_sql[:len(trace_command_)].lower() == trace_command_:
-            output_trace = False
+        formatted_sql = sql_stmt.replace("\r"," ").replace("\n"," ").replace("  "," ")
 
-    if output_trace:
-        out_msg = "\r\n[SQL: %s] [Result: %s]" % (dbms_type, str(ret_val))
-        if ignore_error:
-            out_msg += " [Ignore Error]"
-        if error_msg:
-            out_msg += " [Err MSG: %s]" % error_msg
+        output_trace = True
+        if trace_command_:
+            if not formatted_sql[:len(trace_command_)].lower() == trace_command_:
+                output_trace = False
 
-        out_msg += " [%s]" % formatted_sql
-        utils_print.output(out_msg, True)
+        if output_trace:
+            out_msg = "\r\n[DBMS: %s] [Result: %s]" % (dbms_type, str(ret_val))
+
+            out_msg += " [SQL: %s]" % formatted_sql
+
+            if error_msg:
+                if ignore_error:
+                    out_msg += "\r\n\n[Ignore Error]"
+                else:
+                    out_msg += "\r\n\n[Err MSG: %s]" % error_msg
+                utils_print.output_box(out_msg)
+            else:
+                # Print all SQL if traceleve > 1
+                utils_print.output(out_msg, True)
+
 # -----------------------------------------------------------
 # Where copndition node with extra info for PI
 # -----------------------------------------------------------
