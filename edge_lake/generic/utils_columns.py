@@ -157,6 +157,26 @@ def contains(string_a:str, string_b:str):
         return 0        # Not a substring
     return 1
 
+# ----------------------------------------------------------
+# Given 2 strings, determine if string_a starts with string_b
+# ----------------------------------------------------------
+def startswith(string_a:str, string_b:str):
+    if not isinstance(string_a,str) or not isinstance(string_b,str):
+        return 0        # Return False
+    if string_a.startswith(string_b):
+        return 1        # Is a substring
+    return 0
+
+# ----------------------------------------------------------
+# Given 2 strings, determine if string_a ends with string_b
+# ----------------------------------------------------------
+def endswith(string_a:str, string_b:str):
+    if not isinstance(string_a,str) or not isinstance(string_b,str):
+        return 0        # Return False
+    if string_a.endswith(string_b):
+        return 1        # Is a substring
+    return 0
+
 comarison = {
 
     "<": operator.lt,
@@ -167,8 +187,9 @@ comarison = {
     ">=": operator.ge,
     ">": operator.gt,
     "is": None,
-    "contains" : contains
-
+    "contains" : contains,
+    "startswith" : startswith,
+    "endswith" : endswith,
 }
 
 

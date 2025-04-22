@@ -295,7 +295,7 @@ def socket_open(host: str, port: int, command:str, connect_timeout:int, retry_co
                 err_msg = "TCP Client Error: socket failed to connect: " + socket_info
                 process_log.add("Error", err_msg)
 
-                net_utils.test_ipaddr(host, port)  # place a message if the ip is in the wrong format
+                net_utils.test_network_addr(host, port)  # place a message if the ip is in the wrong format
                 soc = None
                 ret_val = False
             break

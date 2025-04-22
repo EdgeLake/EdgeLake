@@ -67,8 +67,8 @@ pattern_bring = re.compile('[ []{}:"]')  # Find any of these occurrences - to vo
 
 pattern_any_ = re.compile(r'[{}"\'\n\t\r]')  # Find any of these occurrences
 pattern_include_comma_ = re.compile(r'[{}"\'\n\t\r,]')  # Find any of these occurrences
-pattern_single_ = re.compile(r'[\'\n\t\r]')  # Single queotation
-pattern_double_ = re.compile(r'["\n\t\r]')  # Single queotation
+pattern_single_ = re.compile(r'[\'\n\t\r]')  # Single quotation
+pattern_double_ = re.compile(r'["\n\t\r]')  # Single quotation
 
 
 # =======================================================================================================================
@@ -658,6 +658,20 @@ def get_object_data(status, user_params, obj, key, is_list, next_key, out_json, 
             if policy_type:
                 key = "[\"%s\"]" % policy_type + key[5:]
 
+    if len(key) > 6 and key[-3] == ')':
+        # This is an example of extra instructions: [tag][path(prefix(/))]
+        match = re.match(r'(\["[^"]+"\])(\["[^"]+"\])', key)
+
+        if match:
+            # Part 1: Clean up the second part to remove the parentheses content
+            key = match.group(1) + re.sub(r'\(.*\)', '', match.group(2))  # Combines [tag] and [path]
+            # Part 2: Extract the content inside parentheses from the second group, including parentheses
+            mapping = re.search(r'\([^)]*\)', match.group(2)).group(0)  # Use group(0) to include parentheses
+        else:
+            mapping = None
+    else:
+        mapping = None
+
     try:
         if key == "":
             # if bring key was [] --> get the policy type
@@ -673,6 +687,8 @@ def get_object_data(status, user_params, obj, key, is_list, next_key, out_json, 
             new_json[json_key] = ""
 
     else:
+        if mapping:
+            ret_val, out_value = apply_mapping(status, out_value, mapping)  # Modify the value by the mapping
         if is_list:
             # The value pulled is a list
             if not isinstance(out_value, list):
@@ -714,6 +730,45 @@ def get_object_data(status, user_params, obj, key, is_list, next_key, out_json, 
 
 
     return [ret_val, new_string]
+
+
+# ======================================================================================================================
+# Modify the value of the string
+# For example:
+# [tag][path( rfind(/))]   # substring from last slash to the end
+# [tag][path( find(/))]   # substring from start to slash
+# [tag][prefix(10)]   # first 10 chars
+# [tag][suffix(10)]   # last 10 chars
+
+# ======================================================================================================================
+def apply_mapping(status, out_value, mapping):
+
+    ret_val = process_status.SUCCESS
+    new_val = ""
+    if out_value and isinstance(out_value,str):
+        if mapping.startswith("(rfind("):
+            params = mapping[7:-1]
+            index = out_value.rfind(params)
+            if index != -1:
+                new_val = out_value[index + len(params):]
+        elif mapping.startswith("(find("):
+            params = mapping[6:-1]
+            index = out_value.find(params)
+            if index != -1:
+                new_val = out_value[:index]
+        elif mapping.startswith("(prefix("):
+            params = mapping[8:-1]
+            if params.isdigit():
+                number = int(params)
+                new_val = out_value[:number]
+        elif mapping.startswith("(suffix("):
+            params = mapping[8:-1]
+            if params.isdigit():
+                number = int(params)
+                new_val = out_value[-number:]
+
+    return [ret_val, new_val]
+
 
 # ======================================================================================================================
 # Test that the provided string is unique, otherwise update the unique dictionary
@@ -1039,6 +1094,27 @@ def get_policy_type(json):
             key = None          # Multiple values in layer 1 - there is no policy type!
 
     return key
+
+# ======================================================================================================================
+# Get the policy ID
+# ======================================================================================================================
+def get_policy_id(json):
+
+    try:
+        policy_type = next(iter(json))
+    except:
+        reply = None
+    else:
+        if len(json) != 1:
+            reply = None
+        else:
+            if not "id" in json[policy_type]:
+                reply = None
+            else:
+                reply = json[policy_type]["id"]
+
+
+    return reply   # Return policy_id
 
 # ======================================================================================================================
 # Get the policy type and the id

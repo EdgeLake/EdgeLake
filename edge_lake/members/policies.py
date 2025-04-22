@@ -139,6 +139,13 @@ license_attr = [
     ("type",                str,        None,               None,           True,       True,  None),       # license
 ]
 
+tag_attr = [
+    # attr name * attr type * child attributes * default value * must exists *  is unique
+    ("dbms",        str,            None,           None,           True,       False, None),
+    ("table",       str,            None,           None,           True,       ["dbms", "table"], None),
+    ("ns",          int,            None,           None,           True,       False, None),
+]
+
 # ------------------------------------------------------------------------------------
 # Unique attributes in policies
 # ------------------------------------------------------------------------------------
@@ -351,7 +358,7 @@ def test_key_val(status, policy_type, policy_obj, root_key_val, blockchain_file)
             child_key_val = entry[2]
             default_val = entry[3]
             must_exists = entry[4]
-            is_unique = entry[5]         # Only 1 policy with the value is allowed
+            unique_info = entry[5]         # Test unique value
             validation_method = entry[6]
 
             if root_key not in policy_obj:
@@ -367,12 +374,24 @@ def test_key_val(status, policy_type, policy_obj, root_key_val, blockchain_file)
 
             val = policy_obj[root_key]
 
-            if is_unique:
-                # Only one policy can be with the same value
-                test_cmd = ["blockchain", "get", policy_type, "where", root_key, "=", val]
+            if unique_info:
+                if isinstance(unique_info, bool):
+                    # Only one policy can be with the same value
+                    test_cmd = ["blockchain", "get", policy_type, "where", root_key, "=", val]
+                else:
+                    test_cmd = ["blockchain", "get", policy_type, "where"]
+                    for index, attr_name in enumerate(unique_info):
+                        if index:
+                            test_cmd.append("and")
+                        test_cmd.append(attr_name)
+                        test_cmd.append("=")
+                        attr_val = policy_obj[attr_name]    # current value
+                        test_cmd.append(str(attr_val))
+
                 ret_val, cluster_policy = member_cmd.blockchain_get(status, test_cmd, blockchain_file, True)
                 if not ret_val and len(cluster_policy):
-                    status.add_error(f"Error in policy type: {policy_type} - duplicate '{root_key}' value: '{val}'")
+                    cmd_str = ' '.join(test_cmd)
+                    status.add_error(f"Error in policy type: {policy_type} - the new policy fails unique test using: '{cmd_str}'")
                     ret_val = process_status.Non_unique_policy_values
                     break
 
@@ -590,6 +609,12 @@ def new_license_policy(status, policy_type, policy_obj, blockchain_file):
 # =======================================================================================================================
 # Test that the policy has all components and complete missing values
 # =======================================================================================================================
+def new_tag_policy(status, policy_type, policy_obj, blockchain_file):
+    ret_val = test_key_val(status, policy_type, policy_obj, tag_attr, blockchain_file)
+    return ret_val
+# =======================================================================================================================
+# Test that the policy has all components and complete missing values
+# =======================================================================================================================
 def new_cluster_policy(status, policy_type, policy_obj, blockchain_file):
 
     ret_val = test_key_val(status, policy_type, policy_obj, cluster_attr, blockchain_file)
@@ -672,6 +697,7 @@ new_policies = {          # The process to execute when a new policy is added
     "permissions" : new_permission_policy,      # Permission policy determines commands and databases allowed
     "assignment" :  new_assignment_policy,      # Connect member to permissions
     "license" :  new_license_policy,      # Connect member to permissions
+    "tag" :  new_tag_policy,      # Connect member to permissions
 }
 
 # =======================================================================================================================

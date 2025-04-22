@@ -265,6 +265,8 @@ class IoHandle:
             open_mode = 'r'
         elif self.file_type == "append":
             open_mode = 'a'
+        elif self.file_type == "new":
+            open_mode = 'w'     # Delete and write
         elif self.file_type == "write":
             open_mode = 'wb'  # write binary
         elif self.file_type == "read":

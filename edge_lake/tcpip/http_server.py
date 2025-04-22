@@ -24,14 +24,9 @@ except:
 else:
     with_open_ssl_ = True
 
-if sys.version_info >= (3, 0):
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-    from socketserver import ThreadingMixIn
 
-else:
-    from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
-    from SocketServer import ThreadingMixIn
-
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 
 import edge_lake.cmd.member_cmd as member_cmd
 import edge_lake.generic.params as params
@@ -121,6 +116,7 @@ http_methods_ = {
     "file retrieve":    "get",
     "test":             "get",
     "wait":             "get*post",
+    "subprocess":       "get*post",
 }
 
 rest_stat_ = {}         # Collect statistics

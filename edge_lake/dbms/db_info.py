@@ -1733,9 +1733,15 @@ def tsd_row_id_select(status, hash_value: str):
 # ==================================================================
 # Count Rows
 # ==================================================================
-def get_rows_count(status,dbms_name:str, table_name:str):
+def get_rows_count(status, dbms_name:str, table_name:str, estimate:bool, where_cond:str):
+    '''
+    estimate - an estimated value
+    where_cond - for example - WHERE timestamp BETWEEN '2023-01-01' AND '2023-12-31';
+    where_cond - for example - timestamp > '2023-01-01';
+    '''
 
     if len(dbms_name) > 6 and dbms_name[:6] == "blobs_":
+        # Blobs DBMS
         db_connect = get_connection(dbms_name)
         if db_connect == None:
             status.add_error("Database \'%s\' not declared for process" % dbms_name)
@@ -1745,7 +1751,22 @@ def get_rows_count(status,dbms_name:str, table_name:str):
             if with_connection_pool(dbms_name):
                 free_db_connection(dbms_name, db_connect)  # Place the connection on the free list
     else:
-        sql_string = "SELECT count(*) from %s;" % table_name
+        # SQL DBMS
+        if estimate:
+            # estimate the numer of rows
+            db_connect = get_connection(dbms_name)
+            if db_connect == None:
+                status.add_error("Database \'%s\' not declared for process" % dbms_name)
+                return 0
+            if db_connect.is_stat_support():
+                # Is statistics supported - can satisfy the number of rows from statistics
+                rows_count = db_connect.estimate_rows(status, table_name, where_cond)
+                return rows_count
+
+        if where_cond:
+            sql_string = f"SELECT count(*) from {table_name} WHERE {where_cond};"
+        else:
+            sql_string = "SELECT count(*) from %s;" % table_name
 
         ret_val, data_list = select_rows_list(status, dbms_name, sql_string, 0)
 

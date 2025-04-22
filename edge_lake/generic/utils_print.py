@@ -24,6 +24,28 @@ print_mutex2 = threading.Lock()  # variable on the class level are static
 
 new_line_counter = 0  # counts new lines
 
+ansi_codes_ = {
+    "red" : ["\033[31m",    "\033[0m"],
+    "green" : ["\033[32m", "\033[0m"],
+    "yellow" : ["\033[33m", "\033[0m"],
+    "blue" : ["\033[34m", "\033[0m"],
+    "magenta" : ["\033[35m", "\033[0m"],
+    "cyan" : ["\033[36m", "\033[0m"],
+    "white" : ["\033[37m", "\033[0m"],
+    "reset" : ["\033[0;0m", "\033[0m"],
+
+    # Background colors
+    "bg_red": ["\033[41m", "\033[0m"],
+    "bg_green": ["\033[42m", "\033[0m"],
+    "bg_yellow": ["\033[43m", "\033[0m"],
+    "bg_blue": ["\033[44m", "\033[0m"],
+    "bg_magenta": ["\033[45m", "\033[0m"],
+    "bg_cyan": ["\033[46m", "\033[0m"],
+    "bg_white": ["\033[47m", "\033[0m"]
+}
+
+max_table_length_ = 100
+
 # =======================================================================================================================
 # A nested table created by individual steps that create the title and columns
 # =======================================================================================================================
@@ -207,7 +229,7 @@ def output(info, is_newLine):
 # =======================================================================================================================
 # Output box messages
 # =======================================================================================================================
-def output_box(info_string):
+def output_box(info_string, color = "red"):
 
     # remove '\r' and split by line
     info_array = info_string.replace("\r","").split('\n')
@@ -219,6 +241,9 @@ def output_box(info_string):
             box_length = len(line)
 
     print_mutex.acquire()
+
+    if color and color in ansi_codes_:
+        print(ansi_codes_[color][0])    # Start color
 
     try:
 
@@ -240,6 +265,10 @@ def output_box(info_string):
         pass
 
     finally:
+
+        if color and color in ansi_codes_:
+            print(ansi_codes_[color][1])  # Start color
+
         print_mutex.release()
 
     output("", True)
@@ -564,8 +593,8 @@ def output_nested_lists(nested_lists: list, header, column_names, get_info_str: 
                             pass
 
                     length = len(str(col_data))
-                    if length > 100:
-                        length = 100
+                    if length > max_table_length_:
+                        length = max_table_length_
                     if index >= len(columns_length):
                         columns_length.append(length)  # first value
                     elif length > columns_length[index]:
@@ -624,7 +653,7 @@ def output_nested_lists(nested_lists: list, header, column_names, get_info_str: 
         for columns in nested_lists:
             if columns:
                 out_str = ("\r\n" + line_prefix)
-                prefix = "\r\n"  # prefix is used for a column greater than 100 that is printed in multiple lines
+                prefix = out_str  # prefix is used for a column greater than max_table_length_ (default 100) that is printed in multiple lines
                 for index, col_data in enumerate(columns):
                     if column_names and format_values[index] == '-':
                         continue  # Skip this column
@@ -646,7 +675,7 @@ def output_nested_lists(nested_lists: list, header, column_names, get_info_str: 
                         else:
                             # String
                             data_str = str(col_data).replace('\r','').replace('\n',' ').replace('\t',' ')
-                            if len(data_str) <= 100:
+                            if len(data_str) <= max_table_length_:
                                 out_str +=data_str.ljust(length) + '|'
                             else:
                                 # print multiple lines
@@ -654,8 +683,8 @@ def output_nested_lists(nested_lists: list, header, column_names, get_info_str: 
                                 while offset < len(data_str):
                                     if offset:
                                         out_str += prefix           # Empty lines to get to the column position
-                                    out_str += str(data_str[offset:offset + 100]).ljust(100) + '|'
-                                    offset += 100
+                                    out_str += str(data_str[offset:offset + max_table_length_]).ljust(max_table_length_) + '|'
+                                    offset += max_table_length_
                         prefix += ' '.ljust(length) + '|'
                     else:
                         extension = ' '.ljust(length) + '|'

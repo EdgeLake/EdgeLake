@@ -653,7 +653,9 @@ def __load_ledger(status: process_status, fname: str):
                 policy = restore_json(status, line)
 
                 if policy is None:
-                    status.add_error("Failed to process data from blockchain at line %u at file at: %s" % (line_counter, file_name))
+                    err_msg = "Failed to process data from a ledger file at line %u at file at: %s" % (line_counter, file_name)
+                    status.add_error(err_msg)
+                    utils_print.output_box(err_msg)
                     break
                 policy_type, policy_id = utils_json.get_policy_type_id(policy)
 

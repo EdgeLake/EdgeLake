@@ -19,6 +19,9 @@ import sys
 import time
 from datetime import datetime
 
+import os
+from contextlib import redirect_stdout, redirect_stderr
+
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.interpreter as interpreter
 import edge_lake.api.struct_tree as struct_tree
@@ -27,6 +30,7 @@ import edge_lake.generic.utils_io as utils_io
 import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.params as params
 import edge_lake.tcpip.mqtt_client as mqtt_client
+import edge_lake.cmd.member_cmd as member_cmd
 
 from edge_lake.generic.streaming_data import add_data
 from edge_lake.generic.params import get_param
@@ -36,7 +40,10 @@ clients_info_ = {
 
 }
 
-included_attr_ = ["id","name","source_timestamp","server_timestamp","status_code"]
+tag_info_ = {}              # The existing tag info (as a function of the path prefix)
+max_table_value_ = 0     # the value assigned to the last table created
+
+included_attr_ = ["id","name","source_timestamp","server_timestamp","status_code", "value"]
 # ----------------------------------------------------------------------
 # Info returned to the get processes command
 # ----------------------------------------------------------------------
@@ -104,13 +111,15 @@ def opcua_values(status, io_buff_in, cmd_words, trace):
     attr_included = conditions.get("include", None)
     if attr_included:
         if attr_included[0] == "all":
-            title = ["id","name","source_timestamp","server_timestamp","status_code", "value"]
+            title = included_attr_
         else:
             for entry in attr_included:
                 if entry not in included_attr_:
                     status.add_error(f"OPCUA: Wrong 'include' attribute in get opcua values command: '{entry}'")
                     return [process_status.ERR_process_failure, None]
-            title = attr_included + ["value"]
+            title = attr_included
+            if not "value" in attr_included:
+                title += ["value"]      # Always include value
     else:
         title = ["value"]
 
@@ -207,6 +216,8 @@ def opcua_namespace(status, io_buff_in, cmd_words, trace):
 #  get opcua struct where url = opc.tcp://10.0.0.111:53530/OPCUA/SimulationServer
 #  get opcua struct where url = opc.tcp://10.0.0.111:53530/OPCUA/SimulationServer and output = stdout and node="ns=0;i=2257" and attributes = *
 #  get opcua struct where url = opc.tcp://10.0.0.111:53530/OPCUA/SimulationServer and output = stdout and node="ns=6;s=MyObjectsFolder"
+#  get opcua struct where url = opc.tcp://127.0.0.1:4840/freeopcua/server and format = path and limit = 100 and node = "ns=2;s=DeviceSet" and class = variable and output = !tmp_dir/my_file.out
+#  get opcua struct where url = opc.tcp://127.0.0.1:4840/freeopcua/server and format = policy  and limit = 100 and node = "ns=2;s=DeviceSet" and class = variable and dbms = my_dbms and target = "local = true and master = !master_node" and output = !tmp_dir/my_file.out
 '''
 Filter sensor nodes:
 node.data_type: Determines the data type of the node (like Int32, Float, etc.).
@@ -219,6 +230,8 @@ Nodes with proper AccessLevel that allows reading should also be monitored.
 # ---------------------------------------------------------------------------------------
 def opcua_struct(status, io_buff_in, cmd_words, trace):
 
+    global max_table_value_
+
     if not opcua_installed_:
         status.add_error("Lib opcua not installed")
         return [process_status.Failed_to_import_lib, None]
@@ -229,6 +242,7 @@ def opcua_struct(status, io_buff_in, cmd_words, trace):
                 "user":                     ("str",     False,  False,  True),      # Username  (optional)
                 "password":                 ("str",     False,  False,  True),      # Password (optional)
                 "output":                   ("str",     False,  False,  True),      # The type of output - stdout or file
+                "append":                   ("bool",    False, False,   True),      # In file mode - append to the previous file (default)
                 "type" :                    ("str",     False, False,   False),     # Type of nodes to consider: Object, Variable etc
                 "limit":                    ("int",     False, False,   True),      # Max nodes to consider
                 "attributes":               ("str",     False, False,   False),     # Attribute names to consider or * for all
@@ -236,10 +250,14 @@ def opcua_struct(status, io_buff_in, cmd_words, trace):
                 "depth":                    ("int",     False, False,   True),      # Limit the depth of the traversal
                 "class":                    ("str",     False, False,   False),     # classes to consider: i.e. object, variable
                 "format":                   ("str",     False, False,   True),      # the type of output - "tree" (default), "get value", "run client"
-                "frequency":                ("str",     False, True,    True),      # If output generates "run_client" - the frequency of the "run client" command
-                "table":                    ("str",     False, True,    True),      # If output generates "run_client" - the table name of the "run client" command
+                "frequency":                ("str",     False, False,    True),      # If output generates "run_client" - the frequency of the "run client" command
+                "table":                    ("str",     False, False,    True),     # Table can be derived from the command - or from the policies that map tags to tables
                 "dbms":                     ("str",     False, True,    True),      # If output generates "run_client" - the dbms name of the "run client" command
                 "validate":                 ("bool",    False, False,   True),      # If output generates "run_client" - the dbms name of the "run client" command
+                "target":                   ("str",     False, False,   True),     # The blockchain insert params - For policy insertions to the blockchain:    Example target = "local = true and master = !master_node"
+                "schema":                   ("bool",    False, False,   True),     # generate the schema for the table representing the tags (create table insert)
+                "name":                     ("str",     False, False,   True),      # A unique name for 'run opcua client' command
+                # The blockchain insert params - For policy insertions to the blockchain:    Example target = "local = true and master = !master_node"
                 }
 
 
@@ -252,6 +270,7 @@ def opcua_struct(status, io_buff_in, cmd_words, trace):
     user = interpreter.get_one_value_or_default(conditions, "user", None)
     password = interpreter.get_one_value_or_default(conditions, "password", None)
     output_type = interpreter.get_one_value_or_default(conditions, "output", "stdout")
+    append_mode = interpreter.get_one_value_or_default(conditions, "append", False)
     limit = interpreter.get_one_value_or_default(conditions, "limit", 0)
     attributes = conditions["attributes"] if "attributes" in conditions else None
     node_id = interpreter.get_one_value_or_default(conditions, "node", None)     # namespace + id - example: ns=2;i=1002
@@ -260,7 +279,7 @@ def opcua_struct(status, io_buff_in, cmd_words, trace):
     output_format = interpreter.get_one_value_or_default(conditions, "format", "tree")
     validate_value = interpreter.get_one_value_or_default(conditions, "validate", False)
 
-    valid_formats = ["tree", "get_value", "run_client"]
+    valid_formats = ["tree", "path", "policy", "get_value", "run_client"]
     if not output_format in valid_formats:
         status.add_error("OPCUA Error: invalid output format, expected values are: " + ", ".join(valid_formats))
         return [process_status.ERR_command_struct, None]
@@ -304,7 +323,8 @@ def opcua_struct(status, io_buff_in, cmd_words, trace):
             return [process_status.Failed_opcua_process, None]
 
         file_handle = utils_io.IoHandle()
-        if not file_handle.open_file("append", file_name):
+        file_mode = "append" if append_mode else "new"      # Append to exiting file or delete previous file
+        if not file_handle.open_file(file_mode, file_name):
             status.add_error(f"OPCUA: Failed to open the output file using '{file_name}'")
             return [process_status.File_open_failed, None]
     else:
@@ -312,20 +332,23 @@ def opcua_struct(status, io_buff_in, cmd_words, trace):
 
     if output_format == "run_client":
         # Output the command to a "run client" command
-        frequency, dbms_name, table_name = interpreter.get_multiple_values(conditions, ["frequency", "dbms", "table"],
-                                                                           [None, None, None])
-        if counter != 3:
+        opcua_name, frequency, dbms_name, table_name = interpreter.get_multiple_values(conditions, ["name", "frequency", "dbms", "table"],
+                                                                           [None, None, None, None])
+        if not frequency or not opcua_name:
             # Command line does not have all the variables of the run client command
-            status.add_error(
-                f"OPCUA: Missing variables to generate 'run client' command: frequency = {frequency} and dbms = {dbms_name} and table = {table_name}")
+            # NOTE: Table and dbms can be derived from the command - or from the policies that map tags to tables
+            missing_attr = "name" if frequency else "frequency"
+            status.add_error(f"OPCUA: Missing '{missing_attr}' to generate 'run client' command")
             return [process_status.Failed_opcua_process, None]
+    else:
+        dbms_name = interpreter.get_one_value_or_default(conditions, "dbms", None)
 
     navigation_info = {
         "max_depth"     :   max_depth,          # if not 0, will limit the traversal to max_depth
         "attributes"    :   attributes,         # Dictionary of attributes to print or * for all or None
         "output_type"   :   output_type,        # Type of output - stdout or a file name
         "class"         :   node_class,         # Filter to allow one or more classes like: object, variable
-        "format"        :   output_format,      # tree (default), stats (statistics), get_value (get opcua value command), run client (run opcua client command)
+        "format"        :   output_format,      # tree (default), path (the full path name as a string). stats (statistics), get_value (get opcua value command), run client (run opcua client command)
 
         "file_handle"   : file_handle,           # Output file or None
 
@@ -335,7 +358,44 @@ def opcua_struct(status, io_buff_in, cmd_words, trace):
         "@limit": limit,  # Max nodes to visit
         "@nodes": [],  # Include nodes visited
 
+        "@dbms": dbms_name,    # The dbms name
+        "@table_id": 0,  # Table ID based on the blockchain policies
+        "@target" : None,   # Blockchain insert command to insert the policies
+        "@schema":  None,  # SQL CREATE TABLE statement for the tag
     }
+
+    if output_format == "policy":
+        # Create a policy for each entry --> load existing tag policies
+        if not dbms_name:
+            status.add_error("OPCUA: Missing dbms name in 'get opcua struct' command with 'format = policy'")
+            return [process_status.Failed_opcua_process, None]
+        ret_val = set_tag_info(status)
+        if ret_val:
+            return [process_status.Failed_opcua_process, None]
+        navigation_info["@table_id"] = max_table_value_      # New policies will use this as a starting value to determine table ID
+
+        bchain_insert = interpreter.get_one_value_or_default(conditions, "target", None)
+        if bchain_insert:
+            # Example for target: target = "local = true and master = !master_node"
+            navigation_info["@target"] = f"blockchain insert where {bchain_insert} and policy = "   # Blockchain insert command to insert the policies
+
+            schema = interpreter.get_one_value_or_default(conditions, "schema", None)       # Generate the create table stmt
+            if schema:
+                # Per table the following are replaced:
+                # [DBMS_NAME] with the DBMS name
+                # [TABLE_NAME] with the table name
+                # [DATA_TYPE] with the data type
+                table_schema = {
+                    "table" : {
+                        "name" : "[TABLE_NAME]",
+                        "dbms" : "[DBMS_NAME]",
+                        "create" : "CREATE TABLE IF NOT EXISTS [TABLE_NAME](row_id SERIAL PRIMARY KEY,  insert_timestamp TIMESTAMP NOT NULL DEFAULT NOW(),  tsd_name CHAR(3),  tsd_id INT,  timestamp timestamp not null default now(),  value [DATA_TYPE] ); CREATE INDEX [TABLE_NAME]_timestamp_index ON [TABLE_NAME](timestamp); CREATE INDEX [TABLE_NAME]_insert_timestamp_index ON [TABLE_NAME](insert_timestamp);",
+                        "source": "OPCUA Interface"
+                    }
+                }
+
+                navigation_info["@schema"] = utils_json.to_string(table_schema)
+
     output_txt = None
     ret_val = navigate_tree(status, connection, root, 0, navigation_info, type_dict, validate_value)  # Start navigating from the root node
 
@@ -351,24 +411,33 @@ def opcua_struct(status, io_buff_in, cmd_words, trace):
 
         elif output_format == "run_client":
             # Output the command to a "run client" command
-            # Set the multiple lines as a code block
-            output_txt = f"\r\n\n<run opcua client where url = {url} and frequency = {frequency} and dbms = {dbms_name} and table = {table_name} and nodes = {make_identifiers_output_list(100, navigation_info['@nodes'])}>"
+
+
+
+
+
+            table_string = f"and table = {table_name} " if table_name else ""
+            output_txt = f"\r\n\n<run opcua client where name = {opcua_name} and url = {url} and frequency = {frequency} and dbms = {dbms_name} {table_string}and nodes = {make_identifiers_output_list(100, navigation_info['@nodes'])}>"
+
+        elif file_handle and output_format == "path":
+            output_txt = ""     # only path strings are written to file, not the summaries
 
         else:
 
-            # get reply counters
-            output_table = []
-            for key, value in type_dict.items():
-                output_table.append((key, f"{value:,}"))
-            title = ["Type", "Counter"]
+            if not file_handle or output_format != "policy":
+                # get reply counters - ignore if policies are written to file as they are read using "process". The statistics will create an error
+                output_table = []
+                for key, value in type_dict.items():
+                    output_table.append((key, f"{value:,}"))
+                title = ["Type", "Counter"]
 
-            output_txt = utils_print.output_nested_lists(output_table,  "OPCUA Nodes Considered", title, True)
+                output_txt = utils_print.output_nested_lists(output_table,  "OPCUA Nodes Considered", title, True)
 
     if file_handle:
         if output_txt:
             file_handle.write_from_buffer(output_txt)
-            output_txt = None
         file_handle.close_file()
+        output_txt = ""
 
     utils_print.output("\r\n", True)    # Because of the printout of the bar
 
@@ -379,7 +448,7 @@ def opcua_struct(status, io_buff_in, cmd_words, trace):
 # ---------------------------------------------------------------------------------------
 def make_identifiers_output_list(max_line_length, nodes_list):
 
-    output_str = "["
+    output_str = "\r\n["
     line_length = 0
     first = True
     for entry in nodes_list:
@@ -480,7 +549,7 @@ def get_multiple_opcua_values(status, client, id_nodes, attr_included, read_meth
                             # only output failures
                             continue
                         # Node is available and was read from the OPCUA
-                        result_list.append((id_nodes[index], opcua_nodes[index].get_browse_name().Name, entry.SourceTimestamp, entry.ServerTimestamp, entry.StatusCode.name, entry.Value.Value))
+                        result_list.append((id_nodes[index], opcua_nodes[index].get_browse_name().Name.lower(), entry.SourceTimestamp, entry.ServerTimestamp, entry.StatusCode.name, entry.Value.Value))
                     else:
                         result_list.append((id_nodes[index], None, None, None, None, multiple_results[index]))
                 else:
@@ -493,7 +562,7 @@ def get_multiple_opcua_values(status, client, id_nodes, attr_included, read_meth
                             continue
                         # A value was retrieved from the OPCUA
                         if "name" in attr_included:     # The attribute name
-                            entry_info.append(opcua_nodes[index].get_browse_name().Name)
+                            entry_info.append(opcua_nodes[index].get_browse_name().Name.lower())
                         if "source_timestamp" in attr_included:     #  The timestamp of the value as determined by the data source (e.g., a sensor or device).
                             entry_info.append(entry.SourceTimestamp)
                         if "server_timestamp" in attr_included:     # The timestamp assigned by the OPC UA server when the data value was received or processed.
@@ -568,18 +637,30 @@ def navigate_tree(status, client, node, depth, navigation_info, type_dict, valid
         # Check if `source_node` exists and contains `nodeid`
         if hasattr(node, 'source_node') and hasattr(node.source_node, 'nodeid'):
             node_id = str(node.source_node.nodeid)
+            if node.source_node.nodeid.Identifier == 84:
+                # i=84 is a standard, well-known node in the OPC UA specification — it's the Objects Folder, which is the root for all user-defined nodes.
+                error_info = "Root Node - " # indicate this is a root node
+                if not len(node.children):
+                    error_info += "No Children - "
+            else:
+                error_info = "Child Node -"
+
+            node_id = error_info + node_id
         else:
             node_id = "Unknown"
 
-        status.add_error(f'OPCUA: Failed traversal on node: {node_id} (Error: {value})')
+        err_msg = f'OPCUA: Failed traversal on node: {node_id} (Error: {value})'
+        status.add_error(err_msg)
+        utils_print.output_box(err_msg)
+
         return process_status.Unrecognized_source_node
+
+
+    output_format = navigation_info["format"]  # Tree or get_value or run client
+    file_handle = navigation_info["file_handle"]
 
     if not navigation_info["class"] or  node_class in navigation_info["class"]:
         # filter by class (if specified)
-
-        output_format = navigation_info["format"]           # Tree or get_value or run client
-
-        file_handle = navigation_info["file_handle"]
 
         if validate_value:
             # READ a value, if read fails, ignore node
@@ -599,10 +680,9 @@ def navigate_tree(status, client, node, depth, navigation_info, type_dict, valid
             if read_status:
                 navigation_info["@nodes"].append(node.get_node_identifier())
 
-        if output_format != "tree" or file_handle:
+        if not (output_format == "tree" or output_format == "path" or output_format == "policy") or file_handle:
             # If printing a command or if output is to a file - print bar showing navigation status
             print_bar(navigation_info, type_dict) # Print a bar showing an asterisk every 100 nodes visited
-
 
         type_dict["total"] += 1             # Count nodes considered
         type_dict[node_class] += 1  # Count by class
@@ -620,10 +700,27 @@ def navigate_tree(status, client, node, depth, navigation_info, type_dict, valid
                 ret_val = navigate_tree(status, client, child, depth + 1, navigation_info, type_dict, validate_value)
                 if ret_val:
                     break
+        elif output_format == "path":
+            # This is an edge node
+            if not navigation_info["class"] or node_class in navigation_info["class"]:
+                # Only if no class, or the specific class is needed
+                ret_val = node.output_path(status, file_handle, depth)  # Output the node path
+                if ret_val:
+                    return ret_val
+        elif output_format == "policy":
+            # This is an edge node
+            if not navigation_info["class"] or node_class in navigation_info["class"]:
+                # Only if no class, or the specific class is needed
+                dbms_name = navigation_info["@dbms"]
+                navigation_info["@table_id"] += 1
+                new_table_id = navigation_info["@table_id"]
+                bchain_insert = navigation_info["@target"]      # A string to make the inserts of a TAG policy to a blockchain.
+                table_insert = navigation_info["@schema"]       # A string to make the inserts of a TABLE policy to a blockchain.
 
+                ret_val = node.output_policy(status, file_handle, depth, dbms_name, new_table_id, bchain_insert, table_insert)  # Output the node path
+                if ret_val:
+                    return ret_val
     return ret_val
-
-
 # ---------------------------------------------------------------------------------------
 # Disconnect to OPCUA
 # ---------------------------------------------------------------------------------------
@@ -666,17 +763,24 @@ def declare_connection(status:process_status, url: str, user: str, password: str
         status.add_error(f'Failed to identify OPC-UA against {url} (Error: {value})')
         client = None
     else:
-        try:
-            # Set the username and password
-            if user:
-                client.set_user(user)
-            if password:
-                client.set_password(password)
-            client.connect()
-        except:
-            errno, value = sys.exc_info()[:2]
-            status.add_error(f'Failed to connect to OPC-UA against {url} (Error: {value})')
-            client = None
+
+        if user:
+            client.set_user(user)
+        if password:
+            client.set_password(password)
+
+        with open(os.devnull, 'w') as devnull:  # This call is to supress stack printouts from threads in some connect failures
+            try:
+                with redirect_stdout(devnull), redirect_stderr(devnull):  # This call is to supress stack printouts from threads in some connect failures
+                    client.connect()
+            except Exception as e:
+                exc_type, exc_value = sys.exc_info()[:2]
+                if not str(exc_value):
+                    exc_value = type(e).__name__
+                error_msg = f'Failed to connect to OPC-UA against {url} (Error: {exc_value})'
+                status.add_error(error_msg)
+                utils_print.output_box(error_msg)
+                client = None
 
     return client
 
@@ -758,11 +862,8 @@ def run_opcua_client(dummy: str, conditions: dict):
         "counter" : 0,
     }
 
-    if dbms_name:
-        # id of this client is dbms + table
-        client_name = f"{dbms_name}.{table_name}"
-    else:
-        client_name = policy_id
+
+    client_name = conditions["name"][0]
 
     if not client_name in clients_info_ or clients_info_[client_name]["status"] == "terminated":
         clients_info_[client_name] = info_dict
@@ -784,6 +885,10 @@ def run_opcua_client(dummy: str, conditions: dict):
             status.add_error(err_msg)
             ret_val = process_status.Failed_OPC_CONNECT
         else:
+
+            ret_val = set_tag_info(status)  # Copy tag metadata
+            if ret_val:
+                return ret_val
 
             # Read according to the frequency
             while True:
@@ -812,7 +917,7 @@ def run_opcua_client(dummy: str, conditions: dict):
 
     utils_print.output("OPC-UA client process terminated: %s" % process_status.get_status_text(ret_val), True)
     if err_msg:
-        utils_print.output(err_msg, True)
+        utils_print.output_box(err_msg)
 
     info_dict["status"] = "terminated"
 
@@ -820,11 +925,19 @@ def run_opcua_client(dummy: str, conditions: dict):
 # Read data and send to broker ot buffers
 # ------------------------------------------------------------------------------------------------------------------
 def process_data(status, client, id_nodes, topic_name, user_id, prep_dir, watch_dir, err_dir, dbms_name, table_name):
+    global tag_info_
 
-    json_row = {
-        "timestamp" : None,             # First timestamp
-        "duration" : 0,
-    }
+    if table_name:
+        # All readings to the same table
+        single_table = True
+        json_row = {
+            "timestamp" : None,             # First timestamp
+            "duration" : 0,
+        }
+    else:
+        # each tag to a dedicated table
+        single_table = False
+        json_row = {}
 
     ret_val = process_status.SUCCESS
 
@@ -847,29 +960,84 @@ def process_data(status, client, id_nodes, topic_name, user_id, prep_dir, watch_
                     timestamp_last = timestamp
             attr_name, attr_val = normalize_attributes(entry[1], entry[5])
             if not attr_name:
-                status.add_error(f"Failed to process an entry with name: {entry[1]} and value {entry[5]}")
+                status.add_error(f"OPCUA Error: Failed to process an entry with name: {entry[1]} and value {entry[5]}")
                 ret_val = process_status.ERR_process_failure
                 break
-            json_row[attr_name] = attr_val
 
-        if timestamp_first:
-            # Add timestamp on the row - representing the first timestamp and the duration
-            try:
-                json_row["timestamp"] = timestamp_first.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-                json_row["duration"] = int((timestamp_last - timestamp_first).total_seconds() * 1000)
-            except:
-                pass
-
-        if not ret_val:
-            json_msg = utils_json.to_string(json_row)
-            if not json_msg:
-                status.add_error("Failed to process JSON with OPCUA data")
-                ret_val = process_status.ERR_process_failure
+            if single_table:
+                # A single table to cover the tag data
+                json_row[attr_name] = attr_val
             else:
-                if topic_name:
-                    ret_val = mqtt_client.process_message(topic_name, user_id, json_msg)  # Transfer data to MQTT Client
+                tag_key = entry[0]
+                if not tag_key in tag_info_:
+                    err_msg = f"OPCUA Error: No policies satisfies the needed namespace and nodeid: {tag_key}"
+                    status.add_error(err_msg)
+                    utils_print.output_box(err_msg)
+                    ret_val = process_status.ERR_process_failure
+                    break
                 else:
-                    ret_val, hash_value = add_data(status, "streaming", 1, prep_dir, watch_dir, err_dir, dbms_name, table_name, '0', '0', "json", json_msg)
+                    policy_inner = tag_info_[tag_key]
+                    if dbms_name:
+                        # User provided dbms name
+                        target_dbms = dbms_name
+                    elif "dbms" in policy_inner:
+                        # Tag policy provided dbms name
+                        target_dbms = policy_inner["dbms"]
+                    else:
+                        policy_id = policy_inner["id"] if "id" in policy_inner else "(Policy is missing an ID)"
+                        status.add_error(f"OPCUA Error: dbms name not specified in 'tag' policy {policy_id}")
+                        ret_val = process_status.ERR_process_failure
+                        break
+                    if "table" in policy_inner:
+                        # Tag policy provided dbms name
+                        target_table = policy_inner["table"]
+                    else:
+                        policy_id = policy_inner["id"] if "id" in policy_inner else "(Policy is missing an ID)"
+                        status.add_error(f"OPCUA Error: table name not specified in 'tag' policy {policy_id}")
+                        ret_val = process_status.ERR_process_failure
+                        break
+
+                    # different dbms and table per inset
+                    if timestamp_first:
+                        # Add timestamp on the row - representing the first timestamp and the duration
+                        try:
+                            json_row["timestamp"] = timestamp_first.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                        except:
+                            pass
+                    if not "timestamp" in json_row:
+                        err_msg = f"OPCUA Error: Failed to set a timestamp attribute using: '{timestamp_first}'"
+                        status.add_error(err_msg)
+                        utils_print.output_box(err_msg)
+                        break
+                    json_row["value"] = attr_val
+                    json_msg = utils_json.to_string(json_row)
+                    if not json_msg:
+                        status.add_error(f"OPCUA Error: Failed to process JSON with OPCUA data: '{str(json_row)}'")
+                        ret_val = process_status.ERR_process_failure
+                        break
+                    ret_val, hash_value = add_data(status, "streaming", 1, prep_dir, watch_dir, err_dir, target_dbms,
+                                                   target_table, '0', '0', "json", json_msg)
+
+
+        if single_table:
+            if timestamp_first:
+                # Add timestamp on the row - representing the first timestamp and the duration
+                try:
+                    json_row["timestamp"] = timestamp_first.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                    json_row["duration"] = int((timestamp_last - timestamp_first).total_seconds() * 1000)
+                except:
+                    pass
+
+            if not ret_val:
+                json_msg = utils_json.to_string(json_row)
+                if not json_msg:
+                    status.add_error("Failed to process JSON with OPCUA data")
+                    ret_val = process_status.ERR_process_failure
+                else:
+                    if topic_name:
+                        ret_val = mqtt_client.process_message(topic_name, user_id, json_msg)  # Transfer data to MQTT Client
+                    else:
+                        ret_val, hash_value = add_data(status, "streaming", 1, prep_dir, watch_dir, err_dir, dbms_name, table_name, '0', '0', "json", json_msg)
     else:
         ret_val = process_status.Failed_opcua_process
 
@@ -932,7 +1100,7 @@ def get_opcua_clients(status, io_buff_in, cmd_words, trace):
         counter = value["counter"]
         output_table.append((key, value["status"], value["frequency"], counter))
 
-    title = ["Client Name", "Status", "Frequency", "Rows"]
+    title = ["Client Name", "Status", "Frequency", "Reads"]
     output_txt = utils_print.output_nested_lists(output_table, "OPCUA Nodes values", title, True)
 
     return [process_status.SUCCESS, output_txt]
@@ -957,3 +1125,50 @@ def print_bar(navigation_info, type_dict):
         # Print the * - asterisk
         utils_print.output("  *  ", False)
         navigation_info["@tmp2"] = 0
+
+
+# ----------------------------------------------------------------------
+# Set a dictionary structure with the tag info - retrieved from the blockchain
+# ----------------------------------------------------------------------
+def set_tag_info(status):
+    global tag_info_
+    global max_table_value_
+
+    ret_val, policies = member_cmd.blockchain_get(status, ["blockchain", "get", "tag"], "", True)
+    if ret_val:
+        status.add_error("OPCUA: Failed to get tag info using the command: 'blockchain get tag'")
+        return ret_val
+    ret_val = process_status.SUCCESS
+
+    mapping_dict = {}  # Policy IDs to the policy info
+
+    for tag_policy in policies:
+        policy_inner = tag_policy["tag"]
+
+        if "table" in policy_inner:
+            # Table names are a number prefixed with 't' (i.e. t153) - find the largest number
+            # It is used to generate the next table name as t + ( max_table_value_ + 1) --> t154
+            table_value = policy_inner["table"]
+            if isinstance(table_value,str) and table_value[1:].isdigit():
+                table_value = int(table_value[1:])
+                if table_value > max_table_value_:
+                    max_table_value_ = table_value      # Keep the max value
+
+
+
+        # Keep the policies as f (prefix)
+        # The prefix is the unique entry key. For example: 'ns=2;s=D1001VFDStop'
+        if "ns" in policy_inner:
+            if "node_iid" in policy_inner:
+                # This is the namespace + node id
+                key = f"ns={policy_inner['ns']};i={policy_inner['node_iid']}"
+                mapping_dict[key] = policy_inner
+
+            if "node_sid" in policy_inner:
+                # This is the namespace + path prefix
+                key = f"ns={policy_inner['ns']};s={policy_inner['node_sid']}"
+                mapping_dict[key] = policy_inner
+
+    tag_info_ = mapping_dict        # Reset previous and Make global
+
+    return ret_val

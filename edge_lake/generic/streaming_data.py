@@ -390,12 +390,20 @@ def add_data_prep_to_watch_dir(status, prep_dir, watch_dir, err_dir, dbms_name, 
         # Update the aggregations object for this table
         json_data = utils_json.str_to_json("[" + user_data.replace("\n",',') + ']')
         if json_data:
-            ret_val, updated_data = version.process_agg_events(status, dbms_name, table_name, None, json_data)
-            if ret_val ==  process_status.UPDATE_BOUNDS:
+            ret_val, updated_data, encoding = version.process_agg_events(status, dbms_name, table_name, None, json_data)
+            if ret_val == process_status.IGNORE_EVENT:
+                # Ignore the operator process as it will be written (using aggregations) when time slot is full
+                return process_status.SUCCESS
+
+            if ret_val ==  process_status.AGGREGATE:
+                table_name = f"{encoding}_{table_name}"  # set to aggregation table name with the encoding type as a prefix
+                instructions = "0"  # Disable the instructions as they relate to the source table
                 # restructure as a string
                 new_data = utils_json.to_string(updated_data)[1:-1].replace("},", "}\n")
-            else:
+            elif ret_val == process_status.SUCCESS:
                 new_data = user_data
+            else:
+                return ret_val      # Error
     else:
         new_data = user_data
 

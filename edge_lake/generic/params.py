@@ -16,6 +16,7 @@ import edge_lake.generic.utils_data as utils_data
 import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.utils_columns as utils_columns
 import edge_lake.cmd.member_cmd as member_cmd
+from edge_lake.tcpip.net_utils import get_dns
 
 # List of chars that terminate a key
 end_key_chars = {
@@ -38,6 +39,8 @@ cond_signs = {
     "!=" : 1,
     "not" : 1,
     "contains" : 1,
+    "startswith" : 1,
+    "endswith" : 1,
 }
 
 al_func_ = {        # ANyLog Functions
@@ -71,10 +74,20 @@ else:
     os_wind = False
 
 def init(home_path):
-    add_param("ip",tcpip_server.get_ip() )  # add default IP
-    add_param("external_ip", tcpip_server.get_external_ip())  # add external IP
+
+    local_ip = tcpip_server.get_ip()
+    add_param("ip",local_ip )  # add default IP
+    external_ip = tcpip_server.get_external_ip()
+    add_param("external_ip", external_ip)  # add external IP
     add_param("anylog_server_port", str(2048))  # add sever default port
     add_param("anylog_rest_port", str(2148))  # add RESTful API port
+
+    local_dns = get_dns("127.0.0.0")
+    if local_dns:
+        add_param("dns", local_dns)  # The dns name of the local network
+    external_dns = get_dns(external_ip)
+    if external_dns:
+        add_param("external_dns", external_dns)  # the public dns name
 
     add_param("io_buff_size", str(TCP_BUFFER_SIZE))  # add default port
 
@@ -1169,8 +1182,6 @@ def get_translated_string(my_array, from_entry, to_enty, space_to_tab):
             break           # Was not translated
 
     return new_string
-
-
 # =======================================================================================================================
 # Return a string from an array of words with + sign between substrings
 # =======================================================================================================================

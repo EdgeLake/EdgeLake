@@ -10,6 +10,7 @@ import time
 import random
 import subprocess
 import copy
+import sys
 from difflib import SequenceMatcher
 
 import edge_lake.cmd.monitor as monitor
@@ -68,7 +69,6 @@ import edge_lake.api.opcua_client as opcua_client
 from edge_lake.json_to_sql.suggest_create_table import *
 from edge_lake.dbms.dbms import connect_dbms, get_real_dbms_name
 import edge_lake.generic.node_info as node_info
-import edge_lake.tcpip.port_forwarding as port_forwarding
 
 watch_directories = {}  # a dictionary of directories and threads watching each directory
 dir_mutex = threading.Lock()  # mutex to check threads considering directories
@@ -172,6 +172,8 @@ nodes_options_ = ['operator','publisher','query','master']
 nodes_pattern_ = '|'.join(map(re.escape, nodes_options_))   # This is to quickly find node type
 commands_options_ = ["subset", "timeout"]
 commands_pattern_ = "|".join(re.escape(word) for word in commands_options_)
+
+relay_info_ = {}        # Info on this node as a relay node
 
 
 
@@ -750,7 +752,7 @@ def unregister_directory_watch():
 
 # =======================================================================================================================
 # Retrieve from blockchain
-# Key is the type of JSON object top seatch, like operator, table
+# Key is the type of JSON object top search, like operator, table
 # json_search is an object that is searched in the JSON that satisfy the key. Example: "table" { "table_name" : !table_name,  "dbms_name" : !dbms_name}
 # =======================================================================================================================
 def blockchain_retrieve(status, blockchain_file, operation, key, json_search, where_cond):
@@ -1175,7 +1177,7 @@ def blockchain_add_local(status, io_buff_in, cmd_words, trace, func_params):
 # blockchain push !policy
 # blockchain push ignore !policy
 # =======================================================================================================================
-def blockchain_push_local(status, io_buff_in, cmd_words, trace, func_params):
+def blockchain_push(status, io_buff_in, cmd_words, trace, func_params):
 
     words_count = len(cmd_words)
     if words_count == 3:
@@ -1195,14 +1197,21 @@ def blockchain_push_local(status, io_buff_in, cmd_words, trace, func_params):
         ret_val, json_dictionary = prep_policy(status, cmd_words[policy_offset], None, func_params[0], compare_to_file)
 
         if not ret_val:
-            # if blockchain table was not created - create table ledger in blockchain dbms
-            if db_info.blockchain_create_local_table(status):
-                host = func_params[2]
-                if not db_info.blockchain_insert_entry(status, host, json_dictionary, ignore_error):  # ignore duplicate keys error
-                    ret_val = process_status.BLOCKCHAIN_operation_failed
 
+            if len(relay_info_) and relay_info_["stat"] == "on":
+                # Push to the blockchain platform
+                policy_id = utils_json.get_policy_id(json_dictionary)
+                policy_str = utils_json.to_string(json_dictionary)
+                ret_val = update_bchain_platform(status, io_buff_in, True, relay_info_["platform"], policy_id, policy_str, True)
             else:
-                ret_val = process_status.BLOCKCHAIN_operation_failed
+                # if blockchain table was not created - create table ledger in blockchain dbms
+                if db_info.blockchain_create_local_table(status):
+                    host = func_params[2]
+                    if not db_info.blockchain_insert_entry(status, host, json_dictionary, ignore_error):  # ignore duplicate keys error
+                        ret_val = process_status.BLOCKCHAIN_operation_failed
+
+                else:
+                    ret_val = process_status.BLOCKCHAIN_operation_failed
 
     if trace:
         if json_dictionary:
@@ -3410,6 +3419,10 @@ def preprocess_command(status, cmd_words, offset):
     index += 1  # set on instructions
 
     ret_val, dbms_name, conditions, cmd_str = get_sql_processing_info(status, cmd_words, words_count, index)
+
+    if cmd_str.startswith("get increments params"):
+        status.add_error("The command 'get increments params' needs to be executed locally")
+        ret_val = process_status.Local_cmd_only
 
     return [ret_val, destinations, dbms_name, conditions, cmd_str]
 
@@ -5667,7 +5680,28 @@ def send_message_reply(status, io_buff_in, command, reply_str, info_type):
 
     return ret_val
 
+# =======================================================================================================================
+# Execute a subprocess command
+# Example: subprocess ./script.sh
+# =======================================================================================================================
+def _run_subprocess(status, io_buff_in, cmd_words, trace):
 
+    try:
+        results = subprocess.run(cmd_words[1:])
+    except:
+        error_type, error_value = sys.exc_info()[:2]
+        err_msg = f"Subprocess Failed with error: {error_type} : {error_value}"
+        status.add_error(err_msg)
+        ret_val = process_status.Subprocess_failed
+    else:
+        if results.returncode == 0:
+            ret_val = process_status.SUCCESS
+        else:
+            ret_val = process_status.Subprocess_failed
+            if results.stderr:
+                err_msg = f"Subprocess Failed with error: {results.stderr}"
+                status.add_error(err_msg)
+    return ret_val
 # =======================================================================================================================
 # Execute system command
 # Example: system ls
@@ -6851,6 +6885,26 @@ def get_tables_for_dbms(status, dbms_name):
         table_list.sort()
 
     return table_list
+
+# =======================================================================================================================
+# Set max output table width
+# Command: set output table width 250
+# =======================================================================================================================
+def set_output_table_width(status, io_buff_in, cmd_words, trace):
+    global max_table_length_
+    width = cmd_words[4]
+    if width.isdigit():
+        value = int(width)
+        if value < 40:
+            status.add_error("Table width cannot be less than 40 characters")
+            ret_val = process_status.ERR_command_struct
+        else:
+            utils_print.max_table_length_ = value
+            ret_val = process_status.SUCCESS
+    else:
+        status.add_error("Table width is not an integer")
+        ret_val = process_status.ERR_command_struct
+    return ret_val
 # =======================================================================================================================
 # Get configuration params
 # get status, get connections,
@@ -6908,14 +6962,16 @@ def pre_process_command(status, io_buff_in, cmd_words):
             is_msg = True
             mem_view = memoryview(io_buff_in)
             command = message_header.get_command(mem_view)
-            msg_words = command.split()
-            words_array = msg_words
-            if len(words_array) < 2:
-                if len(words_array) == 1:
-                    status.add_error("Peer message error: Command structure error: <%s>" % words_array[0])
-                else:
-                    status.add_error("Peer message error: Command structure error")
-                ret_val = process_status.ERR_command_struct
+            words_array = utils_data.msg_to_cmd_words(status, command)
+            if not words_array:
+                ret_val = process_status.Error_in_msg_format
+            else:
+                if len(words_array) < 2:
+                    if len(words_array) == 1:
+                        status.add_error("Message format error: Command structure error: <%s>" % words_array[0])
+                    else:
+                        status.add_error("Message error: Command structure error")
+                    ret_val = process_status.Error_in_msg_format
         else:
             is_msg = False
             words_array = cmd_words
@@ -7234,7 +7290,7 @@ def get_data_struct_from_job(status, job_id, unique_job_id):
     j_instance.data_mutex_release(None, 'W')  # release the mutex that prevents conflict with the rest thread
     return reply
 # =======================================================================================================================
-# Assign values to variables - when a script is processe, assign the values provided with the scripts
+# Assign values to variables - when a script is process, assign the values provided with the scripts
 # Variables are declared with the keyword variables followed by variable names in parenthesis, example:
 # variables (var_name_1, var_name-2 ...)
 # =======================================================================================================================
@@ -8039,39 +8095,6 @@ def set_msg_rule(status, io_buff_in, cmd_words, trace):
     message_server.set_msg_rules(status, rule_name, identify_cond, mapping_cond)      # Keep the mapping info
 
     return ret_val
-# =======================================================================================================================
-# Access services running inside a pod from a local machine
-# Example: set port forward where pod_name = my_pod_name and namespace = my_namespace and local_port = 8080 and pod_port=80
-# =======================================================================================================================
-def set_port_forward(status, io_buff_in, cmd_words, trace):
-
-
-    if not port_forwarding.is_installed():
-        # portforward lib is not installed
-        status.add_error("portforward Lib failed to import")
-        return process_status.Failed_to_import_lib
-
-
-    if cmd_words[3] == "where":
-
-        #                                           Must       Add      Is
-        #                                           exists     Counter  Unique
-        keywords = {    "pod_name": ("str",         True,       False, True),
-                        "namespace": ("str",        False,      False, True),
-                        "local_port": ("int",       False,      False, True),
-                        "pod_port": ("int",         False,      False, True),
-                    }
-
-        ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
-        if ret_val:
-            # conditions not satisfied by keywords or command structure
-            return ret_val
-
-        # Start a thread for port forwarding
-        t = threading.Thread(target=port_forwarding.configure, args=("dummy", conditions), name=f"port_forwarding_{conditions['namespace'][0]}_{conditions['pod_name'][0]}")
-        t.start()
-
-
 
 # =======================================================================================================================
 # test process operator  -- > returns running if enabled
@@ -8201,13 +8224,14 @@ def _run_opcua_client(status, io_buff_in, cmd_words, trace):
         return process_status.ERR_command_struct
 
     keywords = {"url":                      ("str",     True,   False,  True),      # OPCUA URL
+                "name":                     ("str",     True,   False,  True),      # a unique connection name
                 "user":                     ("str",     False,  False,  True),      # Username  (optional)
                 "password":                 ("str",     False,  False,  True),      # Password (optional)
                 "frequency":                ("int.frequency",   True,   False,  False),     # Read frequency in seconds or hz
                 "node":                     ("str",     False,  False,   False),  # One or multiple nodes
                 "nodes":                    ("str",     False,  False, True),  # A list with one or more nodes
                 "policy":                   ("str",     False,  False,   True),   # A policy (if nodes are not specified)
-                "dbms":                     ("str",     False,  True,  True),  # DBMS name (if not provided in the policy)
+                "dbms":                     ("str",     True,  True,  True),  # DBMS name
                 "table":                    ("str",     False,  True, True),  # Table name (if not provided in a policy)
                 "topic":                    ("str",     False,  False, True),  # Assign the data to a topic
                 }
@@ -8218,16 +8242,6 @@ def _run_opcua_client(status, io_buff_in, cmd_words, trace):
         # conditions not satisfied by keywords or command structure
         return ret_val
 
-    if counter:
-        # With a database name and a table name
-        if counter != 2:
-            status.add_error("Run OPCUA cmd: Missing a database and a table name pair for OPCUA client")
-            return process_status.Error_command_params
-    else:
-        if not interpreter.get_one_value_or_default(conditions, "policy", None):
-            # user need to provide a dbms + table or policy id
-            status.add_error("Run OPCUA cmd: Missing policy id for OPCUA client")
-            return process_status.Error_command_params
 
     node =  interpreter.get_one_value_or_default(conditions, "node", None)      # one or more node = ...
     nodes = interpreter.get_one_value_or_default(conditions, "nodes", None)     # Optional a list of nodes
@@ -8426,6 +8440,7 @@ def _run_grpc_client(status, io_buff_in, cmd_words, trace):
                 "dbms": ("str", False, True, True),        # DBMS name (if not provided in the policy)
                 "table": ("str", False, True, True),       # Table name (if not provided in a policy)
                 "ingest": ("bool", False, False, True),    # False value means that AnyLog is not updated - default is True
+                "timeout": ("int", False, False, True),     # connection timeout in seconds - default is 5
                 "reconnect" : ("bool", False, False, True),    # True value - reconnect automatically if connection lost - default is False
                 "prep_dir": ("str", False, False, True),
                 "watch_dir":("str", False, False, True),
@@ -8510,14 +8525,19 @@ def _run_grpc_client(status, io_buff_in, cmd_words, trace):
 
     connection_id = conditions["name"][0]
 
-    if grpc_client.is_connected(connection_id):
-        status.add_error(f"Failed to subscribe to '{conn}' with '{connection_id}' as connection is already active")
-        ret_val =  process_status.NETWORK_CONNECTION_FAILED
+    if "timeout" in conditions and conditions["timeout"][0] == 0:
+        # If status is 0, exist grpc will not work
+        status.add_error("Timeout value in grpc needs to be a non 0 values represented in seconds, use 'reconnect = true' to ignore disconnect")
+        ret_val = process_status.ERR_command_struct
     else:
+        if grpc_client.is_connected(connection_id):
+            status.add_error(f"Failed to subscribe to '{conn}' with '{connection_id}' as connection is already active")
+            ret_val =  process_status.NETWORK_CONNECTION_FAILED
+        else:
 
-        # Start a thread for each proto file
-        t = threading.Thread(target=grpc_client.subscribe, args=("dummy", conditions, conn, grpc_dir, proto_name, connection_id, policy_id, mapping_policy), name=f"grpc_{conn}_{proto_name}")
-        t.start()
+            # Start a thread for each proto file
+            t = threading.Thread(target=grpc_client.subscribe, args=("dummy", conditions, conn, grpc_dir, proto_name, connection_id, policy_id, mapping_policy), name=f"grpc_{conn}_{proto_name}")
+            t.start()
 
     return ret_val
 
@@ -9834,16 +9854,8 @@ def blockchain_insert_all(status, mem_view, policy, is_local, blockchain_file, m
                 # Update the blockchain platform
 
                 if platform and len(platform):
-                    for platform_name in platform:
-                        if is_local:
-                            # Skipping policy check to avoid duplicate keys in the check of the policies in the local file (the policy was just updated on the local file)
-                            reply_val, reply = bplatform.blockchain_commit(status, platform_name, policy_id, policy_str, 0)  # We ignore errors as the network may be down
-                        else:
-                            commit_words = ["blockchain", "commit", "to", platform_name, policy_str]
-                            reply_val, reply = blockchain_commit(status, mem_view, commit_words, 0, None) # We ignore errors as the network may be down
-                        if reply_val and return_err:
-                            # if called from the CLI - an error message is returned
-                            ret_val = reply_val
+                    ret_val = update_bchain_platform(status, mem_view, is_local, platform, policy_id, policy_str, return_err)
+
 
     if policy_type == "operator" or policy_type == "cluster" or policy_type == "table":
         bsync.blockchain_stat.set_force_load()  # Force a reload of the metadata
@@ -9858,7 +9870,27 @@ def blockchain_insert_all(status, mem_view, policy, is_local, blockchain_file, m
 
 
     return ret_val
-
+# -----------------------------------------------------------------------------------------------------
+# Update one or more blockchain platforms
+# -----------------------------------------------------------------------------------------------------
+def update_bchain_platform(status, mem_view, is_local, platforms, policy_id, policy_str, return_err):
+    '''
+    is_local - Is update of the local ledger - if set to True, no validation of the policy is done before oit is send to the blockchain
+    platforms - a list of the blockchain platforms
+    return_err - if called from the CLI - an error message is returned
+    '''
+    ret_val = process_status.SUCCESS
+    for platform_name in platforms:
+        if is_local:
+            # Skipping policy check to avoid duplicate keys in the check of the policies in the local file (the policy was just updated on the local file)
+            reply_val, reply = bplatform.blockchain_commit(status, platform_name, policy_id, policy_str, 0)  # We ignore errors as the network may be down
+        else:
+            commit_words = ["blockchain", "commit", "to", platform_name, policy_str]
+            reply_val, reply = blockchain_commit(status, mem_view, commit_words, 0, None)  # We ignore errors as the network may be down
+        if reply_val and return_err:
+            # if called from the CLI - an error message is returned
+            ret_val = reply_val
+    return ret_val
 # -----------------------------------------------------------------------------------------------------
 # Update the blockchain platform with a new policy
 # Platform options
@@ -10184,8 +10216,12 @@ def _process_file(status, io_buff_in, cmd_words, trace):
         else:
             operation = cmd_words[offset + 1]
             text_opr = "CMD: File " + operation
-            file_name = params.get_value_if_available(cmd_words[offset + 2])
-            words_array = cmd_words
+            if len(cmd_words) <= offset + 2:
+                status.add_error(f"Faile to process the command: '{' '.join(cmd_words)}'") # Fixed a faiure with: dest= file and
+                ret_val = process_status.ERR_command_struct
+            else:
+                file_name = params.get_value_if_available(cmd_words[offset + 2])
+                words_array = cmd_words
 
     else:
         is_message = False
@@ -13162,14 +13198,126 @@ def get_executable_command(status, command_in, mem_view: memoryview):
 
     return command
 
+
+# =======================================================================================================================
+# get an optimized string for the increments function
+# =======================================================================================================================
+def get_increments_params(status, io_buff_in, cmd_words, trace):
+    keywords = {"dbms": ("str", True, False, True),
+                "table": ("str", True, False, True),
+                "column" :("str", True, False, True),
+                "where": ("str", False, False, False),
+                "format": ("format", False, False, False),
+                "data_points": ("int", False, False, False),
+                }
+
+    cmd_offset = get_command_offset(cmd_words)
+
+    if cmd_words[cmd_offset + 3] != "where":
+        status.add_error("Missing 'where' keyword in 'get increments params' command")
+        ret_val = process_status.ERR_command_struct
+        return [ret_val, None]
+
+
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, cmd_offset + 4, 0, keywords, False)
+    if ret_val:
+        return [ret_val, None]
+
+
+    dbms_name = interpreter.get_one_value(conditions, "dbms")
+    table_name = interpreter.get_one_value(conditions, "table")
+    column_name = interpreter.get_one_value(conditions, "column")
+
+    where_conditions = interpreter.get_one_value_or_default(conditions, "where", None)  # Where cond to the query
+    data_points = interpreter.get_one_value_or_default(conditions, "data_points", 1000)  # aiming at this number of rows
+
+    time_difference = utils_columns.str_to_timediff(where_conditions) if where_conditions else None
+
+    out_format = interpreter.get_one_value_or_default(conditions, "format", None)
+
+    rows_count = 0
+    '''
+    ret_val, rows_count = get_increments(status, io_buff_in, dbms_name, table_name, where_conditions)
+    if ret_val:
+        rows_count = -1     # We can still provide the values by some guessing
+    '''
+
+    time_unit, time_interval = unify_results.get_optimized_values(status, rows_count, time_difference, data_points)
+
+    if not time_unit:
+        reply = None
+        ret_val = process_status.ERR_command_struct
+    else:
+        ret_val = process_status.SUCCESS
+
+        if out_format == "json":
+            reply_dict = {
+                "dbms": f"{dbms_name}",
+                "table": f"{table_name}",
+                "column"    : f"{column_name}",
+                "where_cond" : f"{where_conditions}",
+                "rows"       : rows_count,
+                "time_unit":    f"{time_unit}",
+                "time_interval": time_interval,
+            }
+            reply = utils_json.to_string(reply_dict)
+        else:
+            reply = f"{time_unit},{time_interval},{column_name}"    # i.e.: day,3,timestamp
+
+    return [ret_val, reply]
+
+# =======================================================================================================================
+# get an estimated (or exact if dbms not supporting estimates) of the number of rows in all servers with the table.
+# Return the value representing the largest rows count from all the servers. It is used to determine the increments params
+# =======================================================================================================================
+def get_increments(status, io_buff_in, dbms_name, table_name, where_cond):
+
+
+    dict_key = f"increments_{threading.current_thread().name.lower()}"   # Where results are stored
+
+    rows_count_cmd = f"{dict_key}{{}} = run client (dbms={dbms_name}, table={table_name}) get rows count where dbms = {dbms_name} and table = {table_name} and estimate = true"
+
+    if where_cond:
+        rows_count_cmd += f" and where = \"{where_cond}\""
+
+    rows_count_cmd += " and format = json"
+
+    ret_val = process_cmd(status, rows_count_cmd, False, None, None, io_buff_in)
+
+    max_rows = -1       # Returns -1 if process failed
+    if not ret_val:
+        wait_cmd = f"wait 3 for !{dict_key}.diff == 0"  # wait 3 seconds or until the nodes replies - whichever is first
+        ret_val = process_cmd(status, wait_cmd, False, None, None, io_buff_in)
+        if not ret_val:
+            rows_per_node = params.get_value_if_available(f"!{dict_key}")
+            if rows_per_node:
+                # Multiple nodes replied - find the node with most rows - this number would determine the increment params
+                # here is an example of a reply: {"10.0.0.78:7848": "{\"nov.t13\": 1962}"}
+                rows_stats = utils_json.str_to_json(rows_per_node)
+                if rows_stats:
+                    max_rows = 0            # Get the node with most rows
+                    for value in rows_stats.values():
+                        if isinstance(value, str):
+                            value = utils_json.str_to_json(value)
+                        if isinstance(value, dict):  # the value shows table name + rows:
+                            rows = utils_json.get_inner(value)  # this would be 1962 in the example
+                            if isinstance(rows, int):
+                                if rows >= max_rows:
+                                    max_rows = rows
+
+
+    return [ret_val, max_rows]     # the estimated largest number of rows on one of the operators supporting the table
 # =======================================================================================================================
 # Get data distribution - similar to get rows count but on all operator nodes in the network that support the dbms and table
 # Example: get data distribution where dbms = litsanleandro and table = ping_sensor
 # =======================================================================================================================
 def get_data_distribution(status, io_buff_in, cmd_words, trace):
 
-    keywords = {"dbms": ("str", True, False, False),
-                "table": ("str", True, False, False),
+    keywords = {"dbms": ("str", True, False, True),
+                "table": ("str", True, False, True),
+                "estimate": ("bool", False, False, False),
+                "where": ("str", False, False, False),
+                "format": ("format", False, False, False),
                 }
 
 
@@ -13183,18 +13331,39 @@ def get_data_distribution(status, io_buff_in, cmd_words, trace):
     if ret_val:
         return [ret_val, None]
 
+    reply = ""
     dbms_name = interpreter.get_one_value(conditions, "dbms")
     table_name = interpreter.get_one_value(conditions, "table")
 
-    # The query for all nodes
-    al_cmd = f"get rows count where dbms = {dbms_name} and table = {table_name} and group = table and format = json".split()
+    estimate = interpreter.get_one_value_or_default(conditions, "estimate", False)       # Use estimation rather than row count
+    where_cond = interpreter.get_one_value_or_default(conditions, "where", None)        # Where cond to the query
 
-    aggregate_table = utils_print.PrintTable("")
-    aggregate_table.add_title("addr", "Address")
-    aggregate_table.add_title("type", "Node Type")
-    aggregate_table.add_title("name", "Node Name")
-    aggregate_table.add_title("rows", "Rows")   # Depending on the command issued
-    aggregate_table.add_title("percent", "Percent")  # Depending on the command issued
+    out_format = interpreter.get_one_value_or_default(conditions, "format", None)
+    if not out_format or out_format == "table":
+        is_table = True
+        aggregate_table = utils_print.PrintTable("")
+    else:
+        is_table = False  # Output in JSON
+        aggregate_dict = {}
+
+    # The query for all nodes
+    get_rows_cmd = f"get rows count where dbms = {dbms_name} and table = {table_name} and group = table and format = json"
+    if estimate:
+        get_rows_cmd += " and estimate = true"
+
+    al_cmd = get_rows_cmd.split()
+
+    if where_cond:
+        # Split will not work - where_cond is a single string
+        al_cmd += ["and", "where", '=', where_cond]
+
+
+    if is_table:
+        aggregate_table.add_title("addr", "Address")
+        aggregate_table.add_title("type", "Node Type")
+        aggregate_table.add_title("name", "Node Name")
+        aggregate_table.add_title("rows", "Rows")   # Depending on the command issued
+        aggregate_table.add_title("percent", "Percent")  # Depending on the command issued
 
     # nodes_list = metadata.get_all_operators_by_keys(status, "Rows", table_name, True)
     dest_keys = [
@@ -13208,14 +13377,15 @@ def get_data_distribution(status, io_buff_in, cmd_words, trace):
         for entry in nodes_list:
             ip = entry["ip"]
             port = entry["port"]
-
             ip_port = f"{ip}:{port}"
-            aggregate_table.add_entry("addr", ip_port, ip_port)  # The first column with the ip and port
 
-            aggregate_table.add_entry("type", ip_port, "operator")  # The policy type defined by the user
+            if is_table:
+                aggregate_table.add_entry("addr", ip_port, ip_port)  # The first column with the ip and port
 
-            if "name" in entry:
-                aggregate_table.add_entry("name", ip_port, entry["name"])  # The policy name
+                aggregate_table.add_entry("type", ip_port, "operator")  # The policy type defined by the user
+
+                if "name" in entry:
+                    aggregate_table.add_entry("name", ip_port, entry["name"])  # The policy name
 
 
             message[4] = ip_port        # Destination
@@ -13225,7 +13395,9 @@ def get_data_distribution(status, io_buff_in, cmd_words, trace):
             if ip and port:
                 run_client(status, io_buff_in, message, trace)  # Ask for the node status
 
-        aggregate_table.add_entry("addr", "total", "Total")  # The Last column with the total rows and percentage
+
+        if is_table:
+            aggregate_table.add_entry("addr", "total", "Total")  # The Last column with the total rows and percentage
 
         time.sleep(3)  # Wait for the reply
 
@@ -13254,38 +13426,44 @@ def get_data_distribution(status, io_buff_in, cmd_words, trace):
                         except:
                             rows_count = 0      # not available
                         else:
-                            total += rows_count
-                            aggregate_table.add_entry("rows", ip_port, rows_count)  # Node replied with: get metadata version
+                            if is_table:
+                                total += rows_count
+                                aggregate_table.add_entry("rows", ip_port, rows_count)  # Node replied with: get metadata version
+                            else:
+                                aggregate_dict[ip_port] = rows_count
 
-    aggregate_table.add_entry("rows", "total", format(total, ","))  # Node replied with: get metadata version
-    aggregate_table.add_entry("percent", "total", 100)  # Node replied with: get metadata version
+    if is_table:
+        aggregate_table.add_entry("rows", "total", format(total, ","))  # Node replied with: get metadata version
+        aggregate_table.add_entry("percent", "total", 100)  # Node replied with: get metadata version
 
     if not ret_val:
-        total_percent = 0
-        for index, entry in enumerate(nodes_list):
-            ip = entry["ip"]
-            port = entry["port"]
-            if ip and port:
-                ip_port = f"{ip}:{port}"
-                # Update the percentage
-                try:
-                    value = aggregate_table.get_entry("percent", ip_port)
-                    percent = int((value / total) * 100)
-                    aggregate_table.add_entry("rows", ip_port, format(value, ","))  # Replace with comma separated value
-                except:
-                    pass
-                else:
-                    if index == (len(nodes_list) - 1):
-                        # Last node in the list
-                        aggregate_table.add_entry("percent", ip_port, 100-total_percent)
+        if is_table:
+            total_percent = 0
+            for index, entry in enumerate(nodes_list):
+                ip = entry["ip"]
+                port = entry["port"]
+                if ip and port:
+                    ip_port = f"{ip}:{port}"
+                    # Update the percentage
+                    try:
+                        value = aggregate_table.get_entry("percent", ip_port)
+                        percent = int((value / total) * 100)
+                        aggregate_table.add_entry("rows", ip_port, format(value, ","))  # Replace with comma separated value
+                    except:
+                        pass
                     else:
-                        total_percent += percent
-                        aggregate_table.add_entry("percent", ip_port, percent)
+                        if index == (len(nodes_list) - 1):
+                            # Last node in the list
+                            aggregate_table.add_entry("percent", ip_port, 100-total_percent)
+                        else:
+                            total_percent += percent
+                            aggregate_table.add_entry("percent", ip_port, percent)
 
 
-        reply = aggregate_table.output("", True, "")
-    else:
-        reply = ""
+            reply = aggregate_table.output("", True, "")
+        else:
+            reply = utils_json.to_string(aggregate_dict)
+
 
     return [ret_val, reply]
 
@@ -14777,6 +14955,62 @@ def set_policy(status, io_buff_in, cmd_words, trace):
 
 
     return [ret_val, None]
+
+# ----------------------------------------------------------------------
+# Get the relay info
+# command: get relay
+# ----------------------------------------------------------------------
+def get_relay(status, io_buff_in, cmd_words, trace):
+    global relay_info_
+
+    if not len(relay_info_):
+        reply = "Relay node not declared"
+    else:
+        info_list = []
+
+        info_list.append((relay_info_["stat"], relay_info_["platform"][0]))
+
+        reply = utils_print.output_nested_lists(info_list, "", ["Status", "Platform"], True)
+
+    return [process_status.SUCCESS, reply]
+
+
+# ----------------------------------------------------------------------
+# Set the node to be a relay node
+# set relay where platform = ethereum and status = "on"
+# ----------------------------------------------------------------------
+def set_relay(status, io_buff_in, cmd_words, trace):
+
+    global relay_info_
+
+    if cmd_words[2] != "where":
+        return process_status.ERR_command_struct
+
+    keywords = {
+        #                 Must     Add      Is
+        #                 exists   Counter  Unique
+
+        "platform": ("str", True, False, False),    # Can support multiple
+        "status":   ("str", False, False, False),
+    }
+
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 3, 0, keywords, False)
+    if ret_val:
+        return ret_val
+
+    platform = interpreter.get_one_value(conditions, "platform")
+    relay_stat = interpreter.get_one_value_or_default(conditions, "status", "on")
+
+    if not bplatform.is_connected(platform):
+        ret_val = process_status.BLOCKCHAIN_not_recognized
+    else:
+        if relay_stat != "on" and relay_stat != "off":
+            return process_status.Error_command_params
+
+        relay_info_["platform"] = [platform]
+        relay_info_["stat"] = relay_stat
+    return ret_val
+
 # ----------------------------------------------------------------------
 # Set the node name
 # ----------------------------------------------------------------------
@@ -15746,6 +15980,8 @@ def get_rows_count(status, io_buff_in, cmd_words, trace):
     keywords = {"dbms": ("str", False, False, False),
                 "table": ("str", False, False, False),
                 "group": ("str", False, False, False),      # group by table or partition
+                "estimate": ("bool", False, False, False),  # True to use estimates if dbms supports
+                "where":    ("str", False, False, False),   # Where condition for the estimate - "date_column BETWEEN '2023-01-01' AND '2023-12-31'"
                 "format": ("format", False, False, False),
                 }
 
@@ -15767,11 +16003,15 @@ def get_rows_count(status, io_buff_in, cmd_words, trace):
         table_name = interpreter.get_one_value_or_default(conditions, "table", None)
         out_format = interpreter.get_one_value_or_default(conditions, "format", None)
         group_by = interpreter.get_one_value_or_default(conditions, "group", "partition")   # value is "table" or "partition"
+        estimate = interpreter.get_one_value_or_default(conditions, "estimate", False)  # Get an estimate of the number of rows
+        where_cond = interpreter.get_one_value_or_default(conditions, "where", False)  # Get an estimate of the number of rows
     else:
         dbms_name = None
         table_name = None
         out_format = None
         group_by = "partition"
+        estimate = False
+        where_cond = False
 
     if out_format and out_format == "json":
         json_struct = {}        # Organize in a JSON structure
@@ -15788,10 +16028,10 @@ def get_rows_count(status, io_buff_in, cmd_words, trace):
         for d_name in dbms_list:
             if d_name == "system_query":
                 continue    # Skip the system_query tables
-            get_rows_in_dbms_tables(status, group_by, d_name, out_format, json_struct, table_struct)
+            get_rows_in_dbms_tables(status, group_by, d_name, out_format, json_struct, table_struct, estimate, where_cond)
     elif not table_name:
         # Get all tables for the specific database
-        get_rows_in_dbms_tables(status, group_by, dbms_name, out_format, json_struct, table_struct)
+        get_rows_in_dbms_tables(status, group_by, dbms_name, out_format, json_struct, table_struct, estimate, where_cond)
 
     else:
         # Get a specific table in a database
@@ -15804,7 +16044,7 @@ def get_rows_count(status, io_buff_in, cmd_words, trace):
                 d_name = dbms_name
                 for partition_name in par_list:
                     par_name = partition_name["par_name"]
-                    rows_count = db_info.get_rows_count(status, dbms_name, par_name)
+                    rows_count = db_info.get_rows_count(status, dbms_name, par_name, estimate, where_cond)
                     if out_format == "json":
                         count_rows_json_format(json_struct, group_by, dbms_name, par_name, rows_count)
                     else:
@@ -15812,7 +16052,7 @@ def get_rows_count(status, io_buff_in, cmd_words, trace):
                         d_name = ""
         else:
             if db_info.is_table_exists(status, dbms_name, table_name):
-                rows_count = db_info.get_rows_count(status, dbms_name, table_name)
+                rows_count = db_info.get_rows_count(status, dbms_name, table_name, estimate, where_cond)
                 if out_format == "json":
                     json_struct[dbms_name + '.' + table_name] = rows_count
                 else:
@@ -15830,9 +16070,12 @@ def get_rows_count(status, io_buff_in, cmd_words, trace):
 # ------------------------------------------
 # Get the number of rows for all tables in a database
 # ------------------------------------------
-def get_rows_in_dbms_tables(status, group_by, dbms_name, out_format, json_struct, table_struct):
+def get_rows_in_dbms_tables(status, group_by, dbms_name, out_format, json_struct, table_struct, estimate, where_cond):
     '''
     If the call specified a specific database, database name is not included in the reply
+
+    estimate - true returns the estimated number of rows (if supported)
+    where_cond - added to the query - Example: "WHERE date_column BETWEEN '2023-01-01' AND '2023-12-31'"
     '''
 
     tables_list = db_info.get_database_tables_list(status, dbms_name)
@@ -15846,7 +16089,7 @@ def get_rows_in_dbms_tables(status, group_by, dbms_name, out_format, json_struct
         d_name = dbms_name
         for entry in tables_list:
             t_name = entry["table_name"]
-            rows_count = db_info.get_rows_count(status, dbms_name, t_name)
+            rows_count = db_info.get_rows_count(status, dbms_name, t_name, estimate, where_cond)
             if not rows_count and blobs_dbms:
                 continue        # Not returning 0 rows from blobs DBMS
             if out_format == "json":
@@ -15944,12 +16187,12 @@ def get_table(status, io_buff_in, cmd_words, trace):
                     rows_count = 0
                     for partition_name in par_list:
                         par_name = partition_name["par_name"]
-                        rows_count += db_info.get_rows_count(status, dbms_name, par_name)
+                        rows_count += db_info.get_rows_count(status, dbms_name, par_name, False, False)
                     info_struct["rows"] = rows_count
                     info_struct["partitions"] = len(par_list)
             else:
                 if db_info.is_table_exists(status, dbms_name, table_name):
-                    rows_count = db_info.get_rows_count(status, dbms_name, table_name)
+                    rows_count = db_info.get_rows_count(status, dbms_name, table_name, False, False)
                     info_struct["rows"] = rows_count
                     info_struct["partitions"] = 0
 
@@ -16956,7 +17199,7 @@ def set_replacement_ip(status, io_buff_in, cmd_words, trace):
             # Set the reply ip and port that is added to each AnyLog message header
             if ip_str == "dynamic":
                 net_utils.set_reply_ip("0.0.0.0", port_val)
-            elif not net_utils.test_ipaddr(ip_str, port_val):
+            elif not net_utils.test_network_addr(ip_str, port_val):
                 ret_val = process_status.ERR_source_IP_Ports
             else:
                 net_utils.set_reply_ip(ip_str, port_val)
@@ -17155,7 +17398,7 @@ _blockchain_methods = {
                 'keywords' : ["blockchain"]
                 }
             },
-    "push": {'command': blockchain_push_local,
+    "push": {'command': blockchain_push,
             'words_min' : 3,
             'help': {
                 'usage': "blockchain push [policy]",
@@ -17480,15 +17723,7 @@ _time_file_methods = {
             },
 }
 _reset_methods = {
-        "port forward": {'command': port_forwarding.reset_port_forward,
-                 'words_min': 4,
-                 'help': {
-                     'usage': "reset port forward where namespace = [namespace] and pod_name = [pod name]",
-                     'example': "reset port forward where namespace = test and pod = web-svc",
-                     'text': "reset Kubernetes port-forwarding for the given namespace and pod",
-                     'keywords': ["streaming"],
-                 }
-                 },
+
         "stats": {'command': reset_statistics,
                      'words_count': 10,
                      'help': {
@@ -17629,6 +17864,16 @@ _reset_methods = {
 
 }
 _set_methods = {
+        "output table width": {'command': set_output_table_width,
+                 'words_count': 5,
+                 'help': {
+                     'usage': "set output table width [table width]",
+                     'example': "set output table width 250",
+                     'text': "Configure the display width of a table in a report",
+                     'link': 'blob/master/anylog%20commands.md#set-command',
+                     'keywords': ["debug", "profile"],
+                 }
+                 },
 
         "profiler": {'command': set_profiler,
                      'words_min': 7,
@@ -17638,7 +17883,7 @@ _set_methods = {
                          'text': "Enable and disable profiling. Note: Profile libraries needs to be loaded per moudle using sys variables."\
                                  "i.e.: PROFILE_OPERATOR=true",
                          'link' : 'blob/master/profiling%20and%20monitoring%20queries.md#profiling',
-                         'keywords': ["debug", "profile"],
+                         'keywords': ["config"],
                      }
                      },
 
@@ -17663,15 +17908,6 @@ _set_methods = {
                          }
                          },
 
-        "port forward": {'command': set_port_forward,
-                        'words_count': 19,
-                        'help': {
-                            'usage': "set port forward where pod_name = [pod name] and namespace = [anylog namespace] and local_port = [local port] and pod_port= [podort]",
-                            'example': "set port forward where pod_name = my_pod_name and namespace = my_namespace and local_port = 8080 and pod_port=80",
-                            'text': "Declare a port forwarding to access services running inside a pod from your local machine.",
-                            'keywords': ["streaming"],
-                        }
-                        },
 
         "monitored nodes": {'command': set_monitored_nodes,
                 'words_min': 11,
@@ -17704,6 +17940,15 @@ _set_methods = {
                                 'keywords': ["cli", "configuration"],
                                 }
                             },
+        "relay": {'command': set_relay,
+                          'words_min': 6,
+                          'help': {
+                              'usage': "set relay where platform = [platform name] and status = [on/off]",
+                              'example': "set relay where platform = ethereum",
+                              'text': "Assign the role o f a relay to this node",
+                              'keywords': ["blockchain", "configuration"],
+                            }
+                          },
 
         "streaming condition": {'command': streaming_conditions.set_streaming_condition,
                           'words_min': 13,
@@ -18244,6 +18489,18 @@ _query_status_methods = {
 
 _get_methods = {
 
+        'relay': {
+            'command': get_relay,
+            'words_count': 2,
+            'help': {
+                'usage': 'get relay',
+                'example': 'get relay',
+                'text': 'Retrieve the relay info',
+                'keywords': ["blockchain", "configuration"],
+            },
+            'trace': 0,
+        },
+
         'opcua': {
             'command': opcua_client.get_opcua_clients,
             'words_count': 3,
@@ -18342,15 +18599,6 @@ _get_methods = {
                     'trace': 0,
                 },
 
-        "port forward": {'command': port_forwarding.get_port_forward,
-                  'words_count': 3,
-                  'help': {
-                      'usage': "get port forward",
-                      'example': "get port forward",
-                      'text': "Return the list of Kubernetes port-forwarding.",
-                      'keywords': ["streaming"],
-                    }
-                  },
 
         "msg rules": {'command': message_server.get_msg_rules,
               'words_count': 3,
@@ -18659,16 +18907,20 @@ _get_methods = {
         "rows count": {'command': get_rows_count,
                'words_min': 3,
                'help': {
-                   'usage': "get rows count where dbms = [dbms name] and table = [table name] and format = [json] and group =[table/partition]",
+                   'usage': "get rows count where dbms = [dbms name] and table = [table name] and format = [json] and group =[table/partition] and estimate = [true/false] and where = [time range condition]",
                    'example': "get rows count\n"
                               "get rows count where dbms = my_dbms and group = table\n"
                               "get rows count where dbms = my_dbms\n"
-                              "get rows count where dbms = my_dbms and table = my_table",
-                   'text': "Get the count of rows in the specified table or all tables asigned to the specified database. The group variable determines if partitioned table shows an aggregated value for all prtitions.",
+                              "get rows count where dbms = my_dbms and table = my_table\n"
+                              "get rows count where dbms = nov and table = bounds_table_2 and format = json and estimate = true\n"
+                              "get rows count where dbms = nov and table = bounds_table_2 and format = json and estimate = true and where = 'timestamp > '2023-01-01'",
+                   'text': "Get the count of rows in the specified table or all tables asigned to the specified database. The group variable determines if partitioned table shows an aggregated value for all prtitions.\n"
+                           "If estimate flag is set to 'true', and the database statistics can be queried, an estimated count is returned.",
                    'link' : "blob/master/sql%20setup.md#the-get-rows-count-command",
                    'keywords' : ["metadata", "data", "dbms"],
                     }
                },
+
         "data distribution": {'command': get_data_distribution,
                'words_count': 11,
                'help': {
@@ -18678,8 +18930,18 @@ _get_methods = {
                    'link': "blob/master/sql%20setup.md#the-get-data-distribution-command",
                    'keywords': ["metadata", "data", "dbms"],
                     }
-               },
+            },
 
+        "increments params": {'command': get_increments_params,
+                          'words_min': 15,
+                          'help': {
+                              'usage': "get increments params where dbms = [dbms name] and table = [table name] and column = [column name] and where = [where cond] and data_points = [int] and format = [table/json]",
+                              'example': 'get increments params where dbms = lightsanleandro and table = ping_sensor and column = sensor_timestamp and where = "timestamp >= \'2025-04-08 17:30:19.390017\' and timestamp <= \'2025-04-08 19:12:01.229118\'"',
+                              'text': "Calculate optimized params for an increment function.",
+                              'link': "master/queries.md#the-get-increment-params-command",
+                              'keywords': ["metadata", "data", "dbms"],
+                          }
+                          },
         "files count": {'command': get_files_count,
                    'words_min': 3,
                    'help': {
@@ -19258,10 +19520,20 @@ _get_methods = {
                   'usage': "get reply ip",
                   'example': "get reply ip",
                   'text': "The IP address to use for reply messages.",
-                  'link': "blob/master/network%20configuration.md#setting-a-different-ip-address-for-replies",
+                  'link': "blob/master/network%20configuration.md#setting-a-different-ip-address-for-replies.",
                   'keywords' : ["configuration"],
                   }
                 },
+        "dns name": {'command': net_utils.get_dns_name,
+                 'help': {
+                     'usage': "get dns name",
+                     'example': "get dns name\n"
+                                "get dns name where ip = 127.132.145.12",
+                     'text': "Return the DNS name for a given IP address.",
+                     'link' : "blob/master/anylog%20commands.md#get-dns-name",
+                     'keywords': ["configuration"],
+                 }
+                 },
 
         "platform info": {'command': utils_monitor.get_platform_info,
                   'key_only': True,
@@ -19505,7 +19777,7 @@ commands = {
     },
 
     "drop network table": {'command': drop_network_table,
-                      'words_mon': 11,
+                      'words_min': 11,
                       'help': {
                           'usage': "drop network table where name = [table name] and dbms = [dbms name] and master = [master_node]",
                           'example': "drop network table where name = ping_sensor and dbms = lsl_demo and master = 10.0.0.25:2548",
@@ -19643,6 +19915,16 @@ commands = {
                  'text': 'Executes the specified OS command\n'
                          'timeout is an optional value allowing to exits after the threshold, default value is 5 and 0 value means no threshold.',
                  'keywords' : ["cli", "script"],
+                 },
+        'trace': 0,
+    },
+    'subprocess': {
+        'command': _run_subprocess,
+        'words_min': 2,
+        'help': {'usage': 'subprocess [process path and name] [arg list]',
+                 'example': 'subprocess ./script.sh',
+                 'text': 'Spawn new processes, connect to their input/output/error pipes, and obtain their return codes',
+                 'keywords': ["cli", "script"],
                  },
         'trace': 0,
     },
@@ -20265,7 +20547,8 @@ commands = {
                             'exit kafka\r\n'
                             'exit smtp\r\n'
                             'exit workers\r\n'
-                            'exit grpc all'
+                            'exit grpc all\r\n'
+                            'exit grpc ip:port\r\n'
                             'exit opcua 1\r\n'
                             'exit opcua all',
                  'text': 'exit node - terminate all process and shutdown\r\n'

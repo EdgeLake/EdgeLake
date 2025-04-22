@@ -232,8 +232,7 @@ def do_GET(status, cmd_words, offset):
     global keywords_get
     # Get params from command line
 
-    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 3 + offset, 0, keywords_get,
-                                                                   False)
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 3 + offset, 0, keywords_get, False)
     if ret_val:
         # conditions not satisfied by keywords or command structure
         return ret_val

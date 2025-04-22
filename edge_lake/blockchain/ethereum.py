@@ -10,19 +10,23 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import sys
 
+import edge_lake.blockchain.gateway as gateway
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.process_log as process_log
+
+
 try:
     import web3.logs
     from web3 import HTTPProvider, Web3
     from web3.middleware import geth_poa_middleware
 except:
+    errno, value = sys.exc_info()[:2]
+    err_msg = f"\n\rFailed to import a library: {errno} : {value}"
+    process_log.add("Error", err_msg)
+    print(err_msg, flush=True)
     web3_installed = False
 else:
     web3_installed = True
-
-import edge_lake.blockchain.gateway as gateway
-import edge_lake.generic.process_status as process_status
-import edge_lake.generic.process_log as process_log
-
 
 # import edge_lake.generic.interpreter as interpreter
 

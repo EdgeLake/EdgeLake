@@ -12,10 +12,12 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 from abc import ABC, abstractmethod
 
 import edge_lake.generic.process_status as process_status
-
+from edge_lake.generic import utils_json
+from edge_lake.generic.utils_data import get_unified_data_type
 
 try:
     from opcua import Client, ua
+    from opcua.ua import BrowseDirection
 
     node_class_name_ = {
         ua.NodeClass.Object: "object",
@@ -66,6 +68,16 @@ class ParsedNode(ABC):
         :param depth: Current depth in the tree (used for indentation)
         '''
         return process_status.SUCCESS
+    def output_policy(self, status, file_handle, depth, dbms_name, new_table_id, bchain_insert, table_insert):
+        '''
+        :param depth: Current depth in the tree (used for indentation)
+        '''
+        return process_status.SUCCESS
+    def output_path(self, status, file_handle, depth):
+        '''
+        :param depth: Current depth in the tree (used for indentation)
+        '''
+        return process_status.SUCCESS
 
     def get_node_key_type(self):
         '''
@@ -105,7 +117,7 @@ class ParsedNode(ABC):
 class OpcuaNode (ParsedNode):
 
     nodes_key_types_ = {
-        "Numeric":      "n",
+        "Numeric":      "i",
         "String":       "s",
         "Guid":         "g",
         "ByteString":   "b",
@@ -151,6 +163,177 @@ class OpcuaNode (ParsedNode):
         except:
             value = None
         return value
+
+    # -----------------------------------------------------------------------------------
+    # Print a policy representing the node
+    # -----------------------------------------------------------------------------------
+    def output_policy(self, status, file_handle, depth, dbms_name, new_table_id, bchain_insert, table_insert):
+        '''
+        :param file_handle: if data written to file
+        :param depth: Current depth in the tree (used for indentation)
+        :param dbms_name: the human-readable name for the given database
+        :param new_table_id: the id of the new table (a sequential number based on existing policies)
+        :param bchain_insert: A user provided blockchain insert statement
+        :param table_insert: A CREATE STMT to describe the table that contains the tag. This policy is pushed to the blockchain
+        '''
+
+        new_policy = {}
+
+        new_policy["dbms"] = dbms_name
+        table_name =  f"t{new_table_id}"
+        new_policy["table"] = table_name
+
+
+        path = []
+        ret_val = process_status.SUCCESS
+        node = self.source_node
+        try:
+            # Must exists
+            new_policy["class"] = self.get_node_class()
+            new_policy["ns"] = self.get_namespace()
+            node_iid = self.get_id()
+            if len(node_iid) > 2 and node_iid[:2] == 'i=':
+                # always starts with "i="
+                new_policy["node_iid"] = node_iid[2:]
+
+        except Exception as e:
+            # This part can't fail
+            status.add_error(f"OPCUA: Failed to retrieve path: {e}")
+            ret_val = process_status.Failed_opcua_process
+        else:
+            try:
+                # Optional
+                new_policy["node_sid"] = self.get_name()
+            except:
+                if not new_policy["node_iid"]:
+                    # Either iid or sid or both needs to exist
+                    status.add_error(f"OPCUA: Failed to retrieve node_iid and node name")
+                    ret_val = process_status.Failed_opcua_process
+            else:
+                try:
+                    data_type = self.get_node_data_type().name
+                    new_policy["datatype"] = data_type      # The OPCUA data type
+                except:
+                    pass
+
+                try:
+                    counter = 0
+                    while True:
+                        counter += 1
+                        browse_name = node.get_browse_name().Name
+                        if counter == 2:
+                            # Add the parent
+                            new_policy["parent"] = browse_name
+
+                        path.insert(0, browse_name)
+                        parent = node.get_parent()
+                        if not parent:
+                            break
+                        if parent.nodeid.Identifier == 84:  # RootFolder
+                            path.insert(0, "Root")
+                            break
+                        node = parent
+
+                except:
+                    pass
+
+
+        if not ret_val:
+            if table_insert:
+                # WRITE THE "CREATE TABLE" POLICY with the AnyLog data type
+                # Per table the following are replaced:
+                # [DBMS_NAME] with the DBMS name
+                # [TABLE_NAME] with the table name
+                # [DATA_TYPE] with the data type
+                tag_table = table_insert.replace("[DBMS_NAME]", dbms_name, 1)
+                tag_table = tag_table.replace("[TABLE_NAME]", table_name)
+
+                if data_type.endswith("[]"):
+                    # Every basic type can be used as an array (e.g., Int32[], String[]).
+                    anylog_data_type = "varchar"
+                else:
+                    anylog_data_type = get_unified_data_type(data_type.lower())     # get the AnyLog data type
+                    if not anylog_data_type:
+                        anylog_data_type = "varchar"
+                tag_table = tag_table.replace("[DATA_TYPE]", anylog_data_type)
+
+
+            new_policy["path"] = "/".join(path)
+            tag_policy = {
+                "tag": new_policy
+            }
+
+            if file_handle:
+                info_str = utils_json.to_string(tag_policy)
+                if info_str:
+                    if bchain_insert:
+                        # add the insert statement
+                        info_str = bchain_insert + info_str + "\n"
+                        if table_insert:
+                            # push the schema (create table) policy
+                            info_str += bchain_insert + tag_table + "\r\n"
+
+                    if not file_handle.append_data(info_str):
+                        status.add_error(f"OPCUA: Failed to write into output file: {file_handle.get_file_name()}")
+                        ret_val = process_status.File_write_failed
+            else:
+                if bchain_insert:
+                    # print policies + inserts
+                    info_str = utils_json.to_string(tag_policy)
+                    if info_str:
+                        info_str = bchain_insert + info_str + "\r\n"
+                        utils_print.output(info_str, False)
+                else:
+                    # Only show the policies
+                    utils_print.jput(tag_policy, False, indent=4)
+
+                if table_insert:
+                    # Show the schema
+                    info_str = bchain_insert + tag_table + "\r\n"
+                    utils_print.output(info_str, False)
+
+        return ret_val
+
+    # -----------------------------------------------------------------------------------
+    # Print the node full path
+    # -----------------------------------------------------------------------------------
+    def output_path(self, status, file_handle, depth=0):
+        '''
+        :param file_handle: if data written to file
+        :param depth: Current depth in the tree (used for indentation)
+        '''
+
+        path = []
+        ret_val = process_status.SUCCESS
+        node = self.source_node
+        try:
+            while True:
+                browse_name = node.get_browse_name().Name
+
+                path.insert(0, browse_name)
+                parent = node.get_parent()
+                if not parent:
+                    break
+                if parent.nodeid.Identifier == 84:  # RootFolder
+                    path.insert(0, "Root")
+                    break
+                node = parent
+
+        except Exception as e:
+            status.add_error(f"OPCUA: Failed to retrieve path: {e}")
+            ret_val = process_status.Failed_opcua_process
+
+        else:
+            info_str = "\n"+"/".join(path)
+            if file_handle:
+                if not file_handle.append_data(info_str):
+                    status.add_error(f"OPCUA: Failed to write into output file: {file_handle.get_file_name()}")
+                    ret_val = process_status.File_write_failed
+            else:
+                utils_print.output(info_str, False)  # Print the node attribute name and value
+
+        return ret_val
+
     # -----------------------------------------------------------------------------------
     # Print the node info and attributes
     # -----------------------------------------------------------------------------------
@@ -162,6 +345,8 @@ class OpcuaNode (ParsedNode):
         :param attributes: specific attributes include in the output
         :param depth: Current depth in the tree (used for indentation)
         '''
+
+
 
 
         indentation = ' ' * depth * 2

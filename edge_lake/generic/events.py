@@ -16,10 +16,8 @@ import edge_lake.blockchain.blockchain as blockchain
 import edge_lake.generic.interpreter as interpreter
 import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.utils_print as utils_print
-import edge_lake.blockchain.metadata as metadata
-import edge_lake.dbms.ha as ha
+from edge_lake.generic.utils_threads import seconds_sleep, get_thread_name
 
-from edge_lake.generic.utils_threads import seconds_sleep
 #                                  Must     Add      Is
 #                                  exists   Counter  Unique
 drop_par = {"dbms_name": ("str", True, False, True),
@@ -76,12 +74,20 @@ def blockchain_master_to_node(status, io_buff_in, data, trace):
             caller_trace_level = data[2]    # Trace level on the caller - the caller is configured with: "trace level = 2 run blockchain sync"
 
             file_path, file_name, file_type = utils_io.extract_path_name_type(source_file)
-            new_file = file_path + file_name + ".new"
 
-            # Pull the ledger data from the database
+            if len(member_cmd.relay_info_):
+                # A relay node
+                new_file = file_path + file_name + get_thread_name() + ".new"  # because multiple threads may pull the file
+                if member_cmd.relay_info_["stat"] == "on":
+                    # Copy the local file
+                    cmd_words = ["blockchain", "checkout", "from", member_cmd.relay_info_["platform"][0], "to", new_file]
+                    ret_val, data = member_cmd.blockchain_checkout(status, io_buff_in, cmd_words, trace, None)
+                    file_retrieved = True if not ret_val else False
+            else:
+                new_file = file_path + file_name + ".new"
+                file_retrieved = db_info.blockchain_select(status, "json", new_file, "new")
 
-
-            if db_info.blockchain_select(status, "json", new_file, "new"):
+            if file_retrieved:
                 # Pull the blockchain data from a local database
                  # test struct of puled blockchain
                 ret_val = blockchain.validate_struct(status, new_file)
