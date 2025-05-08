@@ -29,6 +29,9 @@ delete_master_ = ["run", "client", None, "blockchain", "drop", "policy", "where"
 update_blockchain_ = ["blockchain", "commit", "to", None, None]
 delete_blockchain_ = ["blockchain", "drop", "policy", "from", None, "where", "id", "=", None]
 
+
+merge_counter_ = 0  # Counter for the number of time merge was done
+
 # ==================================================================
 # Delete the main ledger - Mutex is done on the caller
 # ==================================================================
@@ -500,7 +503,7 @@ def __get_json(status: process_status, key: str, value_pair, where_cond):
                 if key_val == '*' or key_val in json_description:
                     # test_condition returns: a) offset to then, b) 0 (False), 1 (True), -1 (Error)
                     json_inner = utils_json.get_inner(json_description)
-                    next_word, ret_code = params.process_analyzed_if(status, where_cond, 0, offset_then, with_paren,
+                    next_word, ret_code = params.process_analyzed_if(status, params, where_cond, 0, offset_then, with_paren,
                                                                      conditions_list, json_inner)
                     if ret_code == 1:
                         # This Policy satisfies the condition
@@ -580,7 +583,7 @@ def __read_json(status: process_status, fname: str, key: str, value_pair, where_
                         if key_val == '*' or key_val in json_description:
                             # test_condition returns: a) offset to then, b) 0 (False), 1 (True), -1 (Error)
                             json_inner = utils_json.get_inner(json_description)
-                            next_word, ret_code = params.process_analyzed_if(status, where_cond, 0, offset_then,
+                            next_word, ret_code = params.process_analyzed_if(status, params, where_cond, 0, offset_then,
                                                                              with_paren,
                                                                              conditions_list, json_inner)
                             if ret_code == 1:
@@ -650,7 +653,9 @@ def __load_ledger(status: process_status, fname: str):
                 policy = restore_json(status, line)
 
                 if policy is None:
-                    status.add_error("Failed to process data from blockchain at line %u at file at: %s" % (line_counter, file_name))
+                    err_msg = "Failed to process data from a ledger file at line %u at file at: %s" % (line_counter, file_name)
+                    status.add_error(err_msg)
+                    utils_print.output_box(err_msg)
                     break
                 policy_type, policy_id = utils_json.get_policy_type_id(policy)
 
@@ -749,7 +754,7 @@ def __validate_value_pair(json_description, value_pair):
                 elif isinstance(json_value, list):
                     # Blockchain value is a list - Find match in the list
                     if child_key:
-                        if not utils_json.test_nested_key_value(json_value, child_key, value):
+                        if not utils_json.test_nested_key_value(params, json_value, child_key, value):
                             ret_val = False
                             break
                     elif value not in json_value:
@@ -925,6 +930,7 @@ def merge_ledgers(status, io_buff_in, new_ledger, existing_ledger, trace):
     global update_blockchain_
     global delete_blockchain_
     global main_ledger_
+    global merge_counter_                       # Counter for the number of time merge was done
 
     ledger_list = []                            # a list with the blockchain objects - dynamically organized in this process
     anmp_list = []                                  # A list with AnyLog Network Management Policies
@@ -961,10 +967,12 @@ def merge_ledgers(status, io_buff_in, new_ledger, existing_ledger, trace):
 
 
                 # test the new ledger file
+                # Data List is the new ledger from the Master or Blockchain platform
                 for index, entry in enumerate(data_list):   # Go over all entries in the new ledger
                     if entry:
                         ret_val, global_policy = get_policy_object(status, index, entry)
                         if not ret_val:
+                            # Test that the format of the policy is correct
                             ret_val = policies.validate_policy(status, global_policy, unique_dict)
                             if ret_val:
                                 # Error in policy
@@ -998,7 +1006,7 @@ def merge_ledgers(status, io_buff_in, new_ledger, existing_ledger, trace):
                                                 break
 
 
-                if local_list:
+                if local_list:      # local_list includes all the policies in the current active blockchain.json
                     # The policies which are not on the new_ledger are:
                     # 1) Added to the new ledger
                     # 2) Resend to the blockchain platform
@@ -1017,12 +1025,18 @@ def merge_ledgers(status, io_buff_in, new_ledger, existing_ledger, trace):
                         else:
                             # Deleted policy
                             if not policy_id in index_by_id:
+                                # index_by_id is a dictionary to all the active policies
                                 # The policy id deleted from the main ledger
                                 continue
+
                             for index, tested_id in enumerate(main_ledger_):
                                 # Go over all policies to remove the deleted policy
                                 if policy_id == utils_json.get_object_id(tested_id):
+                                    if index >= len(ledger_list):
+                                        break               # Same policy delete multiple times
                                     del ledger_list[index]
+
+                                    del index_by_id[policy_id]  # Avoid sending the delete message twice
                                     break
                             # Will add next to the new ledger (in blockchain_write)
 
@@ -1084,8 +1098,16 @@ def merge_ledgers(status, io_buff_in, new_ledger, existing_ledger, trace):
 
             utils_io.write_unlock("blockchain")
 
+    merge_counter_ += 1  # Counter for the number of time merge was done
+
     return ret_val
 
+# ==================================================================
+# Return the merge counter
+# ==================================================================
+def get_merge_counter():
+    global merge_counter_  # Counter for the number of time merge was done
+    return merge_counter_
 # ==================================================================
 # Merge AnyLog Network Management Policies with the in-memory ledger
 # ==================================================================

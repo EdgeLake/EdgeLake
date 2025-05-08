@@ -45,3 +45,9 @@ class sql_storage(ABC):
 
     def store_file(self, *args):
         return False
+
+    def is_stat_support(self):
+        return False                                        # Can estimated number of rows be supported
+
+    def estimate_rows(status, table_name, where_cond):
+        return 0                                            # Estimate rows in a table (if supported by the database)

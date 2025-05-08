@@ -31,6 +31,11 @@ keywords_get = {"url": ("str", True, False, True),
                 "User-Agent" : ("str", False, False, True),
                 "subset" : ("str", False, False, True),
                 "validate" : ("str", False, False, True),       # Only validate the url page
+                "Authorization"  : ("str", False, False, True), # Used for authentication.
+                "Accept"  : ("str", False, False, True), # Specifies the response format.
+                "Cache-Control"  : ("str", False, False, True), #  Controls caching behavior
+                "X-Vault-Token"  : ("str", False, False, True), #  Specific to HashiCorp Vault.
+                "Content-Type" : ("str", False, False, True), #  Usually not required for GET but sometimes used when sending query parameters in the body (though unconventional)
                 }
 #                          Must     Add      Is
 #                          exists   Counter  Unique
@@ -227,8 +232,7 @@ def do_GET(status, cmd_words, offset):
     global keywords_get
     # Get params from command line
 
-    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 3 + offset, 0, keywords_get,
-                                                                   False)
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 3 + offset, 0, keywords_get, False)
     if ret_val:
         # conditions not satisfied by keywords or command structure
         return ret_val

@@ -13,6 +13,7 @@ except:
 
 import os
 import sys
+#import re      # AN issue during compile
 
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_json as utils_json
@@ -20,6 +21,9 @@ import edge_lake.generic.interpreter as interpreter
 import edge_lake.generic.utils_sql as utils_sql
 from edge_lake.dbms.database import sql_storage
 
+# Use regex to match 'old' with an optional trailing space, comma, or parenthesis
+# (?=[ ,)]) makes sure precision is followed by a space, comma, or closing parenthesis.
+#double_ = r'\bdouble\b(?!\s+precision(?=[ ,)])\b)',
 
 class PSQL(sql_storage):
     def __init__(self):
@@ -86,7 +90,7 @@ class PSQL(sql_storage):
 
         ret_val = False
 
-        stmt = 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp"';
+        stmt = 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp"'
 
         db_cursor = self.get_cursor(status)
         if db_cursor:
@@ -101,14 +105,23 @@ class PSQL(sql_storage):
     # =======================================================================================================================
     def modify_sql_create(self, sql_command):
 
-        sql_create = sql_command.replace(" double,", " double precision,")  # add "precision" if needed
+        sql_create = sql_command
 
         if self.unlogged:
             # replace "create table" --> "create unlogged table"
             if sql_command[:13].upper() == "CREATE TABLE ":
                 sql_create = "CREATE UNLOGGED TABLE " + sql_command[13:]
 
-        sql_create = sql_create.replace(" double)", " double precision)")  # double is last on the create stmt
+        # This code creates an isue during the compile:
+        # Replace a) _double_ or _double, or _double) with double precision
+        # sql_create = re.sub(double_, rf"\1double precision\2", sql_create)
+
+        index = sql_create.find(" double")
+        if index > 0 and sql_create.find(" double precision") == -1:    # Was not set with precision
+            # In potsgresql - "double" needs to be "double precision"
+            sql_create = sql_create.replace(" double ", " double precision ")  # if double is followed by a space
+            sql_create = sql_create.replace(" double)", " double precision)")  # if double is last on the create stmt
+            sql_create = sql_create.replace(" double,", " double precision,")  # if double is followed by a comma
 
 
         commands_array = [len(sql_create) - 1]  # No changes are needed
@@ -974,3 +987,57 @@ class PSQL(sql_storage):
 
         return f"INSERT INTO {table_name} VALUES " + ",\n".join(insert_statements) + ';'
 
+
+    # =======================================
+    # Reply that estimates are supported
+    # ======================================
+    def is_stat_support(self):
+        return True                                        # Can estimated number of rows be supported
+
+    # =======================================
+    # get estimated number of rows
+    # ======================================
+    def estimate_rows(self, status, table_name, where_cond):
+
+        db_cursor = self.get_cursor(status)
+        if db_cursor:
+
+            if where_cond:
+                sql_stmt = f"EXPLAIN (FORMAT JSON) SELECT COUNT(*) FROM {table_name} WHERE {where_cond}"
+            else:
+                sql_stmt = f"EXPLAIN (FORMAT JSON) SELECT COUNT(*) FROM {table_name}"
+
+            if self.execute_sql_stmt(status, db_cursor, sql_stmt):
+                get_next, json_data = self.fetch_list(status, db_cursor, 0)
+            else:
+                get_next = False
+                json_data = None
+
+            self.close_cursor(status, db_cursor)
+
+            if get_next and json_data and len(json_data):
+                 # Dig into the nested plan structure to find the first node with "Plan Rows"
+                return find_plan_rows(json_data)
+
+        return  0
+
+# ============================================================================
+# A result set that estimates the number of rows
+# Dig into the nested plan structure to find the first node with "Plan Rows"
+# ============================================================================
+def find_plan_rows(result_obj):
+
+    if (isinstance(result_obj, (tuple, list)) and len(result_obj)):
+        # Skip the nexted lists
+        return find_plan_rows(result_obj[0])
+    elif isinstance(result_obj, dict) and "Plan" in result_obj:
+        # Skip plan
+        return find_plan_rows(result_obj["Plan"])
+    elif isinstance(result_obj, dict) and "Plans" in result_obj:
+        # go into plans
+        return find_plan_rows(result_obj["Plans"])
+    elif isinstance(result_obj, dict) and "Plan Rows" in result_obj:
+        # Estimated rows count
+        return result_obj["Plan Rows"]
+
+    return 0

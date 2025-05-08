@@ -15,6 +15,7 @@ import edge_lake.generic.utils_columns as utils_columns
 import edge_lake.generic.utils_data as utils_data
 import edge_lake.generic.utils_print as utils_print
 import edge_lake.generic.trace_func as trace_func
+import edge_lake.cmd.member_cmd as member_cmd
 # ==================================================================
 # Create a dbms table, on the publisher node, per each issued query.
 # The table name inclused the job number.
@@ -34,7 +35,7 @@ unify_data_types = {
 # ==================================================================
 # Process a sql function that is translated to one function
 # ==================================================================
-def generic_function(select_parsed, projection, function_id, remote_dbms, remote_table, function, description, details,
+def generic_function(status, select_parsed, projection, function_id, remote_dbms, remote_table, function, description, details,
                      as_name, new_type):
     if not description:
         return ["", ""]
@@ -75,7 +76,7 @@ def generic_function(select_parsed, projection, function_id, remote_dbms, remote
 # Query: run client () sql lsl_demo include=(percentagecpu_sensor) and extend=(@table_name as table) "SELECT DISTINCT(value) FROM ping_sensor"
 # Local query: sql system_query select table_name, distinct_1  from query_13 group by table_name, distinct_1
 # ==================================================================
-def distinct_function(select_parsed, projection, function_id, remote_dbms, remote_table, function, description, details,
+def distinct_function(status, select_parsed, projection, function_id, remote_dbms, remote_table, function, description, details,
                      as_name, new_type):
     if description[-1] == ')':
         # Test for casting - Int16(column_name) --> get column_name
@@ -112,7 +113,7 @@ def distinct_function(select_parsed, projection, function_id, remote_dbms, remot
 # ==================================================================
 # Process a date_trunc function that is translated to one function
 # ==================================================================
-def date_trunc(select_parsed, projection, function_id, remote_dbms, remote_table, function, description, details,
+def date_trunc(status, select_parsed, projection, function_id, remote_dbms, remote_table, function, description, details,
                as_name, new_type):
 
     offset = description.find(',')      # Find a comma that splits between the the truncate type and the column name
@@ -155,7 +156,7 @@ def date_trunc(select_parsed, projection, function_id, remote_dbms, remote_table
 # ==================================================================
 # Process an extract function
 # ==================================================================
-def extract_function(select_parsed, projection, function_id, remote_dbms, remote_table, function, description, details,
+def extract_function(status, select_parsed, projection, function_id, remote_dbms, remote_table, function, description, details,
                      as_name, new_type):
     description_list = description.split()
 
@@ -187,7 +188,7 @@ def extract_function(select_parsed, projection, function_id, remote_dbms, remote
 # ==================================================================
 # Replace the count field name
 # ==================================================================
-def count_sql(select_parsed, projection, function_id, remote_dbms, remote_table, function, description, details,
+def count_sql(status, select_parsed, projection, function_id, remote_dbms, remote_table, function, description, details,
               as_name, new_type):
     if details.startswith("distinct ") or details.startswith("distinct("):
 
@@ -231,7 +232,7 @@ def count_sql(select_parsed, projection, function_id, remote_dbms, remote_table,
 # ==================================================================
 # process average
 # ==================================================================
-def avg_sql(select_parsed, projection, function_id, remote_dbms, remote_table, function, description, details, as_name,
+def avg_sql(status, select_parsed, projection, function_id, remote_dbms, remote_table, function, description, details, as_name,
             new_type):
     if select_parsed.is_replace_avg():
         # replace avg with count and sum
@@ -265,7 +266,7 @@ def avg_sql(select_parsed, projection, function_id, remote_dbms, remote_table, f
 
     else:
         # query is only on this node - avg returns float
-        new_field_name, new_data_type = generic_function(select_parsed, projection, function_id, remote_dbms,
+        new_field_name, new_data_type = generic_function(status, select_parsed, projection, function_id, remote_dbms,
                                                          remote_table, function, description, details, as_name,
                                                          new_type)
 
@@ -275,7 +276,7 @@ def avg_sql(select_parsed, projection, function_id, remote_dbms, remote_table, f
 # ==================================================================
 # process RANGE - |MAX - MIN|
 # ==================================================================
-def range_function(select_parsed, projection, function_id, remote_dbms, remote_table, function, description, details,
+def range_function(status, select_parsed, projection, function_id, remote_dbms, remote_table, function, description, details,
                    as_name, new_type):
     column_name = description
     column_type = db_info.get_column_type(remote_dbms, remote_table, column_name)
@@ -331,51 +332,127 @@ def get_increment_intervals(details):
 # Determine the optimized time intervals
 # Example: "select increments(hour, 1, timestamp), max(timestamp), min(a_current), ...
 # ==================================================================
-def get_optimized_intervals(select_parsed, details):
+def get_optimized_intervals(status, dbms_name, table_name, select_parsed, details):
+    '''
+    params status: status object
+    params dbms_name: the database name bein queried
+    params table_name: the table bein queried
+    params details: detailed[0]
+    '''
+
+    # Can get the data_points and a column name in whatever order
 
     column_name = details[0]
+    if len(details) == 1:
+        # Only column name
+        data_points = 1000  # a default
+    else:
+        # Column name and data_points
+        if column_name.isdigit():
+            data_points = int(column_name)
+            column_name = details[1]
+        else:
+            if details[1].isdigit():
+                data_points = int(details[1])
+            else:
+                status.add_error(f"Missing data_points in an increment query: {dbms_name}.{table_name} and data points are '{details}'")
+                return ["", "", "", ""]
 
     where_conditions = select_parsed.get_where()
 
-    time_difference = utils_columns.str_to_timediff(where_conditions)
+    time_difference = utils_columns.str_to_timediff(where_conditions) if where_conditions else None
+
     if not time_difference:
-        # Error in calculating increment
+        # No where condition - find the min and max timestamp
+        status.set_signal_status(False)  # If this thread is using rest - Avoid signaling this thead on this call as it will be aiting using "wait" call
+        job_id = status.get_unique_job_id()  # The job id of the Increment query
+        where_cond = None #member_cmd.get_time_range(status, status.get_io_buff(), dbms_name, table_name, column_name)
+        status.set_unique_job_id(job_id)  # Return the job id of the Increment query
+        if where_cond:
+            time_difference = utils_columns.str_to_timediff(where_cond) if where_conditions else None
+
+        if not time_difference:
+            status.add_error(f"Missing or wrong where condition in an increment query: {dbms_name}.{table_name} and where = '{where_conditions}'")
+            return ["", "", "", ""]
+
+    rows_count = 0
+
+    time_unit, time_interval =  get_optimized_values(status, rows_count, time_difference, data_points)
+    if not time_unit:
         return ["", "", "", ""]
-
-    days_diff = time_difference.days
-    seconds_diff = time_difference.seconds
-
-    if not days_diff:
-        minutes_diff = seconds_diff / 60
-        if minutes_diff <= 10:
-            time_unit = "second"
-            time_interval = optimized_interval(360, seconds_diff)
-        else:
-            time_unit = "minute"
-            time_interval = optimized_interval(360, minutes_diff)
-    else:
-        # In days
-        if days_diff <= 15:
-            time_unit = "hour"
-            time_interval = 1
-        elif days_diff <= 32:
-            time_unit = "hour"
-            time_interval = 2
-        else:
-            if days_diff <= 366:
-                time_unit = "day"
-                time_interval = 1
-            elif days_diff <= 800:
-                time_unit = "day"
-                time_interval = 4
-            else:
-                time_unit = "month"
-                time_interval = 1
 
     trunc_time = utils_sql.increment_date_types[time_unit]
 
     return [column_name, time_unit, time_interval, trunc_time]
+# ==================================================================
+# Based on the number data points needed and the number of rows in the tange:
+# Calculate the optimized time unit (sec, min, hour ...) and the interval as a number
+# ==================================================================
+def get_optimized_values(status, rows_count, time_difference, data_points):
+    # A few options here:
+    if not time_difference:
+        status.add_error("Missing or incorrect where condition with time range for a query with 'increments'")
+        return [None, None]
+    if not data_points:
+        status.add_error("Missing data_points for a query with 'increments'")
+        return [None, None]
 
+    time_unit, time_interval = increment_no_rows_count(time_difference, data_points)
+
+    '''
+    # ret val is with value or rows is at -1:   Estimate failed
+    if rows_count <= 0:
+        # Number of rows in range is not knows
+        time_unit, time_interval = increment_no_rows_count(time_difference)
+    else:
+        # Calculate based on an estimated number of rows in a server
+        time_unit, time_interval = increment_with_rows_count(time_difference, rows_count, data_points)
+    '''
+
+    return [time_unit, time_interval]
+# ==================================================================
+# Return the increment string based on the time range - no rows count
+# ==================================================================
+def increment_with_rows_count(time_difference, range_rows, target_intervals):
+    '''
+    params time_difference: the time difference between two dates (timedelta object)
+    params range_rows: the number of rows in the time range
+    params target_interval: the number time intervals needed.
+    return - a string Y - Y represents the time interval format.
+            Assuming even distribution of the rows in the timerange, Y is a number and a time unit (seconds, minutes, hours, days, weeks, months and years)
+            The result is not precise, but best delivered with a fast/efficient code
+
+    '''
+
+    # Estimate the average time per row
+    total_seconds = time_difference.total_seconds()
+    avg_time_per_row = total_seconds / range_rows
+
+    # Total time per interval
+    interval_seconds = avg_time_per_row * (range_rows / target_intervals)
+
+
+    for unit_name, unit_seconds in utils_sql.increment_units_:
+        if interval_seconds >= unit_seconds:
+            value = round(interval_seconds / unit_seconds)
+            return [unit_name, value]
+
+    return ["second", 1]        # Smallest unit
+# ==================================================================
+# Return the increment string based on the time range - no rows count
+# ==================================================================
+def increment_no_rows_count(time_difference, target_intervals):
+
+    # Total time per interval in seconds
+    interval_seconds = time_difference.total_seconds() / target_intervals
+
+
+    for unit_name, unit_seconds in utils_sql.increment_units_:
+        if interval_seconds >= unit_seconds:
+            value = round(interval_seconds / unit_seconds)
+            return [unit_name, value]
+
+    return ["second", 1]  # Smallest unit
 # ==================================================================
 # Get the interval based on the max points to show
 # ==================================================================
@@ -398,7 +475,7 @@ def optimized_interval(max_points, time_diff):
 # 'select date_trunc(\'day\',timestamp), (extract(hour FROM timestamp)::int / 1), max(timestamp), SUM(value), COUNT(value)
 # from ping_sensor where timestamp >= \'2020-06-01 19:34:09\' and timestamp < \'2020-09-29 19:34:09\' group by 1,2'
 # ==================================================================
-def increment_function(select_parsed, projection, function_id, remote_dbms, remote_table, function, description,
+def increment_function(status, select_parsed, projection, function_id, remote_dbms, remote_table, function, description,
                        details, as_name, new_type):
     time_interval = 0  # interval duration
     if description != "":
@@ -406,9 +483,9 @@ def increment_function(select_parsed, projection, function_id, remote_dbms, remo
         if len(details) == 3:
             column_name, time_unit, time_interval, trunc_time = get_increment_intervals(details)
             g_query = function + "(" + description + ')'  # keep original call
-        elif len(details) == 1:
+        elif len(details) <= 2:     # if 1 - only key field name (timestamp) is available, if 2 - the number of expected rows returned
             # Optimize time_unit info
-            column_name, time_unit, time_interval, trunc_time = get_optimized_intervals(select_parsed, details)
+            column_name, time_unit, time_interval, trunc_time = get_optimized_intervals(status, remote_dbms, remote_table, select_parsed, details)
             g_query = f"{function}({time_unit}, {time_interval}, {column_name})"    # new optimized description. i.e. (timestamp) --> (hour, 2, timestamp),
         else:
             time_interval = None
@@ -419,6 +496,10 @@ def increment_function(select_parsed, projection, function_id, remote_dbms, remo
     select_parsed.set_increment_info(g_query)   # Keep the info for trace mode (Grafana trace shows these values)
 
     column_type = db_info.get_column_type(remote_dbms, remote_table, column_name)
+
+    if not column_type:
+        # Wrong column name
+        return ["", ""]
 
     new_field_name = function + "_" + str(function_id)
 
@@ -498,7 +579,7 @@ def get_remote_query_increment(select_parsed, time_unit, trunc_time, column_name
 # process a function without a name
 # example: 'extract(minute from timestamp)::int / 5'
 # ==================================================================
-def no_name_function(select_parsed, projection, function_id, remote_dbms, remote_table, function, description, details,
+def no_name_function(status, select_parsed, projection, function_id, remote_dbms, remote_table, function, description, details,
                      as_name, new_type):
     source_sql = description.split()
 
@@ -522,7 +603,7 @@ def no_name_function(select_parsed, projection, function_id, remote_dbms, remote
     # 2) Process the sub function
 
     if name_pulled in sql_functions:
-        new_field_name, new_data_type = sql_functions[name_pulled](projection, function_id, remote_dbms, remote_table,
+        new_field_name, new_data_type = sql_functions[status, name_pulled](projection, function_id, remote_dbms, remote_table,
                                                                    name_pulled, sub_description, "", as_name,
                                                                    column_type)
     else:
@@ -895,11 +976,11 @@ def make_sql_stmt(status, select_parsed, is_suport_join):
 
             if not function_name in sql_functions:
                 # keep the function as is
-                new_column_name, new_data_type = generic_function(select_parsed, projection, function_id,
+                new_column_name, new_data_type = generic_function(status, select_parsed, projection, function_id,
                                                                   select_parsed.remote_dbms, select_parsed.remote_table,
                                                                   function_name, name_pulled, "", as_name, "")
             else:
-                new_column_name, new_data_type = sql_functions[function_name](select_parsed, projection, function_id,
+                new_column_name, new_data_type = sql_functions[function_name](status, select_parsed, projection, function_id,
                                                                               select_parsed.remote_dbms,
                                                                               select_parsed.remote_table, function_name,
                                                                               name_pulled, details, as_name, "")

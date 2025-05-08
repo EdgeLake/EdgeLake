@@ -336,7 +336,7 @@ class MONGO_INSTANCE:
     # =======================================================================================================================
     #  Update Mongo with a file
     # =======================================================================================================================
-    def store_file(self, status, dbms_name:str, table_name: str, file_path: str, file_name: str, blob_hash_value:str, archive_date:str, ignore_duplicate:bool, trace_level:int):
+    def store_file(self, status, dbms_name:str, table_name: str, file_path: str, file_name: str, blob_hash_value:str, archive_date:str, ignore_duplicate:bool, struct_fname:bool, trace_level:int):
         """
         Store file in MongoDB using gridfs.grid_file.GridOut format
         :args:
@@ -348,6 +348,7 @@ class MONGO_INSTANCE:
             blob_hash_value - unique file name
             archive_date - yy-mm-dd to allow search of files by date
             ignore_duplicate - True value means: if the file exists, the file is not added, but error is not returned
+            struct_fname - dbms.table are in the file name
         :params:
             status:bool
             full_path:str - file path
@@ -361,51 +362,97 @@ class MONGO_INSTANCE:
         else:
             sql_dbms = dbms_name
 
-
-        full_path = os.path.expanduser(os.path.expandvars(os.path.join(file_path, f"{sql_dbms}.{table_name}.{file_name}")))
-        # if file DNE print error message & return None as to not continue
-        if not os.path.isfile(full_path):
-            message = f'MongoDB (store file): Failed to locate image file: {file_name} - unable to continue'
-            ret_val = process_status.Wrong_path
+        if not file_path:
+            # Source was provides in a rest call
+            # the file is provided via REST in the buffer using: curl -X POST -H "command: file store where dbms = admin and table = files and dest = file_rest " -F "file=@testdata.txt" http://10.0.0.78:7849
+            ret_val, message = self. put_from_rest(status, file_name, dbms_name, table_name, blob_hash_value, archive_date )
         else:
 
-            per_table_hash = f"{table_name}.{blob_hash_value}"      # Allowing the same file in multiple tables
-            per_table_name = f"{table_name}.{file_name}"  # Allowing the same file in multiple tables
-            try:
-                with open(full_path, 'rb') as f:
-                    try:
-                        if not self.is_duplicate(status, dbms_name, per_table_name):
-                            file_data = f.read()
-                            content = self.cur_large.put(file_data, filename=per_table_name, _id = per_table_hash, table = table_name, archive_date = archive_date)
-                        else:
-                            if ignore_duplicate == False:
-                                # Duplicates do ot return an error - allowing multiple images to point to the same file
-                                message = f'MongoDB (store file): Duplicate file name {per_table_name} in DBMS {dbms_name}'
-                                ret_val = process_status.Already_exists # We have a unique index on file_name
-                    except pymongo.errors.DuplicateKeyError:
-                        message = f'MongoDB (store file): Duplicate Hash Value {per_table_hash} in DBMS {dbms_name}'
-                        ret_val = process_status.Already_exists
-                    except:
-                        errno, value = sys.exc_info()[:2]
+            if struct_fname:
+                # The dbms name and the table name are in the file name
+                # This is the case of data pushed to AnyLog using REST or MQTT and the data is mapped using a policy
+                # this process extends the file name with metadata (dbms.table)
+                # Or the user in the CLI provided a file name in that format
+                full_path = os.path.expanduser(os.path.expandvars(os.path.join(file_path, f"{sql_dbms}.{table_name}.{file_name}")))
+            else:
+                # Using the CLI - a file name is specified
+                full_path = os.path.expanduser(os.path.expandvars(os.path.join(file_path, file_name)))
+            # if file DNE print error message & return None as to not continue
+            if not os.path.isfile(full_path):
+                message = f'MongoDB (store file): Failed to locate blob file: {file_name} - unable to continue'
+                ret_val = process_status.Wrong_path
+            else:
+
+                per_table_hash = f"{table_name}.{blob_hash_value}"      # Allowing the same file in multiple tables
+                per_table_name = f"{table_name}.{file_name}"  # Allowing the same file in multiple tables
+                try:
+                    with open(full_path, 'rb') as f:
                         try:
-                            if value.__class__.__name__ == "FileExists":
-                                message = f'MongoDB: Duplicate Hash Value {per_table_hash} in DBMS {dbms_name}'
-                                ret_val = process_status.Already_exists
+                            if not self.is_duplicate(status, dbms_name, per_table_name):
+                                file_data = f.read()
+                                content = self.cur_large.put(file_data, filename=per_table_name, _id = per_table_hash, table = table_name, archive_date = archive_date)
+                            else:
+                                if ignore_duplicate == False:
+                                    # Duplicates do ot return an error - allowing multiple images to point to the same file
+                                    message = f'MongoDB (store file): Duplicate file name {per_table_name} in DBMS {dbms_name}'
+                                    ret_val = process_status.Already_exists # We have a unique index on file_name
+                        except pymongo.errors.DuplicateKeyError:
+                            message = f'MongoDB (store file): Duplicate Hash Value {per_table_hash} in DBMS {dbms_name}'
+                            ret_val = process_status.Already_exists
                         except:
-                            message = f'MongoDB (store file): Error updating database with file: {per_table_name} in DBMS: {dbms_name} with Error: {value}'
-                            ret_val = process_status.DBMS_error
-            except:
-                errno, value = sys.exc_info()[:2]
-                message = f'MongoDB (store file): Failed to open a file: {full_path} in DBMS: {dbms_name} with Error: {value}'
-                ret_val = process_status.File_open_failed
+                            errno, value = sys.exc_info()[:2]
+                            try:
+                                if value.__class__.__name__ == "FileExists":
+                                    message = f'MongoDB: Duplicate Hash Value {per_table_hash} in DBMS {dbms_name}'
+                                    ret_val = process_status.Already_exists
+                            except:
+                                message = f'MongoDB (store file): Error updating database with file: {per_table_name} in DBMS: {dbms_name} with Error: {value}'
+                                ret_val = process_status.DBMS_error
+                except:
+                    errno, value = sys.exc_info()[:2]
+                    message = f'MongoDB (store file): Failed to open a file: {full_path} in DBMS: {dbms_name} with Error: {value}'
+                    ret_val = process_status.File_open_failed
 
         if ret_val:
             status.add_error(message)
             if trace_level:
                 utils_print.output(message, True)
 
-
         return ret_val
+    # =======================================================================================================================
+    #  Write via REST call that provides the data with the HTTP -F option
+    # the file is provided via REST in the buffer using: curl -X POST -H "command: file store where dbms = admin and table = files and dest = file_rest " -F "file=@testdata.txt" http://10.0.0.78:7849
+    # ======================================================================================================================
+    def put_from_rest(self, status, file_name, dbms_name, table_name, blob_hash_value, archive_date ):
+
+        ret_val = process_status.SUCCESS
+        message = None
+        file_data = status.get_file_data()
+        if not file_data:
+            message = "MongoDB (store file): File data to 'file store' command is not available"
+            ret_val = process_status.ERR_command_struct
+        else:
+            if isinstance(file_data, str):
+                encoded_data = file_data.encode('utf-8')
+            else:
+                encoded_data = file_data
+
+            per_table_hash = f"{table_name}.{blob_hash_value}"  # Allowing the same file in multiple tables
+            per_table_name = f"{table_name}.{file_name}"  # Allowing the same file in multiple tables
+
+            try:
+                content = self.cur_large.put(encoded_data, filename=per_table_name, _id=per_table_hash, table=table_name,
+                                             archive_date=archive_date)
+            except:
+                errno, value = sys.exc_info()[:2]
+                try:
+                    if value.__class__.__name__ == "FileExists":
+                        message = f'MongoDB: Duplicate Hash Value {per_table_hash} in DBMS {dbms_name}'
+                        ret_val = process_status.Already_exists
+                except:
+                    message = f'MongoDB (store file): Error updating database with file: {per_table_name} in DBMS: {dbms_name} with Error: {value}'
+                    ret_val = process_status.DBMS_error
+        return [ret_val, message]
     # =======================================================================================================================
     #  test duplicate file in the database
     # =======================================================================================================================
@@ -446,7 +493,7 @@ class MONGO_INSTANCE:
 
         if dest_type == "file" and not one_file:
             status.add_error("MongoDB: Retrieve multiple files requires a folder as a destination - a file name was provided")
-            ret_val = process_status.Err_dir_name
+            ret_val = process_status.ERR_command_struct
         elif dest_type == "file":
             dest_file = destination_name
         else:

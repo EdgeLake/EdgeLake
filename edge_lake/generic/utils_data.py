@@ -40,9 +40,16 @@ data_types_unifier_ = {
     "string" :  "varchar",
     'char varying' : "varchar",
     "uuid"   :  "uuid",
-    "int":      "int",
     "bigint":   "bigint",
     "integer":  "int",
+    "int":      "int",
+    "int16":     "int",
+    "uint16":     "int",
+    "int32":    "int",
+    "uint32":    "int",
+    "int64":    "bigint",
+    "uint64":   "bigint",
+    "sbyte" :   "int",
     "float":    "float",
     "float64":  "float",
     "decimal" : "float",
@@ -54,8 +61,19 @@ data_types_unifier_ = {
     "boolean" : "bool",
     "varchar" : "varchar",
     "timestamp" : "timestamp",
+    "datetime" : "timestamp",
     "date"      : "date",
-    "time"      : "time"
+    "time"      : "time",
+    "byte"      : "char(1)",
+    "bytestring" : "varchar",
+    "nodeid"    : "varchar",    # From OPCUA"
+    "expandednodeid"    : "varchar",    # From OPCUA"
+    "StatusCode"    : "int",    # From OPCUA"
+    "qualifiedmame"    : "varchar",    # From OPCUA"
+    "localizedtext"    : "varchar",    # From OPCUA"
+    "variant"    :      "varchar",    # From OPCUA"  Container for any data type
+    "datavalue"    : "varchar",    # From OPCUA"  Value + status + timestamp
+    "diagnosticinfo"    : "varchar",    # From OPCUA" Info for errors or diagnostics
 }
 
 # Data types that require quotations on the value ot the default value
@@ -579,7 +597,20 @@ def check_ip_address(line: str):
     except:
         return False
     return True
+# ==================================================================
+# Revert an amylog message to a word array
+# Break the message into words and replace the \t with spaces.
+# Note: the \t maintain multiple words together in the list
+# ==================================================================
+def msg_to_cmd_words(status, msg: str):
 
+    words_list = msg.split(' ')
+
+    for i in range(len(words_list)):
+        if '\t' in words_list[i]:
+            words_list[i] = words_list[i].replace('\t', ' ')
+
+    return words_list
 # ==================================================================
 #
 # Organize command string in a list. Identifies multiple commands
@@ -1220,6 +1251,25 @@ def test_words(words_array, offset, test_array):
             return False
     return True
 
+# ======================================================================================================================
+# Get N words in a list - ignore empty entries
+# ======================================================================================================================
+def str_to_list(text_str, words_count):
+    ''''
+    Return a list of words, ignoring spaces
+    '''
+    word_list = []
+    list_size = 0
+    offset = 0
+    while list_size < words_count:
+        offset = get_word_start(text_str, offset)  # Get offset to the value
+        if offset == -1:
+            break   # no more words
+        word_length = get_word_length(text_str, offset)
+        word_list.append(text_str[offset:offset + word_length])
+        offset += (word_length + 1)
+        list_size += 1
+    return word_list
 
 # ======================================================================================================================
 # Split -  Split consider quotations as one word

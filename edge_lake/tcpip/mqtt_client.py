@@ -49,7 +49,7 @@ import edge_lake.generic.utils_columns as utils_columns
 import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.utils_data as utils_data
 import edge_lake.generic.utils_threads as utils_threads
-from edge_lake.generic.params import get_value_if_available
+import edge_lake.generic.params as params
 import edge_lake.tcpip.net_utils as net_utils
 import edge_lake.json_to_sql.mapping_policy as mapping_policy
 from edge_lake.generic.node_info import get_node_name
@@ -1145,7 +1145,7 @@ def get_msg_data(status, topic, topic_info, message):
 
         if data_type_info[:6] == "bring ":
             # The data type is in the JSON data - apply bring command to retrieve the data type
-            ret_val, data_type_str = utils_json.pull_info(status, message, [data_type_info[6:].lstrip()], None, 0)
+            ret_val, data_type_str = utils_json.pull_info(status, params, message, [data_type_info[6:].lstrip()], None, 0)
             data_type_list = utils_json.str_to_list(data_type_str)
             if not data_type_list:
                 status.add_error("Failed to map message data types to AnyLog format- from topic: %s and message: %s" % (topic, message))
@@ -1159,7 +1159,7 @@ def get_msg_data(status, topic, topic_info, message):
         if not ret_val:
             if isinstance(retrieve_info, list):
                 # retrieve_info is BRING COMMAND
-                ret_val, attr_val = utils_json.pull_info(status, message, retrieve_info, None, 0)
+                ret_val, attr_val = utils_json.pull_info(status, params, message, retrieve_info, None, 0)
                 if ret_val:
                     break
 
@@ -1227,7 +1227,7 @@ def get_dest_name(status, topic, object_bring, message, object_type):
 
     if isinstance(object_bring, list):
 
-        ret_val, object_name = utils_json.pull_info(status, message, object_bring, None, 0)
+        ret_val, object_name = utils_json.pull_info(status, params, message, object_bring, None, 0)
         if not object_name:
             status.add_error("MQTT: Failed to apply 'bring' command to retrieve %s name" % object_type)
             if object_type == "dbms":
@@ -1406,18 +1406,20 @@ def subscribe(dummy: str, conditions: dict, client_id:int):
             if client_sbscr.is_exit():
                 break
 
-        subscript_mutex[client_id].acquire_write()     # Wait for processing to completed (message server might be sending data)
+    subscript_mutex[client_id].acquire_write()     # Wait for processing to completed (message server might be sending data)
 
+    if client:
+        # Will skip if client failed to initiate
         client.loop_stop()                              # Stop the dedicated thread
 
         client.disconnect()
 
-        # Need to be after disconnect - Update the list of topics for each broker
-        end_subscription(client_id, False)
+    # Need to be after disconnect - Update the list of topics for each broker
+    end_subscription(client_id, False)
 
-        subscript_mutex[client_id].release_write()
+    subscript_mutex[client_id].release_write()
 
-        process_log.add_and_print("event", "MQTT Client process terminated")
+    process_log.add_and_print("event", "MQTT Client process terminated")
 
 
 # ------------------------------------------------------------------------------------------------------------
@@ -1681,7 +1683,7 @@ def connect_to_broker(operation_type, conditions:dict, user_id, thread_name):
 # Between the user data and the database tables.
 # Returns a key that identifies the mapping dictionary. This key is passed to every on_message call.
 
-#  if message_flush is True - Topic info is not provided in parenthesis - data will be flushed to disk.
+#  if message_flush is True - Topic info is not provided in parentheses - data will be flushed to disk.
 # ------------------------------------------------------------------------------------------------------------
 def register(status, conditions):
 
@@ -2024,7 +2026,7 @@ def get_column_type_value(status, value):
             if optional_val:
                 index += 1
                 if len(optional_val) > 1 and optional_val[0] == '!':
-                    optional_val = get_value_if_available(optional_val)
+                    optional_val = params.get_value_if_available(optional_val)
                 if optional_val == "true":
                     optional = True
                 elif optional_val == "false":
@@ -2041,7 +2043,7 @@ def get_column_type_value(status, value):
                     status.add_error("Missing column type in MQTT mapping from: %s" % list_entry)
                     ret_val = process_status.MQTT_info_err
                 elif len(column_type) > 1 and column_type[0] == '!':
-                    column_type = get_value_if_available(column_type)
+                    column_type = params.get_value_if_available(column_type)
 
                 if not ret_val:
                     index += 1
@@ -2051,7 +2053,7 @@ def get_column_type_value(status, value):
                         status.add_error("Missing column mapping instructions in MQTT declaration from: %s" % list_entry)
                         ret_val = process_status.MQTT_info_err
                     elif len(column_value) > 1 and column_value[0] == '!':
-                        column_value = get_value_if_available(column_value)
+                        column_value = params.get_value_if_available(column_value)
 
     return [ret_val, column_type, column_value, optional]
 # -----------------------------------------------------------------------

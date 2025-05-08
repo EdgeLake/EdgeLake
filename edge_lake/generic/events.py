@@ -16,16 +16,15 @@ import edge_lake.blockchain.blockchain as blockchain
 import edge_lake.generic.interpreter as interpreter
 import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.utils_print as utils_print
-import edge_lake.blockchain.metadata as metadata
-import edge_lake.dbms.ha as ha
+from edge_lake.generic.utils_threads import seconds_sleep, get_thread_name
 
-from edge_lake.generic.utils_threads import seconds_sleep
 #                                  Must     Add      Is
 #                                  exists   Counter  Unique
 drop_par = {"dbms_name": ("str", True, False, True),
             "max_size": ("int.storage", True, False, True),
             }
 
+in_merge_ = False         # A flag indicating a merge process
 
 partitions_dropped = {}  # statistics on partitions dropped
 
@@ -75,12 +74,20 @@ def blockchain_master_to_node(status, io_buff_in, data, trace):
             caller_trace_level = data[2]    # Trace level on the caller - the caller is configured with: "trace level = 2 run blockchain sync"
 
             file_path, file_name, file_type = utils_io.extract_path_name_type(source_file)
-            new_file = file_path + file_name + ".new"
 
-            # Pull the ledger data from the database
+            if len(member_cmd.relay_info_):
+                # A relay node
+                new_file = file_path + file_name + get_thread_name() + ".new"  # because multiple threads may pull the file
+                if member_cmd.relay_info_["stat"] == "on":
+                    # Copy the local file
+                    cmd_words = ["blockchain", "checkout", "from", member_cmd.relay_info_["platform"][0], "to", new_file]
+                    ret_val, data = member_cmd.blockchain_checkout(status, io_buff_in, cmd_words, trace, None)
+                    file_retrieved = True if not ret_val else False
+            else:
+                new_file = file_path + file_name + ".new"
+                file_retrieved = db_info.blockchain_select(status, "json", new_file, "new")
 
-
-            if db_info.blockchain_select(status, "json", new_file, "new"):
+            if file_retrieved:
                 # Pull the blockchain data from a local database
                  # test struct of puled blockchain
                 ret_val = blockchain.validate_struct(status, new_file)
@@ -198,10 +205,23 @@ def use_new_blockchain_file(status, io_buff_in, old_file, blockchain_file, new_f
                     active ledger to the new ledger + update source platform
     '''
 
+    global in_merge_
+
     if trace:
         utils_print.output( f"New Blockchain: Sync with new ledger at: {new_file}", True)
 
     utils_io.write_lock("new")
+
+    if in_merge_:
+        # A different thread is doing merge
+        # We don't want this thread to be on wait as if multiple threads are on wait, we may get them in the wrong order.
+        # Ignore this process and wait to the next thread
+        utils_io.write_unlock("new")
+        return process_status.SUCCESS   # The next sync will get the updates
+
+    in_merge_ = True
+
+    utils_io.write_unlock("new")
 
     if merge_ledgers:
         # Test if the old file includes updates not included on the new file.
@@ -268,10 +288,10 @@ def use_new_blockchain_file(status, io_buff_in, old_file, blockchain_file, new_f
 
             utils_io.write_unlock("blockchain")
 
-    utils_io.write_unlock("new")
+
+    in_merge_ = False
 
     return ret_val
-
 
 # ----------------------------------------------------------
 # Process to delete the oldest partitions

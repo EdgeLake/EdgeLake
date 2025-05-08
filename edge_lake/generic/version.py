@@ -89,3 +89,8 @@ def permissions_permissions_by_public_key(status, public_key):
 def permissions_authenticate_rest_message(status, public_key):
     return process_status.SUCCESS
 
+def prep_aggregations(dbms_name, table_name):
+    return False
+
+def process_agg_events(status, dbms_name, table_name, columns_info, json_data):
+    return [process_status.SUCCESS, None]

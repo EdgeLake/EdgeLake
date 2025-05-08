@@ -10,19 +10,23 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import sys
 
+import edge_lake.blockchain.gateway as gateway
+import edge_lake.generic.process_status as process_status
+import edge_lake.generic.process_log as process_log
+
+
 try:
     import web3.logs
     from web3 import HTTPProvider, Web3
     from web3.middleware import geth_poa_middleware
 except:
+    errno, value = sys.exc_info()[:2]
+    err_msg = f"\n\rFailed to import a library: {errno} : {value}"
+    process_log.add("Error", err_msg)
+    print(err_msg, flush=True)
     web3_installed = False
 else:
     web3_installed = True
-
-import edge_lake.blockchain.gateway as gateway
-import edge_lake.generic.process_status as process_status
-import edge_lake.generic.process_log as process_log
-
 
 # import edge_lake.generic.interpreter as interpreter
 
@@ -54,6 +58,7 @@ def connect(status, provider):
             ret_val = process_status.SUCCESS
 
     return [ret_val, eth_connection]
+
 
 abi_ = [{"anonymous": False,"inputs": [{"indexed": False,"internalType": "bool","name": "","type": "bool"}],"name": "delete_policy_event","type": "event"},{"anonymous": False,"inputs": [{"indexed": False,"internalType": "string","name": "","type": "string"}],"name": "get_policy_event","type": "event"},{"anonymous": False,"inputs": [{"indexed": False,"internalType": "address","name": "","type": "address"}],"name": "get_policy_owner_event","type": "event"},{"anonymous": False,"inputs": [{"indexed": False,"internalType": "string","name": "","type": "string"},{"indexed": False,"internalType": "string","name": "","type": "string"}],"name": "updated_policy_event","type": "event"},{"inputs": [{"internalType": "string","name": "policy_id","type": "string"}],"name": "deletePolicy","outputs": [],"stateMutability": "nonpayable","type": "function"},{"inputs": [{"internalType": "string","name": "policy_id","type": "string"}],"name": "getPolicy","outputs": [],"stateMutability": "nonpayable","type": "function"},{"inputs": [{"internalType": "string","name": "policy_id","type": "string"}],"name": "getPolicyOwner","outputs": [],"stateMutability": "nonpayable","type": "function"},{"inputs": [{"internalType": "string","name": "policy_id","type": "string"},{"internalType": "string","name": "json","type": "string"}],"name": "insert","outputs": [],"stateMutability": "nonpayable","type": "function"},{"inputs": [],"name": "num_policies","outputs": [{"internalType": "uint256","name": "","type": "uint256"}],"stateMutability": "view","type": "function"},{"inputs": [{"internalType": "uint256","name": "","type": "uint256"}],"name": "policies","outputs": [{"internalType": "string","name": "","type": "string"}],"stateMutability": "view","type": "function"},{"inputs": [{"internalType": "uint256","name": "","type": "uint256"}],"name": "policy_ids","outputs": [{"internalType": "string","name": "","type": "string"}],"stateMutability": "view","type": "function"},{"inputs": [],"name": "transaction_count","outputs": [{"internalType": "uint256","name": "","type": "uint256"}],"stateMutability": "view","type": "function"},{"inputs": [{"internalType": "string","name": "policy_id","type": "string"},{"internalType": "string","name": "json","type": "string"}],"name": "updatePolicy","outputs": [],"stateMutability": "nonpayable","type": "function"}]
 

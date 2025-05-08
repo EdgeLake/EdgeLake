@@ -444,6 +444,7 @@ def execute_service(status, conditions, policy_id, mapping_policy, added_info, d
     table_name = conditions["table"][0] if "table" in conditions else None  # Table name to use if policy is not provided
     limit = conditions["limit"][0] if "limit" in conditions else 0  # Max messages to processes
     ingest_data = conditions["ingest"][0]  # If True - process AnyLog
+    timeout_sec = conditions["timeout"][0] if "timeout" in conditions else 5  # timeout in seconds
 
     dir_dict = get_value_dict(conditions, ["prep_dir", "watch_dir", "err_dir", "bwatch_dir", "blobs_dir", ])
 
@@ -463,7 +464,7 @@ def execute_service(status, conditions, policy_id, mapping_policy, added_info, d
         # Call the streaming RPC
         # Iterate through the stream of responses
         try:
-            response = getattr(stub, server_func)(request_obj, metadata=None, timeout=5)  # timeout=None should be timeout=5
+            response = getattr(stub, server_func)(request_obj, metadata=None, timeout=timeout_sec)  # timeout=None should be timeout=5
         except grpc.RpcError as e:
             # Check if the exception is of the type _InactiveRpcError
             if isinstance(e, grpc._channel._InactiveRpcError):
@@ -486,6 +487,11 @@ def execute_service(status, conditions, policy_id, mapping_policy, added_info, d
         except:
             errno, value = sys.exc_info()[:2]
             status.add_error(f"Failed to call a gRPC server (Error: ({errno}) {value})")
+            ret_val = process_status.ERR_process_failure
+            break
+
+        if not hasattr(module_pb2, 'ReplyMessage'):
+            status.add_error("ReplyMessage class or message definition is not defined in the module, which is generated from a .proto file")
             ret_val = process_status.ERR_process_failure
             break
 
@@ -521,6 +527,8 @@ def execute_service(status, conditions, policy_id, mapping_policy, added_info, d
                     ret_val = process_grpc_data(status, policy_id, policy_inner, added_info, response_entry, request_msg, debug_flag, info_list[9],dir_dict, dbms_name, table_name, ingest_data)
                     if ret_val:
                         break
+
+                    info_list[connect_offset_timeouts_] = 0  # Was connected - restart counting
 
                     if limit and info_list[connect_offset_data_] >= limit:
                         # Max replies:
@@ -609,7 +617,22 @@ def process_grpc_data(status, policy_id, policy_inner, added_info, grpc_data, re
                     status.add_error(f"Failed to map gRPC to JSON: {json_msg}")
                     ret_val = process_status.ERR_wrong_json_structure
                 else:
-                    ret_val = process_policy(status, policy_inner, policy_id, json_obj,  dir_dict["prep_dir"], dir_dict["watch_dir"], dir_dict["bwatch_dir"], dir_dict["err_dir"], dir_dict["blobs_dir"])
+                    if len(json_obj) == 1 and isinstance(json_obj, dict):
+                        # Some gRPC frameworks wrap payloads in a default key (e.g., "message") when encoding responses.
+                        # This happens when using protocol buffers with certain serialization settings.
+                        first_value = next(iter(json_obj.values())) # This is the first value without the key
+                        if isinstance(first_value, str):
+                            json_obj = utils_json.str_to_json(first_value)
+                            if not json_obj:
+                                status.add_error(f"Failed to map the inner part of the gRPC message to JSON: {json_msg}")
+                                ret_val = process_status.ERR_wrong_json_structure
+                        elif not isinstance(first_value, dict):
+                            status.add_error(f"Wrong format of the inner part of the gRPC message: {json_msg}")
+                            ret_val = process_status.ERR_wrong_json_structure
+                        else:
+                            json_obj = first_value
+                    if not ret_val:
+                        ret_val = process_policy(status, policy_inner, policy_id, json_obj,  dir_dict["prep_dir"], dir_dict["watch_dir"], dir_dict["bwatch_dir"], dir_dict["err_dir"], dir_dict["blobs_dir"])
             elif dbms_name and table_name:
                 # No mapping policy
                 ret_val, hash_value = add_data(status, "streaming", 1, dir_dict["prep_dir"], dir_dict["watch_dir"], dir_dict["err_dir"], dbms_name, table_name, '0', '0', "json", json_msg)

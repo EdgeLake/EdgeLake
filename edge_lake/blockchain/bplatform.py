@@ -159,10 +159,12 @@ def get_platforms(status, io_buff_in, cmd_words, trace):
             balance = "Not Available"
             public_key = "Not Available"
 
-        platforms_used.append((platform_name, str(connect_status), balance, chain_id, public_key, contract))
-        platforms_used.append(("","", "", "", "", "", connect_str))
+        platforms_used.append((platform_name, str(connect_status), balance, chain_id, "Public Key", public_key))
+        platforms_used.append(("", "", "", "", "Contract", contract))
+        platforms_used.append(("", "", "", "", "URL/Config", connect_str))
+
     if len(platforms_used):
-        reply = utils_print.output_nested_lists(platforms_used, "Blockchains connected", ["Name", "Active", "Balance", "Chain ID", "Public Key", "Contract", "URL/Config"], True, "")
+        reply = utils_print.output_nested_lists(platforms_used, "Blockchains connected", ["Name", "Active", "Balance", "Chain ID", "Key Types", "Keys"], True, "")
     else:
         reply = "No connections to blockchain platforms"
 
@@ -313,7 +315,7 @@ def blockchain_checkout(status, platform_name, trace):
 # =======================================================================================================================
 def is_connected(platform_name):
 
-    if platform_name not in bconnect_:
+    if not platform_name in bconnect_:
         ret_val = False     # Not declared
     else:
         platform = bconnect_[platform_name]
