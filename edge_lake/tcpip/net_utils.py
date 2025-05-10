@@ -14,6 +14,9 @@ from time import sleep
 import traceback  # Enable for stacktrace
 import dns.resolver
 import dns.reversename
+import netifaces as ni
+import psutil
+
 
 import edge_lake.generic.utils_print as utils_print
 import edge_lake.generic.utils_json as utils_json
@@ -970,6 +973,71 @@ def get_dns(ip_address):
         dns_name = None
 
     return dns_name
+# ----------------------------------------------------------------
+# Test if running in a VM
+# ----------------------------------------------------------------
+def is_running_in_vm() -> bool:
+    """
+    Check whether machine resides in virtual machine
+    """
+    try:
+        result = subprocess.run(["systemd-detect-virt"], capture_output=True, text=True)
+        output = result.stdout.strip()
+        return output != "none"
+    except Exception:
+        return False
+
+def get_interface_for_ip(dest_ip:str):
+    """
+    Based on dest_ip, return physical IP to use
+    :args:
+        dest_ip:str - destination IP (8.8.8.8)
+    :params:
+        s:socket - Socket connection
+        local_ip:str - local IP based on sockeet value
+    :return:
+        local_ip and interface type
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # Connect to the target IP (no data actually sent)
+        s.connect((dest_ip, 80))
+        local_ip = s.getsockname()[0]
+    except:
+        pass
+    finally:
+        s.close()
+    # Find the NIC corresponding to the local IP
+    for iface, addrs in psutil.net_if_addrs().items():
+        for addr in addrs:
+            if addr.address == local_ip:
+                return iface, local_ip
+
+def __find_ip(nic:str):
+    ip_info = ni.ifaddresses(nic)
+    for family in (ni.AF_INET,):  # Only IPv4 for uniqueness
+        addrs = ip_info.get(family, [])
+        for addr in addrs:
+            ip = addr.get('addr')
+            if ip and not ipaddress.ip_address(ip).is_loopback:
+                return ip
+    return '127.0.0.1'
+
+def find_ip():
+    """
+    Current issue - skips to `enp0s3`
+    """
+    if 'enp0s8' in ni.interfaces(): # Host-Only: Routable between host and VMs, unique per VM
+        my_ip = __find_ip(nic='enp0s8')
+    elif 'enp0s9' in ni.interfaces(): # Internal: Isolated VM-to-VM, no host access
+        my_ip = __find_ip(nic='enp0s9')
+    elif 'enp0s3' in ni.interfaces(): # NAT: Shared IP, non-routable from host or other VMs
+        my_ip = __find_ip(nic='enp0s3')
+    else:
+        _, my_ip = get_interface_for_ip(dest_ip='8.8.8.8')
+    my_ip = __find_ip(nic='enp0s8')
+    return my_ip
+
 
 # ----------------------------------------------------------------
 # Test the host and port

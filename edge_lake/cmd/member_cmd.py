@@ -64,7 +64,9 @@ import edge_lake.generic.stats as stats
 import edge_lake.generic.version as version
 import edge_lake.generic.profiler as profiler
 import edge_lake.generic.trace_func as trace_func
+import edge_lake.api.plc_client as plc_client
 import edge_lake.api.opcua_client as opcua_client
+import edge_lake.api.etherip_client as etherip_client
 
 from edge_lake.json_to_sql.suggest_create_table import *
 from edge_lake.dbms.dbms import connect_dbms, get_real_dbms_name
@@ -209,7 +211,7 @@ test_active_ = {
     "query pool": ("Query Pool", is_query_pool_active, get_query_pool_info),
     "kafka consumer": ("Kafka Consumer", al_kafka.is_active, al_kafka.get_info),
     "gRPC": ("gRPC", grpc_client.is_running, grpc_client.get_status_string),
-    "opcus": ("OPC-UA Client", opcua_client.is_running, opcua_client.get_status_string),
+    "plc": ("PLC Client", plc_client.is_running, plc_client.get_status_string),
 }
 
 
@@ -3207,6 +3209,11 @@ def send_command_message(status, io_buff_in, cmd_words, word_offset, dest_names,
             # error with this query
             j_instance.set_not_active(True)  # flag the job instance is not active with local error
             return process_status.Failed_to_parse_sql
+
+        if assignment:
+            # Returned info is assigned to a key in the dictionary
+            j_handle_user.set_assignment(assignment)
+            params.key_to_job(assignment, job_id, unique_job_id)  # Keep a link from the dictionary to the data in the job
     else:
         table_name = ""
         if status.is_rest_wait() or assignment:
@@ -3990,7 +3997,9 @@ def deliver_rows(status, io_buff_in, j_instance, receiver_id, par_id, is_pass_th
 
     j_handle = j_instance.get_job_handle()
     conditions = j_handle.get_conditions()
-
+    assignment = j_handle.get_assignment()
+    if assignment:
+        interpreter.add_value(conditions, "output_key", assignment)  # assign results to this key
 
     destination, format_type, timezone = interpreter.get_multiple_values(conditions,
                                                                     ["dest",    "format", "timezone"],
@@ -6631,7 +6640,7 @@ def _exit(status, io_buff_in, cmd_words, trace):
 
         grpc_client.exit("all")        # Exit All processes
 
-        opcua_client.exit("all")  # exit all clients
+        plc_client.exit("all")  # exit all clients
 
         ret_val = process_status.EXIT
         for sleep_event in process_status.process_sleep_event.values():
@@ -6675,10 +6684,10 @@ def _exit(status, io_buff_in, cmd_words, trace):
     elif words_count == 3 and words_array[1] == "grpc":
         ret_val = grpc_client.exit(words_array[2])
 
-    elif words_count == 3 and words_array[1] == "opcua":
+    elif words_count == 3 and words_array[1] == "plc":
         # exit opcus dbms.table
         # exit opcus policy_id
-        ret_val = opcua_client.exit(words_array[2])
+        ret_val = plc_client.exit(words_array[2])
 
     elif words_count == 3 and words_array[1] == "scheduler" and words_array[2].isdecimal():
         # exit specific scheduler
@@ -8216,7 +8225,7 @@ def _rest_client(status, io_buff_in, cmd_words, trace):
 # Run REST server thread
 # Example: run opcua client where url = opc.tcp://10.0.0.111:53530/OPCUA/SimulationServer and frequency = 20 hz and dbms = nov and table = sensor and node = "ns=0;i=2257" and node = "ns=0;i=2258"
 # =======================================================================================================================
-def _run_opcua_client(status, io_buff_in, cmd_words, trace):
+def _run_plc_client(status, io_buff_in, cmd_words, trace):
     words_count = len(cmd_words)
 
 
@@ -8234,6 +8243,7 @@ def _run_opcua_client(status, io_buff_in, cmd_words, trace):
                 "dbms":                     ("str",     True,  True,  True),  # DBMS name
                 "table":                    ("str",     False,  True, True),  # Table name (if not provided in a policy)
                 "topic":                    ("str",     False,  False, True),  # Assign the data to a topic
+                "type":                     ("str",     False,  False, True),  # the type of connector = opcus or etherip
                 }
 
 
@@ -8246,17 +8256,23 @@ def _run_opcua_client(status, io_buff_in, cmd_words, trace):
     node =  interpreter.get_one_value_or_default(conditions, "node", None)      # one or more node = ...
     nodes = interpreter.get_one_value_or_default(conditions, "nodes", None)     # Optional a list of nodes
 
+    plc_type = interpreter.get_one_value_or_default(conditions, "type", "opcua")    # OPCUA is the default
+    if not plc_client.is_plc_supported(plc_type):
+        status.add_error(f"Run PLC cmd: Wrong connector 'type': {plc_type}")
+        return process_status.ERR_command_struct
+    conditions["type"] = plc_type           # Set the default if nt specified by the user
+
     if not node and not nodes:
-        status.add_error("Run OPCUA cmd: Missing node = '[node id]' or a list of IDs")
+        status.add_error("Run PLC cmd: Missing node = '[node id]' or a list of IDs")
         return process_status.Error_command_params
     if node and nodes:
-        status.add_error("Run OPCUA cmd: only one type of nodes declaration are allowed")
+        status.add_error("Run PLC cmd: only one type of nodes declaration are allowed")
         return process_status.Error_command_params
 
     # p = multiprocessing.Process(target=opcua_client.run_opcua_client, args=("dummy", conditions) )
     # p.start()
 
-    t = threading.Thread(target=opcua_client.run_opcua_client, args=("dummy", conditions))
+    t = threading.Thread(target=plc_client.run_plc_client, args=("dummy", conditions))
     t.start()
 
 
@@ -11523,11 +11539,13 @@ def _wait(status, io_buff_in, cmd_words, trace):
         if cmd_words[ offset + 3] == "sync" and len(cmd_words) == 4:
             # wait 20 for sync  # wait for blockchain su=ync or up to 20 seconds
             condition = None
-            merge_counter = blockchain.get_merge_counter()    # The number of times the metadata wmerge was done
+            merge_counter = blockchain.get_merge_counter()    # The number of times the metadata merge was done
         else:
             # wait for condition
-            condition = ["wait_result_878", "=", "if"] + cmd_words[ offset + 3:]
+            dict_key = f"wait_{threading.current_thread().name.lower()}"
+            condition = [dict_key, "=", "if"] + cmd_words[ offset + 3:]
             merge_counter = None
+
         try:
             for i in range (sleep_time):
                 if condition:
@@ -11537,7 +11555,7 @@ def _wait(status, io_buff_in, cmd_words, trace):
                         # Error in the if condition
                         break
 
-                    if params.get_value_if_available("!wait_result_878") == "True":
+                    if params.get_value_if_available("!" + dict_key) == "True":
                         result = "True"
                         break  # Condition satisfied
 
@@ -13200,114 +13218,44 @@ def get_executable_command(status, command_in, mem_view: memoryview):
 
 
 # =======================================================================================================================
-# get an optimized string for the increments function
+# Get Min and Max dates in a table
 # =======================================================================================================================
-def get_increments_params(status, io_buff_in, cmd_words, trace):
-    keywords = {"dbms": ("str", True, False, True),
-                "table": ("str", True, False, True),
-                "column" :("str", True, False, True),
-                "where": ("str", False, False, False),
-                "format": ("format", False, False, False),
-                "data_points": ("int", False, False, False),
-                }
+def get_time_range(status, io_buff_in, dbms_name, table_name, column_name):
 
-    cmd_offset = get_command_offset(cmd_words)
+    where_cond = None
+    dict_key = f"time_range_{threading.current_thread().name.lower()}"   # Where results are stored
 
-    if cmd_words[cmd_offset + 3] != "where":
-        status.add_error("Missing 'where' keyword in 'get increments params' command")
-        ret_val = process_status.ERR_command_struct
-        return [ret_val, None]
+    # A query to get the min and max timestamp on the table
+    range_cmd = f'{dict_key} = run client () sql {dbms_name} "select min({column_name}) as min, max({column_name}) as max from {table_name}'
 
+    params.del_param(dict_key)      # Reset from previous usage
 
-    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, cmd_offset + 4, 0, keywords, False)
-    if ret_val:
-        return [ret_val, None]
-
-
-    dbms_name = interpreter.get_one_value(conditions, "dbms")
-    table_name = interpreter.get_one_value(conditions, "table")
-    column_name = interpreter.get_one_value(conditions, "column")
-
-    where_conditions = interpreter.get_one_value_or_default(conditions, "where", None)  # Where cond to the query
-    data_points = interpreter.get_one_value_or_default(conditions, "data_points", 1000)  # aiming at this number of rows
-
-    time_difference = utils_columns.str_to_timediff(where_conditions) if where_conditions else None
-
-    out_format = interpreter.get_one_value_or_default(conditions, "format", None)
-
-    rows_count = 0
-    '''
-    ret_val, rows_count = get_increments(status, io_buff_in, dbms_name, table_name, where_conditions)
-    if ret_val:
-        rows_count = -1     # We can still provide the values by some guessing
-    '''
-
-    time_unit, time_interval = unify_results.get_optimized_values(status, rows_count, time_difference, data_points)
-
-    if not time_unit:
-        reply = None
-        ret_val = process_status.ERR_command_struct
-    else:
-        ret_val = process_status.SUCCESS
-
-        if out_format == "json":
-            reply_dict = {
-                "dbms": f"{dbms_name}",
-                "table": f"{table_name}",
-                "column"    : f"{column_name}",
-                "where_cond" : f"{where_conditions}",
-                "rows"       : rows_count,
-                "time_unit":    f"{time_unit}",
-                "time_interval": time_interval,
-            }
-            reply = utils_json.to_string(reply_dict)
-        else:
-            reply = f"{time_unit},{time_interval},{column_name}"    # i.e.: day,3,timestamp
-
-    return [ret_val, reply]
-
-# =======================================================================================================================
-# get an estimated (or exact if dbms not supporting estimates) of the number of rows in all servers with the table.
-# Return the value representing the largest rows count from all the servers. It is used to determine the increments params
-# =======================================================================================================================
-def get_increments(status, io_buff_in, dbms_name, table_name, where_cond):
-
-
-    dict_key = f"increments_{threading.current_thread().name.lower()}"   # Where results are stored
-
-    rows_count_cmd = f"{dict_key}{{}} = run client (dbms={dbms_name}, table={table_name}) get rows count where dbms = {dbms_name} and table = {table_name} and estimate = true"
-
-    if where_cond:
-        rows_count_cmd += f" and where = \"{where_cond}\""
-
-    rows_count_cmd += " and format = json"
-
-    ret_val = process_cmd(status, rows_count_cmd, False, None, None, io_buff_in)
-
-    max_rows = -1       # Returns -1 if process failed
+    ret_val = process_cmd(status, range_cmd, False, None, None, io_buff_in)
     if not ret_val:
-        wait_cmd = f"wait 3 for !{dict_key}.diff == 0"  # wait 3 seconds or until the nodes replies - whichever is first
+
+        # Wait for the databases reply
+        wait_cmd = f"wait 3 for !{dict_key}"  # wait 3 seconds or until the nodes replies - whichever is first
+
         ret_val = process_cmd(status, wait_cmd, False, None, None, io_buff_in)
+
         if not ret_val:
-            rows_per_node = params.get_value_if_available(f"!{dict_key}")
-            if rows_per_node:
-                # Multiple nodes replied - find the node with most rows - this number would determine the increment params
-                # here is an example of a reply: {"10.0.0.78:7848": "{\"nov.t13\": 1962}"}
-                rows_stats = utils_json.str_to_json(rows_per_node)
-                if rows_stats:
-                    max_rows = 0            # Get the node with most rows
-                    for value in rows_stats.values():
-                        if isinstance(value, str):
-                            value = utils_json.str_to_json(value)
-                        if isinstance(value, dict):  # the value shows table name + rows:
-                            rows = utils_json.get_inner(value)  # this would be 1962 in the example
-                            if isinstance(rows, int):
-                                if rows >= max_rows:
-                                    max_rows = rows
+            query_result = params.get_value_if_available(f"!{dict_key}")
 
+            if query_result:
+                json_result = utils_json.str_to_json(query_result)
 
-    return [ret_val, max_rows]     # the estimated largest number of rows on one of the operators supporting the table
-# =======================================================================================================================
+                if json_result and len(json_result) == 1 and isinstance(json_result[0], dict) and "Query" in json_result[0]:
+                    min_max_list = json_result[0]["Query"]
+                    if isinstance(min_max_list, list) and len(min_max_list) == 1 and  isinstance(min_max_list[0], dict):
+                        min_max = min_max_list[0]   # Get the first (and only) row
+                        if "min" in min_max and "max"in min_max:
+                            datetime_min = f"{min_max['min']}"
+                            datetime_max = f"{min_max['max']}"
+                            where_cond = f"{column_name} >= '{datetime_min}' and {column_name} <= '{datetime_max}'"
+
+    return where_cond
+
+ # =======================================================================================================================
 # Get data distribution - similar to get rows count but on all operator nodes in the network that support the dbms and table
 # Example: get data distribution where dbms = litsanleandro and table = ping_sensor
 # =======================================================================================================================
@@ -17121,15 +17069,15 @@ def set_traceback(status, io_buff_in, cmd_words, trace):
     if cmd_words[1] == "error":
         # Print the stack for an error
         if cmd_words[3] == "on":
-            if words_count == 3:
+            if words_count == 4:
                 process_status.with_traceback_ = True
                 process_status.traceback_text_ = ""    # All error calls will show traceback
-            elif words_count == 4:
+            elif words_count == 5:
                 process_status.with_traceback_ = True
                 process_status.traceback_text_ = cmd_words[4]  # only error calls that include the text provided
             else:
                 ret_val = process_status.ERR_command_struct
-        elif words_count == 3 and cmd_words[3] == "off":
+        elif words_count == 4 and cmd_words[3] == "off":
             process_status.traceback_text_ = ""
             process_status.with_traceback_ = False
         else:
@@ -18501,8 +18449,21 @@ _get_methods = {
             'trace': 0,
         },
 
+        'plc': {
+            'command': plc_client.get_plc_clients,
+            'words_count': 3,
+            'help': {
+                'usage': 'get plc clients',
+                'example': 'get plc clients',
+                'text': 'Retrieve info on the PLC clients that process data',
+                'link': 'blob/master/opcua.md#client-status',
+                'keywords': ["streaming", "configuration"],
+            },
+            'trace': 0,
+        },
+
         'opcua': {
-            'command': opcua_client.get_opcua_clients,
+            'command': plc_client.get_plc_clients,
             'words_count': 3,
             'help': {
                 'usage': 'get opcua clients',
@@ -18515,7 +18476,7 @@ _get_methods = {
         },
 
         'opcua values': {
-                'command': opcua_client.opcua_values,
+                'command': plc_client.plc_values,
                 'words_min': 7,
                 'help': {
                     'usage': 'get opcua values where url = [connect string] and user = [username] and password = [password] and node = [node id]',
@@ -18527,7 +18488,20 @@ _get_methods = {
                 'trace': 0,
         },
 
-        'opcua namespace': {
+        'plc values': {
+            'command': plc_client.plc_values,
+            'words_min': 9,
+            'help': {
+                'usage': 'get plc values where type = [connector type] and url = [connect string] and user = [username] and password = [password] and node = [node id]',
+                'example': 'get plc values where type = etherip and url = 127.0.0.1 and node = CombinedChlorinatorAI.PV and node = STRUCT.Status',
+                'text': 'Connect to a PLC and retrieve the value from one or multiple nodes',
+                'link': 'blob/master/opcua.md#the-opcua-values',
+                'keywords': ["streaming", "configuration"],
+            },
+            'trace': 0,
+        },
+
+      'opcua namespace': {
                 'command': opcua_client.opcua_namespace,
                 'words_min': 7,
                 'help': {'usage': 'get opcua namespace where url = [connect string] and user = [username] and password = [password]',
@@ -18546,6 +18520,17 @@ _get_methods = {
                      'example': 'get opcua struct where url = opc.tcp://10.0.0.111:53530/OPCUA/SimulationServer',
                      'text': 'Connect to OPCUA and retrieve the tree structure',
                      'link' : 'blob/master/opcua.md#the-opcua-namespace',
+                     'keywords': ["streaming", "configuration"],
+                     },
+            'trace': 0,
+        },
+        'etherip struct': {
+            'command': etherip_client.etherip_struct,
+            'words_min': 7,
+            'help': {'usage': 'get etherip struct where url = [connect string] and ...',
+                     'example': 'get etherip struct where url = 127.0.0.1',
+                     'text': 'Connect to EtherIP and retrieve the tree structure',
+                     'link': 'blob/master/opcua.md#the-opcua-namespace',
                      'keywords': ["streaming", "configuration"],
                      },
             'trace': 0,
@@ -18932,16 +18917,7 @@ _get_methods = {
                     }
             },
 
-        "increments params": {'command': get_increments_params,
-                          'words_min': 15,
-                          'help': {
-                              'usage': "get increments params where dbms = [dbms name] and table = [table name] and column = [column name] and where = [where cond] and data_points = [int] and format = [table/json]",
-                              'example': 'get increments params where dbms = lightsanleandro and table = ping_sensor and column = sensor_timestamp and where = "timestamp >= \'2025-04-08 17:30:19.390017\' and timestamp <= \'2025-04-08 19:12:01.229118\'"',
-                              'text': "Calculate optimized params for an increment function.",
-                              'link': "master/queries.md#the-get-increment-params-command",
-                              'keywords': ["metadata", "data", "dbms"],
-                          }
-                          },
+
         "files count": {'command': get_files_count,
                    'words_min': 3,
                    'help': {
@@ -20037,12 +20013,25 @@ commands = {
     },
 
     'run opcua client': {
-        'command': _run_opcua_client,
+        'command': _run_plc_client,
         'words_min': 7,
         'help': {
             'usage': 'run opcua client where url = [connect string] and frequency = [frequency] and dbms = [dbms name] and table = [table name] and node = [node id]]',
             'example': 'run opcua client where url = opc.tcp://10.0.0.111:53530/OPCUA/SimulationServer and frequency = 20',
             'text': 'Continuously read from an OPCUA and stream into a database table',
+            'keywords': ["configuration", "background processes"],
+        },
+
+        'trace': 0,
+    },
+
+    'run plc client': {
+        'command': _run_plc_client,
+        'words_min': 7,
+        'help': {
+            'usage': 'run plc client where type = [connector type] and url = [connect string] and frequency = [frequency] and dbms = [dbms name] and table = [table name] and node = [node id]]',
+            'example': 'run plc client where type = etherip and url = opc.tcp://10.0.0.111:53530/OPCUA/SimulationServer and frequency = 20',
+            'text': 'Continuously read tag values from a PLC and stream into a database table. The default type is opcua',
             'keywords': ["configuration", "background processes"],
         },
 
@@ -20549,8 +20538,8 @@ commands = {
                             'exit workers\r\n'
                             'exit grpc all\r\n'
                             'exit grpc ip:port\r\n'
-                            'exit opcua 1\r\n'
-                            'exit opcua all',
+                            'exit plc 1\r\n'
+                            'exit plc all',
                  'text': 'exit node - terminate all process and shutdown\r\n'
                          'exit tcp - terminate the TCP listener thread\r\n'
                          'exit rest - terminate the REST listener thread\r\n'

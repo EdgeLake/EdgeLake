@@ -295,8 +295,10 @@ def prep_data_string(src_str):
             return '`'
         return ' '
 
+
     # Perform the replacement
     result = basic_pattern_.sub(replacement, src_str)
+
 
     return result
 

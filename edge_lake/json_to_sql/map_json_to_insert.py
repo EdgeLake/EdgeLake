@@ -103,7 +103,7 @@ def map_columns(status: process_status, dbms_name, table_name, tsd_name, tsd_id,
                     column_value += utils_columns.utc_diff  # Change to UTC
                     column_value = "\'" + utils_columns.seconds_to_date(column_value) + "\'"
             elif isinstance(column_value, list) or isinstance(column_value, dict):
-                column_value = "\'" + utils_data.prep_data_string(column_value) + "\'"
+                column_value = "\'" + utils_data.prep_data_string(str(column_value)) + "\'"
             else:
                 if column_value == None:
                     column_value = "DEFAULT"

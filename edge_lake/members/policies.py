@@ -16,7 +16,7 @@ from edge_lake.generic.params import get_value_if_available
 # ------------------------------------------------------------------------------------
 # Code to validate that the cluster policy exists
 # ------------------------------------------------------------------------------------
-def validate_cluster_exists( status, cluster_id, blockchain_file ):
+def validate_cluster_exists( status, policy_obj, root_key, cluster_id, blockchain_file ):
     test_cmd = ["blockchain", "get", "cluster", "where", "id", "=", cluster_id, "bring.count"]
     ret_val, cluster_policy = member_cmd.blockchain_get(status, test_cmd, blockchain_file, True)
     if not ret_val:
@@ -24,6 +24,21 @@ def validate_cluster_exists( status, cluster_id, blockchain_file ):
             status.add_error(f"Cluster policy '{cluster_id}' is referenced by an Operator and missing in the metadata")
             ret_val = process_status.Missing_cluster_policy
     return ret_val
+
+# =======================================================================================================================
+# Validation-Method: Test that either String ID or Int ID exists
+# =======================================================================================================================
+def test_node_id(status, policy_obj, root_key, val, blockchain_file):
+    ret_val = process_status.SUCCESS
+
+    if not "node_iid" in policy_obj and not "node_sid" in policy_obj:
+        dbms = policy_obj["dbms"]
+        table = policy_obj["table"]
+        status.add_error(f"Tag policy for '{dbms}.{table}' is missing 'node_iid' or 'node_sid'")
+        ret_val = process_status.Missing_required_attr
+
+    return ret_val
+
 
 # ------------------------------------------------------------------------------------
 # For these policies - use specific field values to make the ID
@@ -140,10 +155,12 @@ license_attr = [
 ]
 
 tag_attr = [
-    # attr name * attr type * child attributes * default value * must exists *  is unique
-    ("dbms",        str,            None,           None,           True,       False, None),
-    ("table",       str,            None,           None,           True,       ["dbms", "table"], None),
-    ("ns",          int,            None,           None,           True,       False, None),
+    # attr name * attr type * child attributes * default value * must exists *  is unique           Validation-Method
+    ("dbms",        str,            None,           None,           True,       False,              None),
+    ("table",       str,            None,           None,           True,       ["dbms", "table"],  None),
+    ("ns",          int,            None,           None,           True,       False,              test_node_id),   # Namespace
+    ("node_iid",    str,            None,           None,           False,       ["dbms", "table", "node_iid"], None),   # Int ID
+    ("node_sid",    str,            None,           None,           False,       ["dbms", "table", "node_sid"], None),   # String ID
 ]
 
 # ------------------------------------------------------------------------------------
@@ -397,7 +414,7 @@ def test_key_val(status, policy_type, policy_obj, root_key_val, blockchain_file)
 
             if validation_method:
                 # Run the method to validate
-                ret_val = validation_method(status, val, blockchain_file)
+                ret_val = validation_method(status, policy_obj, root_key, val, blockchain_file)
                 if ret_val:
                     break
 

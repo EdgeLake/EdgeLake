@@ -12,8 +12,10 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 from abc import ABC, abstractmethod
 
 import edge_lake.generic.process_status as process_status
+import edge_lake.api.plc_utils as plc_utils
+
 from edge_lake.generic import utils_json
-from edge_lake.generic.utils_data import get_unified_data_type
+
 
 try:
     from opcua import Client, ua
@@ -182,6 +184,7 @@ class OpcuaNode (ParsedNode):
         new_policy["dbms"] = dbms_name
         table_name =  f"t{new_table_id}"
         new_policy["table"] = table_name
+        new_policy["protocol"] = "opcua"
 
 
         path = []
@@ -241,21 +244,14 @@ class OpcuaNode (ParsedNode):
         if not ret_val:
             if table_insert:
                 # WRITE THE "CREATE TABLE" POLICY with the AnyLog data type
+
                 # Per table the following are replaced:
                 # [DBMS_NAME] with the DBMS name
                 # [TABLE_NAME] with the table name
                 # [DATA_TYPE] with the data type
-                tag_table = table_insert.replace("[DBMS_NAME]", dbms_name, 1)
-                tag_table = tag_table.replace("[TABLE_NAME]", table_name)
-
-                if data_type.endswith("[]"):
-                    # Every basic type can be used as an array (e.g., Int32[], String[]).
-                    anylog_data_type = "varchar"
-                else:
-                    anylog_data_type = get_unified_data_type(data_type.lower())     # get the AnyLog data type
-                    if not anylog_data_type:
-                        anylog_data_type = "varchar"
-                tag_table = tag_table.replace("[DATA_TYPE]", anylog_data_type)
+                tag_table = plc_utils.create_tag_table(table_insert, dbms_name, table_name, data_type)
+            else:
+                tag_table = None
 
 
             new_policy["path"] = "/".join(path)
@@ -263,34 +259,8 @@ class OpcuaNode (ParsedNode):
                 "tag": new_policy
             }
 
-            if file_handle:
-                info_str = utils_json.to_string(tag_policy)
-                if info_str:
-                    if bchain_insert:
-                        # add the insert statement
-                        info_str = bchain_insert + info_str + "\n"
-                        if table_insert:
-                            # push the schema (create table) policy
-                            info_str += bchain_insert + tag_table + "\r\n"
-
-                    if not file_handle.append_data(info_str):
-                        status.add_error(f"OPCUA: Failed to write into output file: {file_handle.get_file_name()}")
-                        ret_val = process_status.File_write_failed
-            else:
-                if bchain_insert:
-                    # print policies + inserts
-                    info_str = utils_json.to_string(tag_policy)
-                    if info_str:
-                        info_str = bchain_insert + info_str + "\r\n"
-                        utils_print.output(info_str, False)
-                else:
-                    # Only show the policies
-                    utils_print.jput(tag_policy, False, indent=4)
-
-                if table_insert:
-                    # Show the schema
-                    info_str = bchain_insert + tag_table + "\r\n"
-                    utils_print.output(info_str, False)
+            # Output to stdout or file
+            ret_val = plc_utils.output_policies(status, file_handle, tag_policy, bchain_insert, tag_table)
 
         return ret_val
 

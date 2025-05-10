@@ -268,6 +268,7 @@ def get_external_ip():
                 break       # No failure
 
     return external_ip
+
 # ---------------------------------------------------------
 # Debug incoming messages, including THREAD ID on the PEER NODE
 # ---------------------------------------------------------
