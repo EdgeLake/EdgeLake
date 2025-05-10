@@ -15,6 +15,10 @@ pyOpenSSL==25.0.0
 psutil==7.0.0
 orjson==3.10.15
 
+# networking
+netifaces==0.11.0
+pycomm3>=0.12.0
+
 # Datetime
 python-dateutil==2.9.0.post0
 pytz==2025.1
