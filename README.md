@@ -1,5 +1,5 @@
 # EdgeLake
-Transform your edge nodes into members of a permissioned decentralized network, optimized to manage and monitor data and resources at the edge.
+Transform edge nodes into a permissioned, decentralized network that enables real-time data management, monitoring, and querying without moving data off-device.
 * Deploy EdgeLake instances on nodes at the edge. 
 * Enable data management services on each node. 
 * Stream data from PLCs, Sensors, and applications to the edge nodes. 
