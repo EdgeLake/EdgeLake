@@ -1,5 +1,4 @@
 # EdgeLake
-
 Transform your edge nodes into members of a permissioned decentralized network, optimized to manage and monitor data and resources at the edge.
 * Deploy EdgeLake instances on your nodes at the edge. 
 * Enable services on each node. 
@@ -7,7 +6,13 @@ Transform your edge nodes into members of a permissioned decentralized network, 
 * Query the distributed data from a single point (as if the data is hosted in a centralized database). 
 * Manage your edge resources from a single point (the network of nodes reflects a [Single System Image](https://en.wikipedia.org/wiki/Single_system_image)).
 
-### Table of Content
+## Join the community
+* To track code changes, star the project.
+* For support, join the community [Slack channel](https://edgelake.slack.com/).
+* Join our bi-weekly TSC meeting via our [mailing list](https://lists.lfedge.org/g/EdgeLake-TSC) (only updates, no spam).
+
+
+### Table of Contents
 * [How it Works](#how-it-works)
 * [Download & Install](#download-and-install)
 * [Prerequisite & Setup Considerations](#prerequisite-and-setup-considerations)
