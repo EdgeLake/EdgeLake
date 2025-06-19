@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='UTF-8'>
+  <script src="https://cdn.cookielaw.org/scripttemplates/otSDKStub.js" data-document-language="true" type="text/javascript" charset="UTF-8" data-domain-script="01939cd7-7f26-7c87-af17-d2bfc69700b9" ></script>
+  <script nonce="IvXn4u8pulp3icBqTKmQynfhsoc5VVRA/UxvelpjXd8=">
+//<![CDATA[
+
+    function OptanonWrapper() { }
+
+//]]>
+</script>
+<script nonce="IvXn4u8pulp3icBqTKmQynfhsoc5VVRA/UxvelpjXd8=">
+//<![CDATA[
+
+        window._trackJs = { token: 'e43bb3a0b11a469ba1ef2ec2b79c6b11', application: 'acclaim-production', version: '1.174.1'};
+
+//]]>
+</script><script type="text/javascript" src="https://cdn.trackjs.com/releases/current/tracker.js"></script>
+
+<script nonce="IvXn4u8pulp3icBqTKmQynfhsoc5VVRA/UxvelpjXd8=">
+//<![CDATA[
+
+    (function(apiKey){
+      (function(p,e,n,d,o){var v,w,x,y,z;o=p[d]=p[d]||{};o._q=[];
+        v=['initialize','identify','updateOptions','pageLoad'];for(w=0,x=v.length;w < x;++w)(function(m){
+        o[m]=o[m]||function(){o._q[m===v[0]?'unshift':'push']([m].concat([].slice.call(arguments,0)));};})(v[w]);
+        y=e.createElement(n);y.async=!0;y.src='https://cdn.pendo.io/agent/static/'+apiKey+'/pendo.js';
+        z=e.getElementsByTagName(n)[0];z.parentNode.insertBefore(y,z);})(window,document,'script','pendo');
+    })("65460ef3-56d0-45a3-7b3b-fe1ec0463054")
+
+//]]>
+</script>
+<meta content='Credly is a global Open Badge platform that closes the gap between skills and opportunities. We work with academic institutions, corporations, and professional associations to translate learning outcomes into digital credentials that are immediately validated, managed, and shared.' data-rh name='description'>
+<meta content='Credly, Credly badges, Acclaim, open badges, digital badges, badges, web-enabled credentials, Badge Alliance, Mozilla Open Badge standards, Mozilla Open Badges, verified credentials, learning outcomes' name='keywords'>
+<meta content='width=device-width,initial-scale=1.0' name='viewport'>
+<meta content='1B97012E4CB3B07611090D1A0B4D9D19' name='msvalidate.01'>
+<meta content='d20lZjrSJJ_n0jc1HHlADZBDmn5wZfiBDucFzzOzHCY' name='google-site-verification'>
+<meta property="og:title" content="The Linux Foundation">
+<meta property="og:image" content="https://images.credly.com/images/e6066b96-c59d-49b6-87cc-d8873022e84f/blob.png">
+<meta property="og:description" content="The Linux Foundation is supported by 1,000+ member companies and is the leading home for collaboration on open source software, open standards, open data &amp; open hardware critical to global infrastructure. Projects include Cloud Foundry, FINOS, Hyperledger, Kubernetes, Linux, Node.js, ONAP, RISC-V &amp; more. LF leverages best practices to address the needs of contributors, users &amp; solution providers to create sustainable models for collaboration through open governance, events, training &amp; community engagement.">
+<meta property="og:type" content="og:object">
+<meta property="og:url" content="https://www.credly.com/organizations/f4b8d042-0072-4a1a-8d00-260b513026e8">
+<meta property="og:site_name" content="Credly">
+<meta name="csrf-param" content="authenticity_token" />
+<meta name="csrf-token" content="eFREl8RSlzQTbomynyKlBWdClgTSspT2v9lGCVphaSFuh5ymNzvWlLw1u0IpxF_Svgk6OT1NAK5NP1vScUcdfg" />
+<link rel="stylesheet" href="//fonts.googleapis.com/css?family=Open+Sans:300,400,400i,600,700" media="all" />
+<link rel="stylesheet" href="//use.typekit.net/bcc0eop.css" media="all" />
+<script async='true' src='https://www.googletagmanager.com/gtag/js?id=G-5D8QQR0C2M'></script>
+<script nonce="IvXn4u8pulp3icBqTKmQynfhsoc5VVRA/UxvelpjXd8=">
+//<![CDATA[
+window.dataLayer = window.dataLayer || [];
+function google_tag(){dataLayer.push(arguments);}
+google_tag('js', new Date());
+google_tag('config', 'G-5D8QQR0C2M');
+(function() {
+var tests = [];
+for (var k in {}) {tests.push(k);}
+google_tag('set', 'dimension1', tests.join(';'));
+})();
+google_tag('send', 'pageview');
+
+//]]>
+</script><title>The Linux Foundation - Credly</title>
+<link rel="stylesheet" href="https://cdn.credly.com/assets/transitional-193a829acb3bc19d6674494d119798dc46a92da330b02a58de9a17c78b1fb9a2.css" media="all" />
+<link rel="stylesheet" href="https://cdn.credly.com/assets/application-e6d3da6d6dcfd68cdbe2b97ed52355dcf082722a77fba5b8b4721f27631cde41.css" media="all" />
+</head>
+<body class=''>
+<script src="https://cdn.credly.com/assets/ie_polyfills.legacy-browser-eb3f8596e1c5f284c28e29674c90aed1b5afae6dd3ec51117298e5a75b8dcde9.js" crossorigin="anonymous"></script>
+<script nonce="IvXn4u8pulp3icBqTKmQynfhsoc5VVRA/UxvelpjXd8=">
+//<![CDATA[
+setTimeout(function(){pendo.initialize({"visitor":{},"account":{}});}, 1000)
+
+//]]>
+</script><header class='transitional' id='website-header' style=''>
+<div class='website-header-main-links-container website-header-placeholder'></div>
+<div>
+<a href='#skip-target' id='skip-to-content'>Skip to content</a>
+</div>
+<div class='website-header-main-links-container non-react-header'>
+<div class='grid website-header-main-links'>
+<a class="acclaim-logo" href="https://www.credly.com/">Credly</a>
+<nav data-behavior='container' name='main_navigation'>
+<div class='header-nav-item header-nav-item--btn-container header-nav-item--btn-container--create-account-btn-container'>
+<a class='create-account-btn button white' href='/users/sign_up'>
+Create Account
+</a>
+
+</div>
+<div class='header-nav-item header-nav-item--btn-container header-nav-item--btn-container--sign-in-btn-container'>
+<a class='sign-in-btn button' href='/users/sign_in'>
+Sign In
+</a>
+
+</div>
+</nav>
+</div>
+</div>
+
+</header>
+<div class='search-bar' data-container='search-bar'></div>
+<div class='badge_templates' id='flash'>
+<div class='grid'>
+<div class='l1-0 r1-0' data-behavior='flash-container'>
+<noscript>
+<div class='flash notice'>
+<i class='icon-error'></i>
+<div>
+We've detected that your browser has JavaScript disabled. Some features of Credly require Javascript to be enabled. For the best experience, please enable JavaScript in your browser settings or try using a different browser.
+</div>
+</div>
+</noscript>
+
+</div>
+</div>
+</div>
+<main id="root"><div id=''>
+</div>
+
+
+<div class='container'>
+<div class='organization_header skills-layout__header-container'>
+<div class='organization_header__content'>
+<div class='organization_header__detail'>
+<div class='organization_header__tags'>
+<div class='header-pill'>
+<svg class="header-pill__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M128 148v-40c0-6.6 5.4-12 12-12h40c6.6 0 12 5.4 12 12v40c0 6.6-5.4 12-12 12h-40c-6.6 0-12-5.4-12-12zm140 12h40c6.6 0 12-5.4 12-12v-40c0-6.6-5.4-12-12-12h-40c-6.6 0-12 5.4-12 12v40c0 6.6 5.4 12 12 12zm-128 96h40c6.6 0 12-5.4 12-12v-40c0-6.6-5.4-12-12-12h-40c-6.6 0-12 5.4-12 12v40c0 6.6 5.4 12 12 12zm128 0h40c6.6 0 12-5.4 12-12v-40c0-6.6-5.4-12-12-12h-40c-6.6 0-12 5.4-12 12v40c0 6.6 5.4 12 12 12zm-76 84v-40c0-6.6-5.4-12-12-12h-40c-6.6 0-12 5.4-12 12v40c0 6.6 5.4 12 12 12h40c6.6 0 12-5.4 12-12zm76 12h40c6.6 0 12-5.4 12-12v-40c0-6.6-5.4-12-12-12h-40c-6.6 0-12 5.4-12 12v40c0 6.6 5.4 12 12 12zm180 124v36H0v-36c0-6.6 5.4-12 12-12h19.5V24c0-13.3 10.7-24 24-24h337c13.3 0 24 10.7 24 24v440H436c6.6 0 12 5.4 12 12zM79.5 463H192v-67c0-6.6 5.4-12 12-12h40c6.6 0 12 5.4 12 12v67h112.5V49L80 48l-.5 415z"/></svg>
+ORGANIZATION
+</div>
+</div>
+<h1 class="ac-heading ac-heading--badge-name-hero organization_header__title ac-heading--serif-primary-large">The Linux Foundation
+</h1><div class='organization_header__description header__description'>
+The Linux Foundation is supported by 1,000+ member companies and is the leading home for collaboration on open source software, open standards, open data &amp; open hardware critical to global infrastructure. Projects include Cloud Foundry, FINOS, Hyperledger, Kubernetes, Linux, Node.js, ONAP, RISC-V &amp; more. LF leverages best practices to address the needs of contributors, users &amp; solution providers to create sustainable models for collaboration through open governance, events, training &amp; community engagement.
+</div>
+<div class='c-profile-header__links'>
+<a class="c-profile-header-link" rel="noopener noreferrer" target="_blank" href="https://www.linkedin.com/company/208777"><div class="c-profile-header-link__icon" title="Linkedin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M100.28 448H7.4V148.9h92.88zM53.79 108.1C24.09 108.1 0 83.5 0 53.8a53.79 53.79 0 0 1 107.58 0c0 29.7-24.1 54.3-53.79 54.3zM447.9 448h-92.68V302.4c0-34.7-.7-79.2-48.29-79.2-48.29 0-55.69 37.7-55.69 76.7V448h-92.78V148.9h89.08v40.8h1.3c12.4-23.5 42.69-48.3 87.88-48.3 94 0 111.28 61.9 111.28 142.3V448z"/></svg></div></a>
+<a class="c-profile-header-link" rel="noopener noreferrer" target="_blank" href="https://www.facebook.com/TheLinuxFoundation"><div class="c-profile-header-link__icon" title="Facebook"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M504 256C504 119 393 8 256 8S8 119 8 256c0 123.78 90.69 226.38 209.25 245V327.69h-63V256h63v-54.64c0-62.15 37-96.48 93.67-96.48 27.14 0 55.52 4.84 55.52 4.84v61h-31.28c-30.8 0-40.41 19.12-40.41 38.73V256h68.78l-11 71.69h-57.78V501C413.31 482.38 504 379.78 504 256z"/></svg></div></a>
+<a class="c-profile-header-link" rel="noopener noreferrer" target="_blank" href="https://twitter.com/linuxfoundation"><div class="c-profile-header-link__icon" title="X (Twitter)"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M459.37 151.716c.325 4.548.325 9.097.325 13.645 0 138.72-105.583 298.558-298.558 298.558-59.452 0-114.68-17.219-161.137-47.106 8.447.974 16.568 1.299 25.34 1.299 49.055 0 94.213-16.568 130.274-44.832-46.132-.975-84.792-31.188-98.112-72.772 6.498.974 12.995 1.624 19.818 1.624 9.421 0 18.843-1.3 27.614-3.573-48.081-9.747-84.143-51.98-84.143-102.985v-1.299c13.969 7.797 30.214 12.67 47.431 13.319-28.264-18.843-46.781-51.005-46.781-87.391 0-19.492 5.197-37.36 14.294-52.954 51.655 63.675 129.3 105.258 216.365 109.807-1.624-7.797-2.599-15.918-2.599-24.04 0-57.828 46.782-104.934 104.934-104.934 30.213 0 57.502 12.67 76.67 33.137 23.715-4.548 46.456-13.32 66.599-25.34-7.798 24.366-24.366 44.833-46.132 57.827 21.117-2.273 41.584-8.122 60.426-16.243-14.292 20.791-32.161 39.308-52.628 54.253z"/></svg></div></a>
+<a class="c-profile-header-link" rel="noopener noreferrer" target="_blank" href="https://training.linuxfoundation.org/"><div class="c-profile-header-link__icon" title="Website"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M301.148 394.702l-79.2 79.19c-50.778 50.799-133.037 50.824-183.84 0-50.799-50.778-50.824-133.037 0-183.84l79.19-79.2a132.833 132.833 0 0 1 3.532-3.403c7.55-7.005 19.795-2.004 20.208 8.286.193 4.807.598 9.607 1.216 14.384.481 3.717-.746 7.447-3.397 10.096-16.48 16.469-75.142 75.128-75.3 75.286-36.738 36.759-36.731 96.188 0 132.94 36.759 36.738 96.188 36.731 132.94 0l79.2-79.2.36-.36c36.301-36.672 36.14-96.07-.37-132.58-8.214-8.214-17.577-14.58-27.585-19.109-4.566-2.066-7.426-6.667-7.134-11.67a62.197 62.197 0 0 1 2.826-15.259c2.103-6.601 9.531-9.961 15.919-7.28 15.073 6.324 29.187 15.62 41.435 27.868 50.688 50.689 50.679 133.17 0 183.851zm-90.296-93.554c12.248 12.248 26.362 21.544 41.435 27.868 6.388 2.68 13.816-.68 15.919-7.28a62.197 62.197 0 0 0 2.826-15.259c.292-5.003-2.569-9.604-7.134-11.67-10.008-4.528-19.371-10.894-27.585-19.109-36.51-36.51-36.671-95.908-.37-132.58l.36-.36 79.2-79.2c36.752-36.731 96.181-36.738 132.94 0 36.731 36.752 36.738 96.181 0 132.94-.157.157-58.819 58.817-75.3 75.286-2.651 2.65-3.878 6.379-3.397 10.096a163.156 163.156 0 0 1 1.216 14.384c.413 10.291 12.659 15.291 20.208 8.286a131.324 131.324 0 0 0 3.532-3.403l79.19-79.2c50.824-50.803 50.799-133.062 0-183.84-50.802-50.824-133.062-50.799-183.84 0l-79.2 79.19c-50.679 50.682-50.688 133.163 0 183.851z"/></svg></div></a>
+
+</div>
+</div>
+<div class='cr-avatar__image-wrap c-org-header__image-wrap'>
+<img alt="The Linux Foundation" class="cr-avatar__image--auto" width="200" height="200" src="https://images.credly.com/size/200x200/images/e6066b96-c59d-49b6-87cc-d8873022e84f/blob.png" />
+</div>
+</div>
+</div>
+
+<nav class='cr-section-navigation'>
+<ul class='cr-section-navigation__items'>
+<li class='cr-section-navigation__item'>
+<a class="cr-section-navigation__link" href="/organizations/the-linux-foundation/earners"><div class='cr-section-navigation__link-content'>
+Earners
+</div>
+</a></li>
+<li class='cr-section-navigation__item'>
+<a class="cr-section-navigation__link cr-section-navigation__link--active" href="/organizations/the-linux-foundation/badges"><div class='cr-section-navigation__link-content'>
+Badges
+</div>
+</a></li>
+<li class='cr-section-navigation__item'>
+<a class="cr-section-navigation__link" href="/organizations/the-linux-foundation/collections"><div class='cr-section-navigation__link-content'>
+Collections
+</div>
+</a></li>
+<li class='cr-section-navigation__item'>
+<a class="cr-section-navigation__link" href="/organizations/the-linux-foundation/earned_organization_badges"><div class='cr-section-navigation__link-content'>
+Earned
+</div>
+</a></li>
+</ul>
+</nav>
+
+</div>
+<div class='c-organization-body'>
+<div class='container'>
+<div style='height: 70vh'></div>
+
+</div>
+</div>
+
+</main><div data-container='global-search-results'></div>
+<footer class='transitional' id='footer'>
+<div class='grid non-react-footer'>
+<section class='l1-0 r1-0 footer-margin'>
+<div class='links'>
+<div class='footer-link-wrapper'>
+<a class="footer-link" href="https://resources.credly.com/schedule-a-demo">Request Demo</a>
+</div>
+<div class='footer-link-wrapper'>
+<a class="footer-link" href="https://info.credly.com/about-us">About Credly</a>
+</div>
+<div class='footer-link-wrapper'>
+<a class="footer-link" href="https://info.credly.com/legal">Terms</a>
+</div>
+<div class='footer-link-wrapper'>
+<a class="footer-link" href="https://info.credly.com/privacy-policy">Privacy</a>
+</div>
+<div class='footer-link-wrapper'>
+<a class="footer-link" href="/docs/web_service_api">Developers</a>
+</div>
+<div class='footer-link-wrapper'>
+<a class="footer-link" target="_blank" href="/support">Support</a>
+</div>
+</div>
+<div class='cookie-links'>
+<div class='cookie-link-wrapper'>
+<a class="footer-link" target="_blank" href="https://info.credly.com/cookie-policy">Cookies</a>
+</div>
+<div class='cookie-link-wrapper'>
+<a class="footer-link" target="_blank" href="https://info.credly.com/cookie-policy">Do Not Sell My Personal Information</a>
+</div>
+</div>
+<div class='app-store-links'>
+<a class='app-store-link app-store-link-google' href='https://play.google.com/store/apps/details?id=com.credly.android'></a>
+<a class='app-store-link app-store-link-apple' href='https://apps.apple.com/us/app/credly/id1630234370'></a>
+</div>
+</section>
+</div>
+
+<span></span>
+</footer>
+<script nonce="IvXn4u8pulp3icBqTKmQynfhsoc5VVRA/UxvelpjXd8=">
+//<![CDATA[
+(function(){
+  document.addEventListener('click', function(e){
+    var eventTarget = e.target;
+    if (eventTarget.id == 'skip-to-content' || eventTarget.id == 'skip-nav'){
+      var href, target;
+      href = eventTarget.getAttribute('href').substr(1);
+      target = document.getElementById(href);
+      if (!target.getAttribute('tabindex')){
+        target.setAttribute('tabindex', '-1');
+      }
+      target.focus();
+    }
+  });
+})();
+
+
+//]]>
+</script><script src="https://cdn.credly.com/assets/utilities/set_time_zone_cookie-aca1fcb79ea4e90d8e963d7850b867a9bbeb077b05a6cad141c1ce7d945fd20d.js" crossorigin="anonymous"></script>
+<script nonce="IvXn4u8pulp3icBqTKmQynfhsoc5VVRA/UxvelpjXd8=">
+//<![CDATA[
+(function(){
+  if (typeof(App) !== 'undefined' && App.Behaviors && App.Behaviors.TrackStat) {
+    App.Behaviors.TrackStat.init(
+      {"url":"https:\/\/stats.credly.com\/stats\/interaction","request_data":{"session_id":"6abc9bd7-5b49-437f-b618-05bac2402fb1","flexible_params_auth":["snapshot_json","stat_object_id","stat_object_type","stat_type"],"auth_version":"1.0","auth_key":"user:8d768abb-4e6a-4f38-8cb3-86dc95196f75","auth_timestamp":"1750356636","auth_signature":"67948d352530ba8a62a5cd7c8de5109c577a45b6e1c5e90051dcec8588ab4776"}},
+        null
+    );
+  }
+})();
+
+
+(function(){
+  const vals = window.initialAppValues = window.initialAppValues || {};
+  vals.locationData = {
+    allowedCountries: JSON.parse("[{\"id\":227,\"name\":\"United States\",\"zip_required\":false,\"org_state_required\":true},{\"id\":38,\"name\":\"Canada\",\"zip_required\":false,\"org_state_required\":true},{\"id\":3,\"name\":\"Afghanistan\",\"zip_required\":false},{\"id\":15,\"name\":\"Aland Islands\",\"zip_required\":false},{\"id\":6,\"name\":\"Albania\",\"zip_required\":false},{\"id\":61,\"name\":\"Algeria\",\"zip_required\":false},{\"id\":11,\"name\":\"American Samoa\",\"zip_required\":false},{\"id\":1,\"name\":\"Andorra\",\"zip_required\":false},{\"id\":8,\"name\":\"Angola\",\"zip_required\":false},{\"id\":5,\"name\":\"Anguilla\",\"zip_required\":false},{\"id\":9,\"name\":\"Antarctica\",\"zip_required\":false},{\"id\":4,\"name\":\"Antigua and Barbuda\",\"zip_required\":false},{\"id\":10,\"name\":\"Argentina\",\"zip_required\":false},{\"id\":7,\"name\":\"Armenia\",\"zip_required\":false},{\"id\":14,\"name\":\"Aruba\",\"zip_required\":false},{\"id\":13,\"name\":\"Australia\",\"zip_required\":false},{\"id\":12,\"name\":\"Austria\",\"zip_required\":false},{\"id\":16,\"name\":\"Azerbaijan\",\"zip_required\":false},{\"id\":32,\"name\":\"Bahamas\",\"zip_required\":false},{\"id\":23,\"name\":\"Bahrain\",\"zip_required\":false},{\"id\":19,\"name\":\"Bangladesh\",\"zip_required\":false},{\"id\":18,\"name\":\"Barbados\",\"zip_required\":false},{\"id\":36,\"name\":\"Belarus\",\"zip_required\":false},{\"id\":20,\"name\":\"Belgium\",\"zip_required\":false},{\"id\":37,\"name\":\"Belize\",\"zip_required\":false},{\"id\":25,\"name\":\"Benin\",\"zip_required\":false},{\"id\":27,\"name\":\"Bermuda\",\"zip_required\":false},{\"id\":33,\"name\":\"Bhutan\",\"zip_required\":false},{\"id\":29,\"name\":\"Bolivia\",\"zip_required\":false},{\"id\":30,\"name\":\"Bonaire, Sint Eustatius and Saba\",\"zip_required\":false},{\"id\":17,\"name\":\"Bosnia and Herzegovina\",\"zip_required\":false},{\"id\":35,\"name\":\"Botswana\",\"zip_required\":false},{\"id\":34,\"name\":\"Bouvet Island\",\"zip_required\":false},{\"id\":31,\"name\":\"Brazil\",\"zip_required\":false},{\"id\":105,\"name\":\"British Indian Ocean Territory\",\"zip_required\":false},{\"id\":28,\"name\":\"Brunei Darussalam\",\"zip_required\":false},{\"id\":22,\"name\":\"Bulgaria\",\"zip_required\":false},{\"id\":21,\"name\":\"Burkina Faso\",\"zip_required\":false},{\"id\":24,\"name\":\"Burundi\",\"zip_required\":false},{\"id\":115,\"name\":\"Cambodia\",\"zip_required\":false},{\"id\":47,\"name\":\"Cameroon\",\"zip_required\":false},{\"id\":51,\"name\":\"Cape Verde\",\"zip_required\":false},{\"id\":121,\"name\":\"Cayman Islands\",\"zip_required\":false},{\"id\":41,\"name\":\"Central African Republic\",\"zip_required\":false},{\"id\":209,\"name\":\"Chad\",\"zip_required\":false},{\"id\":46,\"name\":\"Chile\",\"zip_required\":false},{\"id\":48,\"name\":\"China\",\"zip_required\":false},{\"id\":53,\"name\":\"Christmas Island\",\"zip_required\":false},{\"id\":39,\"name\":\"Cocos (Keeling) Islands\",\"zip_required\":false},{\"id\":49,\"name\":\"Colombia\",\"zip_required\":false},{\"id\":117,\"name\":\"Comoros\",\"zip_required\":false},{\"id\":42,\"name\":\"Congo\",\"zip_required\":false},{\"id\":40,\"name\":\"Congo, The Democratic Republic Of The\",\"zip_required\":false},{\"id\":45,\"name\":\"Cook Islands\",\"zip_required\":false},{\"id\":50,\"name\":\"Costa Rica\",\"zip_required\":false},{\"id\":44,\"name\":\"Côte D'Ivoire\",\"zip_required\":false},{\"id\":97,\"name\":\"Croatia\",\"zip_required\":false},{\"id\":52,\"name\":\"Curaçao\",\"zip_required\":false},{\"id\":54,\"name\":\"Cyprus\",\"zip_required\":false},{\"id\":55,\"name\":\"Czech Republic\",\"zip_required\":false},{\"id\":58,\"name\":\"Denmark\",\"zip_required\":false},{\"id\":57,\"name\":\"Djibouti\",\"zip_required\":false},{\"id\":59,\"name\":\"Dominica\",\"zip_required\":false},{\"id\":60,\"name\":\"Dominican Republic\",\"zip_required\":false},{\"id\":62,\"name\":\"Ecuador\",\"zip_required\":false},{\"id\":64,\"name\":\"Egypt\",\"zip_required\":false},{\"id\":205,\"name\":\"El Salvador\",\"zip_required\":false},{\"id\":87,\"name\":\"Equatorial Guinea\",\"zip_required\":false},{\"id\":66,\"name\":\"Eritrea\",\"zip_required\":false},{\"id\":63,\"name\":\"Estonia\",\"zip_required\":false},{\"id\":68,\"name\":\"Ethiopia\",\"zip_required\":false},{\"id\":71,\"name\":\"Falkland Islands (Malvinas)\",\"zip_required\":false},{\"id\":73,\"name\":\"Faroe Islands\",\"zip_required\":false},{\"id\":70,\"name\":\"Fiji\",\"zip_required\":false},{\"id\":69,\"name\":\"Finland\",\"zip_required\":false},{\"id\":74,\"name\":\"France\",\"zip_required\":false},{\"id\":79,\"name\":\"French Guiana\",\"zip_required\":false},{\"id\":172,\"name\":\"French Polynesia\",\"zip_required\":false},{\"id\":210,\"name\":\"French Southern Territories\",\"zip_required\":false},{\"id\":75,\"name\":\"Gabon\",\"zip_required\":false},{\"id\":84,\"name\":\"Gambia\",\"zip_required\":false},{\"id\":78,\"name\":\"Georgia\",\"zip_required\":false},{\"id\":56,\"name\":\"Germany\",\"zip_required\":false},{\"id\":81,\"name\":\"Ghana\",\"zip_required\":false},{\"id\":82,\"name\":\"Gibraltar\",\"zip_required\":false},{\"id\":88,\"name\":\"Greece\",\"zip_required\":false},{\"id\":83,\"name\":\"Greenland\",\"zip_required\":false},{\"id\":77,\"name\":\"Grenada\",\"zip_required\":false},{\"id\":86,\"name\":\"Guadeloupe\",\"zip_required\":false},{\"id\":91,\"name\":\"Guam\",\"zip_required\":false},{\"id\":90,\"name\":\"Guatemala\",\"zip_required\":false},{\"id\":80,\"name\":\"Guernsey\",\"zip_required\":false},{\"id\":85,\"name\":\"Guinea\",\"zip_required\":false},{\"id\":92,\"name\":\"Guinea-Bissau\",\"zip_required\":false},{\"id\":93,\"name\":\"Guyana\",\"zip_required\":false},{\"id\":98,\"name\":\"Haiti\",\"zip_required\":false},{\"id\":95,\"name\":\"Heard and McDonald Islands\",\"zip_required\":false},{\"id\":230,\"name\":\"Holy See (Vatican City State)\",\"zip_required\":false},{\"id\":96,\"name\":\"Honduras\",\"zip_required\":false},{\"id\":94,\"name\":\"Hong Kong\",\"zip_required\":false},{\"id\":99,\"name\":\"Hungary\",\"zip_required\":false},{\"id\":107,\"name\":\"Iceland\",\"zip_required\":false},{\"id\":104,\"name\":\"India\",\"zip_required\":false},{\"id\":100,\"name\":\"Indonesia\",\"zip_required\":false},{\"id\":106,\"name\":\"Iraq\",\"zip_required\":false},{\"id\":101,\"name\":\"Ireland\",\"zip_required\":false},{\"id\":103,\"name\":\"Isle of Man\",\"zip_required\":false},{\"id\":102,\"name\":\"Israel\",\"zip_required\":false},{\"id\":108,\"name\":\"Italy\",\"zip_required\":false},{\"id\":110,\"name\":\"Jamaica\",\"zip_required\":false},{\"id\":112,\"name\":\"Japan\",\"zip_required\":false},{\"id\":109,\"name\":\"Jersey\",\"zip_required\":false},{\"id\":111,\"name\":\"Jordan\",\"zip_required\":false},{\"id\":122,\"name\":\"Kazakhstan\",\"zip_required\":false},{\"id\":113,\"name\":\"Kenya\",\"zip_required\":false},{\"id\":116,\"name\":\"Kiribati\",\"zip_required\":false},{\"id\":119,\"name\":\"Korea, Republic of\",\"zip_required\":false},{\"id\":283,\"name\":\"Kosovo\",\"zip_required\":false},{\"id\":120,\"name\":\"Kuwait\",\"zip_required\":false},{\"id\":114,\"name\":\"Kyrgyzstan\",\"zip_required\":false},{\"id\":123,\"name\":\"Lao People's Democratic Republic\",\"zip_required\":false},{\"id\":132,\"name\":\"Latvia\",\"zip_required\":false},{\"id\":124,\"name\":\"Lebanon\",\"zip_required\":false},{\"id\":129,\"name\":\"Lesotho\",\"zip_required\":false},{\"id\":128,\"name\":\"Liberia\",\"zip_required\":false},{\"id\":133,\"name\":\"Libya\",\"zip_required\":false},{\"id\":126,\"name\":\"Liechtenstein\",\"zip_required\":false},{\"id\":130,\"name\":\"Lithuania\",\"zip_required\":false},{\"id\":131,\"name\":\"Luxembourg\",\"zip_required\":false},{\"id\":145,\"name\":\"Macao\",\"zip_required\":false},{\"id\":139,\"name\":\"Madagascar\",\"zip_required\":false},{\"id\":153,\"name\":\"Malawi\",\"zip_required\":false},{\"id\":155,\"name\":\"Malaysia\",\"zip_required\":false},{\"id\":152,\"name\":\"Maldives\",\"zip_required\":false},{\"id\":142,\"name\":\"Mali\",\"zip_required\":false},{\"id\":150,\"name\":\"Malta\",\"zip_required\":false},{\"id\":140,\"name\":\"Marshall Islands\",\"zip_required\":false},{\"id\":147,\"name\":\"Martinique\",\"zip_required\":false},{\"id\":148,\"name\":\"Mauritania\",\"zip_required\":false},{\"id\":151,\"name\":\"Mauritius\",\"zip_required\":false},{\"id\":240,\"name\":\"Mayotte\",\"zip_required\":false},{\"id\":154,\"name\":\"Mexico\",\"zip_required\":false},{\"id\":72,\"name\":\"Micronesia, Federated States Of\",\"zip_required\":false},{\"id\":136,\"name\":\"Moldova, Republic of\",\"zip_required\":false},{\"id\":135,\"name\":\"Monaco\",\"zip_required\":false},{\"id\":144,\"name\":\"Mongolia\",\"zip_required\":false},{\"id\":137,\"name\":\"Montenegro\",\"zip_required\":false},{\"id\":149,\"name\":\"Montserrat\",\"zip_required\":false},{\"id\":134,\"name\":\"Morocco\",\"zip_required\":false},{\"id\":156,\"name\":\"Mozambique\",\"zip_required\":false},{\"id\":143,\"name\":\"Myanmar\",\"zip_required\":false},{\"id\":157,\"name\":\"Namibia\",\"zip_required\":false},{\"id\":166,\"name\":\"Nauru\",\"zip_required\":false},{\"id\":165,\"name\":\"Nepal\",\"zip_required\":false},{\"id\":163,\"name\":\"Netherlands\",\"zip_required\":false},{\"id\":158,\"name\":\"New Caledonia\",\"zip_required\":false},{\"id\":168,\"name\":\"New Zealand\",\"zip_required\":false},{\"id\":162,\"name\":\"Nicaragua\",\"zip_required\":false},{\"id\":159,\"name\":\"Niger\",\"zip_required\":false},{\"id\":161,\"name\":\"Nigeria\",\"zip_required\":false},{\"id\":167,\"name\":\"Niue\",\"zip_required\":false},{\"id\":160,\"name\":\"Norfolk Island\",\"zip_required\":false},{\"id\":146,\"name\":\"Northern Mariana Islands\",\"zip_required\":false},{\"id\":141,\"name\":\"North Macedonia\",\"zip_required\":false},{\"id\":164,\"name\":\"Norway\",\"zip_required\":false},{\"id\":169,\"name\":\"Oman\",\"zip_required\":false},{\"id\":175,\"name\":\"Pakistan\",\"zip_required\":false},{\"id\":182,\"name\":\"Palau\",\"zip_required\":false},{\"id\":180,\"name\":\"Palestine, State of\",\"zip_required\":false},{\"id\":170,\"name\":\"Panama\",\"zip_required\":false},{\"id\":173,\"name\":\"Papua New Guinea\",\"zip_required\":false},{\"id\":183,\"name\":\"Paraguay\",\"zip_required\":false},{\"id\":171,\"name\":\"Peru\",\"zip_required\":false},{\"id\":174,\"name\":\"Philippines\",\"zip_required\":false},{\"id\":178,\"name\":\"Pitcairn\",\"zip_required\":false},{\"id\":176,\"name\":\"Poland\",\"zip_required\":false},{\"id\":181,\"name\":\"Portugal\",\"zip_required\":false},{\"id\":179,\"name\":\"Puerto Rico\",\"zip_required\":false},{\"id\":184,\"name\":\"Qatar\",\"zip_required\":false},{\"id\":185,\"name\":\"Réunion\",\"zip_required\":false},{\"id\":186,\"name\":\"Romania\",\"zip_required\":false},{\"id\":188,\"name\":\"Russian Federation\",\"zip_required\":false},{\"id\":189,\"name\":\"Rwanda\",\"zip_required\":false},{\"id\":26,\"name\":\"Saint Barthélemy\",\"zip_required\":false},{\"id\":195,\"name\":\"Saint Helena\",\"zip_required\":false},{\"id\":118,\"name\":\"Saint Kitts And Nevis\",\"zip_required\":false},{\"id\":125,\"name\":\"Saint Lucia\",\"zip_required\":false},{\"id\":138,\"name\":\"Saint Martin\",\"zip_required\":false},{\"id\":177,\"name\":\"Saint Pierre And Miquelon\",\"zip_required\":false},{\"id\":231,\"name\":\"Saint Vincent And The Grenadines\",\"zip_required\":false},{\"id\":238,\"name\":\"Samoa\",\"zip_required\":false},{\"id\":200,\"name\":\"San Marino\",\"zip_required\":false},{\"id\":204,\"name\":\"Sao Tome and Principe\",\"zip_required\":false},{\"id\":190,\"name\":\"Saudi Arabia\",\"zip_required\":false},{\"id\":201,\"name\":\"Senegal\",\"zip_required\":false},{\"id\":187,\"name\":\"Serbia\",\"zip_required\":false},{\"id\":192,\"name\":\"Seychelles\",\"zip_required\":false},{\"id\":199,\"name\":\"Sierra Leone\",\"zip_required\":false},{\"id\":194,\"name\":\"Singapore\",\"zip_required\":false},{\"id\":206,\"name\":\"Sint Maarten\",\"zip_required\":false},{\"id\":198,\"name\":\"Slovakia\",\"zip_required\":false},{\"id\":196,\"name\":\"Slovenia\",\"zip_required\":false},{\"id\":191,\"name\":\"Solomon Islands\",\"zip_required\":false},{\"id\":202,\"name\":\"Somalia\",\"zip_required\":false},{\"id\":241,\"name\":\"South Africa\",\"zip_required\":false},{\"id\":89,\"name\":\"South Georgia and the South Sandwich Islands\",\"zip_required\":false},{\"id\":282,\"name\":\"South Sudan\",\"zip_required\":false},{\"id\":67,\"name\":\"Spain\",\"zip_required\":false},{\"id\":127,\"name\":\"Sri Lanka\",\"zip_required\":false},{\"id\":203,\"name\":\"Suriname\",\"zip_required\":false},{\"id\":197,\"name\":\"Svalbard And Jan Mayen\",\"zip_required\":false},{\"id\":207,\"name\":\"Swaziland\",\"zip_required\":false},{\"id\":193,\"name\":\"Sweden\",\"zip_required\":false},{\"id\":43,\"name\":\"Switzerland\",\"zip_required\":false},{\"id\":222,\"name\":\"Taiwan\",\"zip_required\":false},{\"id\":213,\"name\":\"Tajikistan\",\"zip_required\":false},{\"id\":223,\"name\":\"Tanzania, United Republic of\",\"zip_required\":false},{\"id\":212,\"name\":\"Thailand\",\"zip_required\":false},{\"id\":215,\"name\":\"Timor-Leste\",\"zip_required\":false},{\"id\":211,\"name\":\"Togo\",\"zip_required\":false},{\"id\":214,\"name\":\"Tokelau\",\"zip_required\":false},{\"id\":218,\"name\":\"Tonga\",\"zip_required\":false},{\"id\":220,\"name\":\"Trinidad and Tobago\",\"zip_required\":false},{\"id\":217,\"name\":\"Tunisia\",\"zip_required\":false},{\"id\":219,\"name\":\"Turkey\",\"zip_required\":false},{\"id\":216,\"name\":\"Turkmenistan\",\"zip_required\":false},{\"id\":208,\"name\":\"Turks and Caicos Islands\",\"zip_required\":false},{\"id\":221,\"name\":\"Tuvalu\",\"zip_required\":false},{\"id\":225,\"name\":\"Uganda\",\"zip_required\":false},{\"id\":224,\"name\":\"Ukraine\",\"zip_required\":false},{\"id\":2,\"name\":\"United Arab Emirates\",\"zip_required\":false},{\"id\":76,\"name\":\"United Kingdom\",\"zip_required\":false},{\"id\":226,\"name\":\"United States Minor Outlying Islands\",\"zip_required\":false},{\"id\":228,\"name\":\"Uruguay\",\"zip_required\":false},{\"id\":229,\"name\":\"Uzbekistan\",\"zip_required\":false},{\"id\":236,\"name\":\"Vanuatu\",\"zip_required\":false},{\"id\":232,\"name\":\"Venezuela, Bolivarian Republic of\",\"zip_required\":false},{\"id\":235,\"name\":\"Vietnam\",\"zip_required\":false},{\"id\":233,\"name\":\"Virgin Islands, British\",\"zip_required\":false},{\"id\":234,\"name\":\"Virgin Islands, U.S.\",\"zip_required\":false},{\"id\":237,\"name\":\"Wallis and Futuna\",\"zip_required\":false},{\"id\":65,\"name\":\"Western Sahara\",\"zip_required\":false},{\"id\":239,\"name\":\"Yemen\",\"zip_required\":false},{\"id\":242,\"name\":\"Zambia\",\"zip_required\":false},{\"id\":243,\"name\":\"Zimbabwe\",\"zip_required\":false}]"),
+    allowedStatesOrProvinces: {"United Arab Emirates":["Abu Dhabi","Ajman","Dubai","Dubai","Fujairah","Ras al Khaimah","Ras Al Khaimah","Sharjah","Umm Al Quwain"],"Afghanistan":["Badakhshan","Kabul"],"Albania":["Fier County","Qarku i Elbasanit","Tirana County"],"Armenia":["Kotayk Province","Yerevan"],"Angola":["Luanda Province"],"Argentina":["Buenos Aires","Buenos Aires","Buenos Aires Province","Cordoba","Corrientes Province","Mendoza Province","Santa Cruz Province","Santa Fe Province"],"Austria":["Carinthia","Lower Austria","Styria","Tyrol","Upper Austria","Vienna","Vorarlberg"],"Australia":["Australian Capital Territory","New South Wales","Northern Territory","Queensland","South Australia","Tasmania","Victoria","Western Australia"],"Bosnia and Herzegovina":["Federation of Bosnia and Herzegovina","Republika Srpska"],"Barbados":["Saint Michael"],"Bangladesh":["Chittagong Division","Dhaka Division","Khulna Division","Rajshahi Division","Sylhet Division"],"Belgium":["Brussels","Flanders","Wallonia"],"Bulgaria":["Plovdiv Province","Silistra","Sofia City Province","Veliko Tarnovo Province"],"Bahrain":["Capital Governorate","Muharraq Governorate","Northern Governorate","Southern Governorate"],"Benin":["Atlantique Department","Littoral Department"],"Bermuda":["Pembroke Parish"],"Bolivia":["Santa Cruz Department"],"Brazil":["Espírito Santo","Federal District","Mato Grosso","Pará","State of Bahia","State of Ceará","State of Goiás","State of Minas Gerais","State of Paraná","State of Pernambuco","State of Rio de Janeiro","State of Rio Grande do Norte","State of Rio Grande do Sul","State of Santa Catarina","State of São Paulo"],"Bahamas":["New Providence"],"Bhutan":["Thimphu"],"Botswana":["South-East District"],"Belarus":["Minsk Region","Mogilev Region"],"Canada":["Alberta","British Columbia","Manitoba","New Brunswick","Newfoundland and Labrador","Northwest Territory","Nova Scotia","Nunavut Territory","Ontario","Prince Edward Island","Quebec","Saskatchewan","Yukon"],"Congo, The Democratic Republic Of The":["Kinshasa","North-Kivu","South-Kivu"],"Switzerland":["Aargau","Basel City","Basel-Landschaft","Canton of Bern","Fribourg","Geneva","Schwyz","Solothurn","Thurgau","Ticino","Vaud","Zurich"],"Côte D'Ivoire":["Abidjan Autonomous District","Comoé District"],"Chile":["Antofagasta","Bio Bio","Maule","Santiago Metropolitan Region","Valparaíso"],"Cameroon":["Centre Region","Littoral Region","Northwest Region","Région du Nord","Southwest Region"],"China":["Anhui","Beijing","Fujian","Gansu","Guangdong Province","Henan","Jiangsu","Jiangxi","Shandong","Shanghai","Tianjin","Zhejiang"],"Colombia":["Antioquia","Atlantico","Bogota","Bolivar","Choco","Cundinamarca","Huila","Magdalena","Risaralda","Santander","Valle del Cauca"],"Costa Rica":["Alajuela Province","Cartago Province","Heredia Province","Provincia de Alajuela","San José Province"],"Curaçao":["Curaçao"],"Cyprus":["Famagusta","Larnaca","Limassol","Nicosia"],"Czech Republic":["Hradec Králové Region","Olomouc Region","Prague","South Moravian Region","Zlín Region"],"Germany":["Baden-Württemberg","Bavaria","Berlin","Brandenburg","Hamburg","Hessen","Lower Saxony","Mecklenburg-Vorpommern","North Rhine-Westphalia","Rhineland-Palatinate","Saarland","Saxony","Schleswig-Holstein","Thuringia"],"Dominican Republic":["Distrito Nacional","Duarte Province","La Altagracia","La Altagracia Province","La Romana Province","Samaná Province","Santiago Province"],"Algeria":["Algiers Province","Constantine Province","Jijel Province","Mila Province","Mostaganem Province","Relizane Province","Sétif Province","Skikda Province","Tlemcen Province"],"Ecuador":["Azuay","Chimborazo","Guayas","Imbabura","Pichincha","Santo Domingo de los Tsachilas"],"Estonia":["Harju County","Ida-Viru County"],"Egypt":["Alexandria Governorate","Al-Qalyubia Governorate","Al-Sharqia Governorate","Ash Sharqia Governorate","Beni Suef Governorate","Cairo Governorate","Dakahlia Governorate","Damietta Governorate","Giza Governorate","Menofia Governorate"],"Spain":["Andalusia","Aragon","Asturias","Balearic Islands","Basque Country","Canary Islands","Cantabria","Castile and León","Castile-La Mancha","Catalonia","Community of Madrid","Comunitat Valenciana","Galicia","Navarre","Region of Murcia"],"Ethiopia":["Addis Ababa","Oromia"],"Finland":["Central Finland","Kainuu","North Ostrobothnia","North Savo","Ostrobothnia","Pirkanmaa","Satakunta","South Karelia","South Savo","Southwest Finland","Uusimaa"],"Fiji":["Central Division","Western Division"],"Micronesia, Federated States Of":["Pohnpei"],"France":["Auvergne-Rhône-Alpes","Bourgogne-Franche-Comté","Brittany","Centre-Val de Loire","Grand Est","Hauts-de-France","Île-de-France","Île-de-France","Nouvelle-Aquitaine","Occitanie","Pays de la Loire","Provence-Alpes-Côte d'Azur"],"Gabon":["Estuaire"],"United Kingdom":["England","Northern Ireland","Scotland","Wales"],"Georgia":["Adjara","Tbilisi"],"Ghana":["Central Region","Greater Accra Region","Northern Region","Western North Region"],"Guinea":["Conakry"],"Guatemala":["Guatemala Department","Quetzaltenango Department"],"Guyana":["Demerara-Mahaica"],"Hong Kong":["Hong Kong Island"],"Honduras":["Cortés Department","Francisco Morazán Department"],"Croatia":["Karlovac County","Osijek-Baranja County","Zagreb County"],"Indonesia":["Bali","Banten","Bengkulu","Central Java","East Java","Jakarta","North Sumatra","Riau Islands","South Sumatra","West Java","West Kalimantan","West Sumatra"],"Ireland":["County Carlow","County Cork","County Dublin","County Galway","County Kildare","County Limerick","County Louth","County Waterford","County Westmeath","County Wexford","County Wicklow"],"Israel":["Center District","South District","Tel Aviv District"],"Isle of Man":["Douglas"],"India":["Andhra Pradesh","Assam","Bihar","Chandigarh","Chhattisgarh","Delhi","Goa","Gujarat","Haryana","Himachal Pradesh","Jharkhand","Karnataka","Kerala","Madhya Pradesh","Maharashtra","Meghalaya","Odisha","Odisha","Puducherry","Punjab","Rajasthan","Tamil Nadu","Telangana","Telangana","Uttarakhand","Uttar Pradesh","West Bengal"],"Iraq":["Baghdad Governorate","Basra Governorate","Duhok Governorate","Karbala Governorate","Kurdistan Region","Maysan Governorate"],"Italy":["Abruzzo","Apulia","Basilicata","Calabria","Campania","Emilia-Romagna","Friuli-Venezia Giulia","Lazio","Liguria","Lombardia","Lombardy","Marche","Piedmont","Puglia","Sicilia","Sicily","Trentino-South Tyrol","Tuscany","Umbria","Veneto"],"Jamaica":["St. Andrew Parish","Westmoreland Parish"],"Jordan":["Amman Governorate","Zarqa Governorate"],"Japan":["Aichi","Aomori","Chiba","Fukuoka","Gifu","Gunma","Hiroshima","Ibaraki","Kanagawa","Kumamoto","Kyoto","Nara","Oita","Okinawa","Osaka","Saitama","Shiga","Tochigi","Tokyo","Toyama","Yamagata"],"Kenya":["Kakamega County","Kiambu County","Laikipia County","Machakos County","Mombasa County","Nairobi County","Turkana County","Uasin Gishu County"],"Kyrgyzstan":["Bishkek City"],"Cambodia":["Kandal Province","Phnom Penh","Siem Reap Province"],"Korea, Republic of":["Busan","Gangwon-do","Gyeonggi-do","Gyeongsangbuk-do","Incheon","Jeollanam-do","Seoul"],"Kuwait":["Al Ahmadi Governorate","Al Asimah Governate","Al Farwaniyah Governorate","Hawalli Governorate"],"Cayman Islands":["George Town"],"Kazakhstan":["Almaty Region","Astana","Atyrau Region","Turkistan Region"],"Lebanon":["Beirut Governorate","South Governorate"],"Saint Lucia":["Gros Islet"],"Liechtenstein":["Gamprin"],"Sri Lanka":["Central Province","Eastern Province","North Central Province","North Western Province","Sabaragamuwa Province","Southern Province","Uva Province","Western Province"],"Liberia":["Montserrado"],"Lithuania":["Alytus County","Kaunas County","Vilnius County"],"Luxembourg":["Luxembourg"],"Libya":["Benghazi district","Misrata District","Tripoli District","Zawiya District"],"Morocco":["Casablanca-Settat","Fez-Meknès","Rabat-Salé-Kénitra","Souss-Massa","Tangier-Tétouan-Al Hoceima"],"Moldova, Republic of":["Chisinau"],"Madagascar":["Analamanga"],"North Macedonia":["Greater Skopje"],"Mali":["Bamako Capital District"],"Myanmar":["Magway Region","Mandalay Region","Tanintharyi Region","Yangon Region"],"Northern Mariana Islands":["Saipan"],"Mauritania":["Dakhlet Nouadhibou"],"Mauritius":["Port Louis District","Rivière du Rempart District"],"Maldives":["Laamu Atoll","Malé"],"Malawi":["Northern Region","Southern Region"],"Mexico":["Aguascalientes","Baja California","Baja California Sur","Chiapas","Chihuahua","Coahuila","Colima","Durango","Guanajuato","Jalisco","Mexico City","Michoacán","Morelos","Nayarit","Nuevo Leon","Oaxaca","Puebla","Querétaro","Quintana Roo","San Luis Potosi","Sonora","State of Mexico","Tabasco","Tamaulipas","Veracruz","Yucatán"],"Malaysia":["Federal Territory of Kuala Lumpur","Johor","Johor Darul Ta'zim","Kedah","Negeri Sembilan","Penang","Perak","Putrajaya","Sabah","Sarawak","Selangor"],"Mozambique":["Maputo","Nampula Province"],"Nigeria":["Abia","Akwa Ibom","Anambra","Delta","Edo","Ekiti","Enugu","Federal Capital Territory","Gombe","Imo","Jigawa","Kaduna","Kano","Kwara","Lagos","Niger","Ogun State","Osun","Oyo","Plateau","Rivers","Yobe"],"Netherlands":["Drenthe","Flevoland","Gelderland","Groningen","Limburg","North Brabant","North Holland","Overijssel","South Holland","Utrecht"],"Norway":["Innlandet","Oslo","Østfold","Rogaland","Telemark","Trøndelag","Vestland","Viken"],"Nepal":["Bagmati Province","Lumbini Province","Sudurpashchim Province"],"New Zealand":["Auckland","Bay of Plenty","Canterbury","Hawke's Bay","Manawatu-Wanganui","Southland","Waikato","Wellington"],"Oman":["Ad Dakhiliyah ‍Governorate","Ad Dhahirah Governorate","Al Batinah North Governorate","Musandam Governorate","Muscat Governorate"],"Panama":["Panamá Province"],"Peru":["Callao Region","Lima Province","Loreto"],"Philippines":["Bangsamoro Autonomous Region in Muslim Mindanao","Bicol","Cagayan Valley","Calabarzon","Central Luzon","Central Visayas","Davao Region","Ilocos Region","Metro Manila","MIMAROPA","Northern Mindanao","Western Visayas","Zamboanga Peninsula"],"Pakistan":["Balochistan","Islamabad Capital Territory","Khyber Pakhtunkhwa","Punjab","Sindh"],"Poland":["Greater Poland Voivodeship","Lesser Poland Voivodeship","Łódź Voivodeship","Lower Silesian Voivodeship","Lublin Voivodeship","Masovian Voivodeship","Podkarpackie Voivodeship","Pomeranian Voivodeship","Silesian Voivodeship","Województwo podlaskie"],"Puerto Rico":["Arecibo","Carolina","Ceiba","Río Grande","San Juan","San Lorenzo"],"Portugal":["Aveiro District","Braga","Faro District","Guarda District","Leiria District","Lisboa","Lisbon","Porto","Porto District","Setubal"],"Palau":["Koror"],"Paraguay":["Alto Paraná Department","Canindeyú"],"Qatar":["Al Daayen Municipality","Al Khor and Al Thakhira Municipality","Al Rayyan Municipality","Al Wakrah Municipality","Doha","Doha Municipality","Umm Salal Municipality"],"Romania":["Brașov","Bucharest","Cluj County","Constanța","Ilfov County","Timiș"],"Serbia":["Vojvodina"],"Russian Federation":["Moscow"],"Rwanda":["Kigali City","Northern Province"],"Saudi Arabia":["Al Bahah Province","Al Jowf Province","Al Madinah Province","Al Qassim Province","Aseer Province","Eastern Province","Hail Province","Jazan Province","Makkah Province","Najran Province","Northern Borders Province","Riyadh Province","Tabuk Province","منطقة الرياض"],"Seychelles":["Grand Anse Praslin"],"Sweden":["Dalarna County","Gavleborg County","Jonkoping County","Kalmar County","Örebro County","Östergötland County","Skåne County","Stockholm County","Uppsala County","Västerbotten County","Västmanland County","Västra Götaland County"],"Saint Helena":["Ascension"],"Slovenia":["Ljubljana"],"Slovakia":["Bratislava Region","Košice Region","Trenčín Region","Žilina Region"],"Sierra Leone":["Western Area"],"Senegal":["Dakar Region"],"Somalia":["Banaadir","Lower Juba"],"Suriname":["Paramaribo District"],"El Salvador":["Cuscatlán Department"],"Swaziland":["Lubombo Region"],"Turks and Caicos Islands":["Turks Islands"],"Chad":["N'Djamena"],"Togo":["Maritime Region"],"Thailand":["Bangkok","Chiang Mai","Chiang Rai","Chon Buri","Nakhon Si Thammarat","Nong Khai","Nonthaburi","Pathum Thani","Phra Nakhon Si Ayutthaya","Samut Prakan","Udon Thani"],"Timor-Leste":["Dili"],"Turkmenistan":["Lebap"],"Tunisia":["Béja Governorate","Nabeul Governorate","Sfax Governorate","Tunis Governorate"],"Turkey":["Ankara","Antalya","Hatay","İstanbul","İzmir","Kocaeli","Mersin","Muğla","Niğde","Sakarya","Uşak"],"Trinidad and Tobago":["Arima Borough Corporation"],"Tuvalu":["Funafuti"],"Taiwan":["Hsinchu County","Kaohsiung City","New Taipei City","Tainan City","Taipei City","Taoyuan City"],"Tanzania, United Republic of":["Arusha Region","Dar es Salam","Mbeya Region","Mjini Magharibi Region"],"Ukraine":["Kharkiv Oblast","Kyiv city","Lviv Oblast","Zhytomyr Oblast"],"Uganda":["Central Region","Eastern Region"],"United States":["Alabama","Alaska","American Samoa","Arizona","Arkansas","California","California","Colorado","Connecticut","Delaware","District of Columbia","Florida","Georgia","Guam","Hawaii","Idaho","Illinois","Indiana","Iowa","Kansas","Kentucky","Louisiana","Maine","Marshall Islands","Maryland","Massachusetts","Michigan","Minnesota","Mississippi","Missouri","Montana","Nebraska","Nevada","New Hampshire","New Jersey","New Mexico","New York","North Carolina","North Dakota","Ohio","Oklahoma","Oregon","Palau","Pennsylvania","Puerto Rico","Rhode Island","South Carolina","South Dakota","Tennessee","Texas","Texas","U.S. Virgin Islands","Utah","Vermont","Virginia","Washington","West Virginia","Wisconsin","Wyoming"],"Uruguay":["Colonia Department","Departamento de Canelones","Montevideo Department"],"Uzbekistan":["Tashkent Region"],"Venezuela, Bolivarian Republic of":["Aragua","Capital District","Lara","Mérida"],"Vietnam":["Binh Duong","Da Nang","Dong Nai","Hai Phong","Hanoi","Ho Chi Minh City","Quảng Ninh","Soc Trang","Thai Nguyen"],"Samoa":["Upolu"],"Yemen":["Ibb Governorate","Sana'a City","Ta'izz Governorate"],"South Africa":["Eastern Cape","Free State","Gauteng","KwaZulu-Natal","Limpopo","Mpumalanga","North West","Western Cape"],"Zambia":["Copperbelt Province","Lusaka Province"],"Zimbabwe":["Bulawayo Province","Harare Province","Mashonaland East Province","Masvingo Province","Midlands Province"]},
+    country: ""
+  };
+
+  vals.available_locales = {
+   allowedLanguages : [{"code":"en","name":"English"},{"code":"fr","name":"French"},{"code":"fr-CA","name":"French (Canada)"},{"code":"de","name":"German"},{"code":"ja","name":"Japanese"},{"code":"ko","name":"Korean"},{"code":"pt","name":"Portuguese"},{"code":"pt-BR","name":"Portuguese (Brazil)"},{"code":"zh-CN","name":"Simplified Chinese"},{"code":"es-ES","name":"Spanish (Spain)"},{"code":"es-US","name":"Spanish (US)"}]
+ };
+
+  vals.cdnHost = "cdn.credly.com" || document.location.host;
+  vals.env = 'production';
+
+  vals.faethm = {
+    ontology_mapping_url: "https://app.faethm.ai/ontology-mapping/"
+  };
+
+  vals.launchDarklyId = "663bdb8143d6f11011f85017";
+
+  vals.recaptchaSitekey = "6Le_oQUrAAAAAAWUjXnKgan1cVo99kylEFA1lfNZ";
+  // Google's hostname is blocked in China due to censorship lows.
+  window.recaptchaOptions = { useRecaptchaNet: true };
+
+  vals.frontendDebug = false
+
+  vals.alerts = JSON.parse("{\"flashes\":[]}").flashes;
+
+  vals.share = {
+    facebookClientId: "126857714151516",
+    ziprecruiter: {
+      url: "https://www.ziprecruiter.com/credly",
+      appName: "ZipRecruiter"
+    }
+  };
+
+  vals.sso = {
+      apple: {
+          clientId: "com.credly.signinwithappleservicesid"
+      },
+      google: { clientId: "40778611547-2akc17g7rv7l4n0gfs8m9ogcn12rvl47.apps.googleusercontent.com" },
+      microsoft: {
+        clientId: "",
+        tenantId: "54e44946-b280-4ccf-b102-2224d7008f17"
+      }
+  }
+
+  vals.features = [];
+  []
+    .forEach(function(f) {vals.features.push(f);});
+  vals.abTests = {};
+
+  vals.config = {
+    sizedImages: true,
+    startingOauth: false,
+    oauthAppId: ''
+  };
+
+  vals.tracking = JSON.parse(
+    "{\"url\":\"https://stats.credly.com/stats/interaction\",\"refresh_url\":\"/stat_signatures/interaction\",\"request_data\":{\"session_id\":\"6abc9bd7-5b49-437f-b618-05bac2402fb1\",\"flexible_params_auth\":[\"snapshot_json\",\"stat_object_id\",\"stat_object_type\",\"stat_type\"],\"auth_version\":\"1.0\",\"auth_key\":\"user:8d768abb-4e6a-4f38-8cb3-86dc95196f75\",\"auth_timestamp\":\"1750356636\",\"auth_signature\":\"67948d352530ba8a62a5cd7c8de5109c577a45b6e1c5e90051dcec8588ab4776\"}}"
+  );
+
+
+    vals.currentUser = { anonymous: true };
+
+    vals.launchDarklyOptions = { useReport: true };
+    vals.launchDarklyUserContext = {"kind":"guest","anonymous":true};
+
+  const prerenderData = window.prerenderData = window.prerenderData || {};
+    prerenderData[{"a":"/organizations/the-linux-foundation"}.a] =
+      JSON.parse({"a":"{\"data\":{\"id\":\"the-linux-foundation\",\"name\":\"The Linux Foundation\",\"vanity_slug\":\"the-linux-foundation\",\"photo\":{\"id\":\"e6066b96-c59d-49b6-87cc-d8873022e84f\",\"url\":\"https://images.credly.com/images/e6066b96-c59d-49b6-87cc-d8873022e84f/large_blob.png\"},\"photo_url\":\"https://images.credly.com/images/e6066b96-c59d-49b6-87cc-d8873022e84f/blob.png\",\"synthetic_id\":\"f4b8d042-0072-4a1a-8d00-260b513026e8\",\"bio\":\"The Linux Foundation is supported by 1,000+ member companies and is the leading home for collaboration on open source software, open standards, open data \\u0026 open hardware critical to global infrastructure. Projects include Cloud Foundry, FINOS, Hyperledger, Kubernetes, Linux, Node.js, ONAP, RISC-V \\u0026 more. LF leverages best practices to address the needs of contributors, users \\u0026 solution providers to create sustainable models for collaboration through open governance, events, training \\u0026 community engagement.\",\"facebook_url\":\"https://www.facebook.com/TheLinuxFoundation\",\"linked_in_url\":\"https://www.linkedin.com/company/208777\",\"twitter_url\":\"https://twitter.com/linuxfoundation\",\"default_page\":\"badges\",\"website_url\":\"https://training.linuxfoundation.org/\",\"vanity_url\":\"/org/the-linux-foundation\",\"has_public_earned_badges\":true,\"has_public_issuer_collections\":true,\"has_earner_directory\":false,\"has_custom_directory\":false,\"user_has_accepted_employment\":false,\"has_dashboard_employee_directory\":false,\"activity_feed_enabled\":false,\"public_pathways_present\":true,\"has_earner_directory_location_search\":false},\"metadata\":{}}"}.a);
+})();
+
+
+//]]>
+</script><script src="https://cdn.credly.com/assets/application.legacy-browser-ef91e6301dccefa162c0ce90234d2cf00f1ee79ebf7b8834da93e057a5d4d324.js" crossorigin="anonymous"></script>
+</body>
+</html>
