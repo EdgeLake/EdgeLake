@@ -1,8 +1,8 @@
 # EdgeLake
 Transform your edge nodes into members of a permissioned decentralized network, optimized to manage and monitor data and resources at the edge.
-* Deploy EdgeLake instances on your nodes at the edge. 
-* Enable services on each node. 
-* Stream data from your PLCs, Sensors, and applications to the edge nodes. 
+* Deploy EdgeLake instances on nodes at the edge. 
+* Enable data management services on each node. 
+* Stream data from PLCs, Sensors, and applications to the edge nodes. 
 * Query the distributed data from a single point (as if the data is hosted in a centralized database). 
 * Manage your edge resources from a single point (the network of nodes reflects a [Single System Image](https://en.wikipedia.org/wiki/Single_system_image)).
 
@@ -21,9 +21,9 @@ Transform your edge nodes into members of a permissioned decentralized network, 
 ## How it Works
 * By deploying EdgeLake on a node, the node joins a decentralized, P2P network of nodes.
 * Using a network protocol and a shared metadata layer, the nodes operate as a single machine that is optimized to capture, host, manage and query data at the edge. 
-* The nodes share a metadata layer. The metadata includes policies that describe the schemas of the data, the data distribution, the participating nodes, security and data ownerships and more. 
+* The nodes share a metadata layer. The metadata includes policies that describe the schemas of the data, the data distribution, the participating nodes, security, data ownership, and more. 
 The shared metadata is hosted in one of the following:
-  * A member node designated as a Master Node.
+  * A member node is designated as a Master Node.
   * A blockchain (making the network fully decentralized).
 * Each node in the network is configured to provide data services. Examples of services:
   * Capture data via _REST_, _MQTT_, _gRPC_, _JSON Files_.
@@ -38,25 +38,25 @@ Deploying an EdgeLake node and making the node a member of a network is done as 
 * [Download and install](#download-and-install) the EdgeLake software on the Edge Node.
 * Enable the services that determine the functionalities provided by the node. 
   
-Services are enabled by one, or a combination of the following:
+Services are enabled by one or a combination of the following:
 * Issuing configuration commands using the Node's Command Line Interface (CLI).
 * Listing configuration commands in script files and associating the node with the files.
 * Listing configuration commands in policies that are hosted in the shared metadata and associating the node with the policies.
    
 The services configured determine the role of a node which can be one or multiple of the following:  
 * **Operator Node** - a node that captures data and hosts the data on a local DBMS. Data sources like devices, PLCs and applications deliver data to Operator Nodes for storage. 
-* **Query Node** - a node that orchestrates a query process. Applications deliver their queries to Query Nodes, these nodes interact with Operator Nodes (that host the data) to return a unified and complete reply for each query. 
-* **Master Node** - a node that replaces a blockchain platform for storage of metadata policies. The network metadata is organized in Policies and users can associate a blockchain or alternatively a Master Node for metadata storage.
+* **Query Node** - a node that orchestrates a query process. Applications deliver their queries to Query Nodes, which interact with Operator Nodes (that host the data) to return a unified and complete reply for each query. 
+* **Master Node** - a node that replaces a blockchain platform for storage of metadata policies. The network metadata is organized in Policies, and users can associate a blockchain or, alternatively, a Master Node for metadata storage.
 
-In a deployed network, devices, sensors, PLCs and applications send their data to Operator Nodes. Data management on 
+In a deployed network, devices, sensors, PLCs, and applications send their data to Operator Nodes. Data management on 
 each Operator Node is automated.   
 Queries are satisfied by Query Nodes as if all the distributed data is managed in a centralized database.     
-The same setup monitors edge resources - for example, users and applications can monitor CPU, Network, disk-space, 
+The same setup monitors edge resources - for example, users and applications can monitor CPU, Network, disk space, 
 of the distributed edge resources from a single point.
 
 ## Download and Install
 
-Detailed directions for Install EdgeLke can be found in [docker-compose repository](https://github.com/EdgeLake/docker-compose)
+Detailed directions to install EdgeLake can be found in the [docker-compose repository](https://github.com/EdgeLake/docker-compose)
 
 **Prepare Node(s)**:
 1. Install requirements
@@ -135,11 +135,11 @@ make up query
 | Databases             | PostgreSQL installed (optional) |
 |                       | SQLite (default, no need to install) |
 |                       | MongoDB installed (Only if blob storage is needed) |
-| CPU                   | Intel, ARM and AMD are supported. |
+| CPU                   | Intel, ARM, and AMD are supported. |
 |                       | EdgeLake can be deployed on a single CPU machine and up to the largest servers (can be deployed on gateways, Raspberry PI, and all the way to the largest multi-core machines).|
-| Storage               | EdgeLake supports horizontal scaling - nodes (and storage) are added dynamically as needed, therefore less complexity in scaling considerations. Requirements are based on expected volume and duration of data on each node. EdgeLake supports automated archival and transfer to larger nodes (if needed). |
-| Network               | Required: a TCP based network (local TCP based networks, over the internet and combinations are supported) |
-|                       | An overlay network is recommended. Most overlay networks can be used transparently. Nebula used as a default overlay network. |
+| Storage               | EdgeLake supports horizontal scaling - nodes (and storage) are added dynamically as needed, therefore less complexity in scaling considerations. Requirements are based on the expected volume and duration of data on each node. EdgeLake supports automated archival and transfer to larger nodes (if needed). |
+| Network               | Required: a TCP based network (local TCP-based networks, over the internet, and combinations are supported) |
+|                       | An overlay network is recommended. Most overlay networks can be used transparently. Nebula is used as a default overlay network. |
 |                       | Static IP and 3 ports open and accessible on each node (either via an Overlay Network, or without an Overlay). |
 | Cloud Integration     | Build in integration using REST, Pub-Sub, and Kafka. |
 | Deployment options    | Executable (can be deployed as a background process), or Docker or Kubernetes. |
@@ -147,13 +147,13 @@ make up query
 
 **Comments**:
 * Databases: 
-  - SQLite recommended for smaller nodes and in-memory data.
-  - PostgreSQL recommended for larger nodes.
-  - MongoDB used for blob storage.
+  - SQLite - recommended for smaller nodes and in-memory data.
+  - PostgreSQL - recommended for larger nodes.
+  - MongoDB - used for blob storage.
   - Multiple databases can be deployed and used on the same node.
     
 * Network:
     An Overlay network is recommended for the following reasons:
     - Isolate the network for security considerations.
-    - Manage IP and Ports availability. Without an overlay network, users needs to configure and manage availability 
+    - Manage IP and Ports availability. Without an overlay network, users need to configure and manage the availability 
       of IP and Ports used.
