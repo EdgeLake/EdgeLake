@@ -8,8 +8,8 @@ Transform your edge nodes into members of a permissioned decentralized network, 
 
 ## Join the community
 * To track code changes, star the project.
-* <img src="imgs/slack-logo-thumb.png" height="3%" width="3%" style="vertical-align: middle;"/> For support, join the community <a src="https://edgelake.slack.com/" target="_blank">Slack channel</a>.
-* <img src="imgs/lf_logo.png" height="5%" width="5%" style="vertical-align: middle;" /> Join our bi-weekly TSC meeting via our [mailing list](https://lists.lfedge.org/g/EdgeLake-TSC) (only updates, no spam).
+* <img src="imgs/slack-logo-thumb.png" height="3%" width="3%" style="vertical-align: middle;"/> For questions or support, join the community <a src="https://edgelake.slack.com/" target="_blank">Slack channel</a>.
+* <img src="imgs/lf_logo.png" height="5%" width="5%" style="vertical-align: middle;" /> Join our bi-weekly TSC meetings via our [mailing list](https://lists.lfedge.org/g/EdgeLake-TSC) (only updates and event invites, no spam).
 
 
 ### Table of Contents
