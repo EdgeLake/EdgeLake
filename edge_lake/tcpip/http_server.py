@@ -777,6 +777,11 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         self.al_headers = set_al_headers(self.headers._headers)
         status = process_status.ProcessStat()
 
+        # Check if this is a health check request
+        if self.path == "/health":
+            ret_val = self.handle_health_check(status)
+            return
+
         user_agent, version, user_id = self.get_client("get")
 
         if not user_agent and self.raw_requestline:
@@ -817,6 +822,52 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         if with_profiler_:
             profiler.stop("get")     # Force Profiler because thread goes to sleep
 
+    # =======================================================================================================================
+    # Health Check Endpoint
+    # =======================================================================================================================
+    def handle_health_check(self, status):
+        """
+        Handle health check requests at /health endpoint
+        Returns basic health information in JSON format
+        """
+        try:
+            import psutil
+            import json
+            
+            # Basic health information
+            health_info = {
+                "status": "healthy",
+                "timestamp": get_current_time(),
+                "node_status": "active",
+                "memory_usage": {
+                    "percent": round(psutil.virtual_memory().percent, 2),
+                    "available_mb": round(psutil.virtual_memory().available / 1024 / 1024, 2)
+                },
+                "cpu_usage": {
+                    "percent": round(psutil.cpu_percent(interval=1), 2)
+                }
+            }
+            
+            # Convert to JSON
+            health_json = json.dumps(health_info, indent=2)
+            
+            # Send response
+            self.send_reply_headers(status, REST_OK, health_json, False, 'application/json', len(health_json), True, None)
+            
+            return process_status.SUCCESS
+            
+        except Exception as e:
+            # If health check fails, return error
+            error_info = {
+                "status": "unhealthy",
+                "error": str(e),
+                "timestamp": get_current_time()
+            }
+            error_json = json.dumps(error_info, indent=2)
+            
+            self.send_reply_headers(status, REST_INTERNAL_SERVER_ERROR, error_json, False, 'application/json', len(error_json), True, None)
+            
+            return process_status.ERR_process_failure
 
     # =======================================================================================================================
     # An option to place AnyLog header on the URL line.
