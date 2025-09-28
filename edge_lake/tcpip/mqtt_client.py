@@ -2057,7 +2057,7 @@ def get_column_type_value(status, value):
 
     return [ret_val, column_type, column_value, optional]
 # -----------------------------------------------------------------------
-# Set the debug mode - True will print incomming messages
+# Set the debug mode - True will print incoming messages
 # -----------------------------------------------------------------------
 def set_debug( mode ):
     global debug_mode
