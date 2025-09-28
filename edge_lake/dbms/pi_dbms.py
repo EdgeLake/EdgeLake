@@ -1724,7 +1724,7 @@ class PI_CURSOR:
     # =======================================================================================================================
     def add_entry_to_table(self, status, pi_cursor, entry):
 
-        offset = len(self.path_prefix)  # ignore the AF name and the dbms name
+        offset = len(self.path_prefix)  # ignote the AF name and the dbms name
         path = entry["Path"]
         if len(path) <= offset:
             return  # ignore AF and DBMS entries
