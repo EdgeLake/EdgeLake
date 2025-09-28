@@ -13,7 +13,8 @@ except:
 
 import os
 import sys
-#import re      # AN issue during compile
+import csv
+import io
 
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_json as utils_json
@@ -34,6 +35,9 @@ class PSQL(sql_storage):
         self.engine_name = "psql"
         self.autocommit = True
         self.unlogged = False       # Can set to True to avoid logging
+
+        self.cvs_sql_file = True    # The SQL file can be in CVS format
+        self.map_json_to_list = False    # Map the JSON data to a list of insert values. False returns a string
 
 
     # =======================================================================================================================
@@ -123,6 +127,15 @@ class PSQL(sql_storage):
             sql_create = sql_create.replace(" double)", " double precision)")  # if double is last on the create stmt
             sql_create = sql_create.replace(" double,", " double precision,")  # if double is followed by a comma
 
+        sql_create = sql_create.replace(
+            " date not null default now()",
+            " date not null default (now()::date)"
+        )
+
+        sql_create = sql_create.replace(
+            " time not null default now()",
+            " time not null default (now()::time)"
+        )
 
         commands_array = [len(sql_create) - 1]  # No changes are needed
 
@@ -400,16 +413,142 @@ class PSQL(sql_storage):
             rows_count = 0
         return rows_count
 
-    # ==================================================================
-    # Execute SQL as a stmts
-    # ==================================================================
-    def execute_sql_file(self, status: process_status, db_cursor, sql_file):
+    # ============================================================================
+    # execute multiple inserts
+    # ============================================================================
+    def process_multi_insert_buff(self, status: process_status, dbms_name, table_name, db_cursor, sql_buffer):
 
-        ret_val = True
+
+        if sql_buffer.startswith("insert "):
+            try:
+                db_cursor[1].execute(sql_buffer)
+            except:
+                errno, value = sys.exc_info()[:2]
+                status.add_error(f"PostgreSQL Error - Failed in multi-insert stmt: '{dbms_name}.{table_name}' failed - '{value}'")
+                ret_val = False
+            else:
+                ret_val = True
+        else:
+
+            try:
+
+                insert_sections = sql_buffer.split("\n", 1)
+                column_list = insert_sections[0]
+
+                # Create a buffer with the full CSV content to stream into COPY
+                csv_buffer = io.StringIO(sql_buffer)
+
+                db_cursor[1].copy_expert(
+                    f"COPY {table_name} ({column_list}) FROM STDIN WITH (FORMAT csv, HEADER)",
+                    csv_buffer
+                )
+
+            except Exception:
+                errno, value = sys.exc_info()[:2]
+                status.add_error(f"PostgreSQL Error - Failed to ingest CSV buffer: '{dbms_name}.{table_name}' failed - '{value}'")
+                ret_val =  False
+            else:
+                ret_val = True
+
+        return ret_val
+    # ============================================================================
+    # execute_insert via sql stmt or via_csv
+    # ============================================================================
+    def execute_sql_file(self, status: process_status, dbms_name, table_name, db_cursor, sql_file):
+
         file_path = os.path.expanduser(os.path.expandvars(sql_file))
 
         try:
-            db_cursor[1].execute(open(file_path, 'r').read())
+            # Read CSV into memory and count rows (excluding header)
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            file_data = content.strip()
+            if not file_data:
+                status.add_error(f"CSV file '{file_path}' is empty.")
+                return [False, 0]
+        except:
+            errno, value = sys.exc_info()[:2]
+            status.add_error(
+                f"PostgreSQL Error - Failed to read SQL file: '{dbms_name}.{table_name}' failed - '{value}' with file '{file_path}'"
+            )
+            return [False, 0]
+
+        data_rows = file_data.splitlines()
+        if not data_rows:
+            status.add_error(f"CSV file '{sql_file}' is empty.")
+            return [False, 0]
+
+        data_lines = [line for line in data_rows if line.strip()]  # skip empty lines
+
+        if content[:7].lower() == "insert ":
+            ret_val = self.insert_from_sql_file(status, dbms_name, table_name, db_cursor, sql_file, data_lines)
+            row_count = len(data_lines) if ret_val else 0
+        else:
+            # Adding partition from the file name
+            fname_segments = sql_file.split('.',3)
+            if len(fname_segments) < 4 or fname_segments[2] == '0':
+                # no Partitions
+                t_name = table_name
+            else:
+                # At least - dbms + table + part .sql
+                t_name = f"par_{fname_segments[1]}_{fname_segments[2]}" # Table + partition
+
+            ret_val = self.insert_from_csv_file(status, dbms_name, t_name, db_cursor, sql_file, data_lines)
+            row_count = (len(data_lines) - 1)  if ret_val else 0 # Skip Header
+
+        return [ret_val, row_count]
+
+    # ============================================================================
+    # execute_insert_sql_via_csv
+    #
+    # Uses psycopg2.copy_from() instead of copy_expert() (faster)
+    #
+    # Skips the CSV header (since copy_from does not support it)
+    #
+    # Avoids StringIO.getvalue() string conversion (unnecessary I/O)
+    #
+    # Uses io.StringIO directly as the input stream to PostgreSQL
+    # ============================================================================
+    def insert_from_csv_file(self, status: process_status, dbms_name, table_name, db_cursor, sql_file, data_lines):
+
+
+        try:
+
+
+            header = data_lines[0]
+
+            columns = header.strip().split(",")
+            column_list = ", ".join(columns)
+
+            file_data = '\n'.join(data_lines)
+
+            # Create a buffer with the full CSV content to stream into COPY
+            csv_buffer = io.StringIO(file_data)
+
+            db_cursor[1].copy_expert(
+                f"COPY {table_name} ({column_list}) FROM STDIN WITH (FORMAT csv, HEADER)",
+                csv_buffer
+            )
+
+        except Exception:
+            errno, value = sys.exc_info()[:2]
+            status.add_error(
+                f"PostgreSQL Error - Failed to ingest CSV file: '{dbms_name}.{table_name}' failed - '{value}' with file '{sql_file}'"
+            )
+            return False
+
+        return True
+
+    # ==================================================================
+    # Execute SQL as a stmt
+    # ==================================================================
+    def insert_from_sql_file(self, status: process_status, dbms_name, table_name, db_cursor, sql_file, data_lines):
+
+        ret_val = True
+        file_data = '\n'.join(data_lines)
+
+        try:
+            db_cursor[1].execute(file_data)
         except psycopg2.DataError as e:
             error_msg = str(e)
             ret_val = False
@@ -441,11 +580,7 @@ class PSQL(sql_storage):
             status.add_error(error_msg)
             status.keep_error(error_msg)
 
-        rows_counter = self.get_rows_inserted(status, db_cursor)
-
-        reply_list = [ret_val, rows_counter]
-
-        return reply_list
+        return ret_val
 
     # ==================================================================
     # Execute SQL statement
@@ -978,14 +1113,13 @@ class PSQL(sql_storage):
     # ======================================
     def get_insert_rows(self, status: process_status, dbms_name: str, table_name: str, insert_size: int,
                         column_names: list, insert_rows: list):
-        insert_statements = []
 
-        for row in insert_rows:
-            if not row:
-                continue
-            insert_statements.append(f"({','.join(row)})")
+        if self.cvs_sql_file:
+            insert_data = get_inserts_as_cvs(table_name, column_names, insert_rows)
+        else:
+            insert_data = get_inserts_as_sql(table_name, insert_rows)
 
-        return f"INSERT INTO {table_name} VALUES " + ",\n".join(insert_statements) + ';'
+        return insert_data
 
 
     # =======================================
@@ -1041,3 +1175,46 @@ def find_plan_rows(result_obj):
         return result_obj["Plan Rows"]
 
     return 0
+
+# --------------------------------------------------------------------
+# Return multi-column insert stmt
+# --------------------------------------------------------------------
+def get_inserts_as_sql(table_name, insert_rows):
+    insert_statements = []
+
+    for row in insert_rows:
+        if not row:
+            continue
+        insert_statements.append(f"({','.join(row)})")
+
+    return f"INSERT INTO {table_name} VALUES " + ",\n".join(insert_statements) + ';'
+
+# --------------------------------------------------------------------
+# Return SQL in CVS format
+'''
+generate a CSV-formatted string from SQL-style insert data that includes:
+
+a table name (ignored),
+
+a list of column definitions (with auto-increment info), and
+
+a list of data rows (with all fields, including auto-generated ones).
+
+'''
+# --------------------------------------------------------------------
+def get_inserts_as_cvs(table_name, column_names, insert_rows):
+
+    # Skip the first column (auto-increment)
+    headers = [col_attributes[1] for col_attributes in column_names[1:]]
+
+    output = io.StringIO()
+    writer = csv.writer(output, lineterminator='\n')
+    writer.writerow(headers)
+
+    for row in insert_rows:
+        if not row or len(row) != len(column_names):
+            continue
+        cleaned = [value.strip("'") for value in row[1:]]
+        writer.writerow(cleaned)
+
+    return output.getvalue().rstrip('\n')

@@ -880,8 +880,8 @@ def set_current_date_time(select_parsed, description, table_name, updated_column
 where_functions = {
     'period': period_time_frame,
     'now': set_current_date_time,
-    'date': al_date_function,  # proprietry management of date
-    'timestamp': al_timestamp_function  # proprietry management of timestamp
+    'date': al_date_function,  # proprietary management of date
+    'timestamp': al_timestamp_function  # proprietary management of timestamp
 }
 
 

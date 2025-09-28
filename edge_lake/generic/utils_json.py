@@ -8,6 +8,7 @@ import json
 import orjson
 import re
 import sys
+import ast
 
 import edge_lake.generic.process_log as process_log
 import edge_lake.generic.process_status as process_status
@@ -51,6 +52,7 @@ bring_types_ = {
     "ip_port"  :   512,
     "min"   :   1024,
     "max"   :   2048,
+    "list"   :  4096,
 }
 
 ignored_keyword_ = {
@@ -179,9 +181,18 @@ def str_to_list(data: str):
     if len(data) >= 3:
         if not data[1:-1] in ignored_keyword_:
             try:
-                list_obj = list(eval(data))
+                # First, try parsing as a Python literal (safe version of eval)
+                # If that fails, try parsing as JSON
+                list_obj = json.loads(data)
             except:
-                list_obj = None
+                try:
+                    list_obj = ast.literal_eval(data)  # list_obj = list(eval(data))
+                except:
+
+                    errno, value = sys.exc_info()[:2]
+                    err_msg = "Failed to transform a string to a list %s: %s" % (str(errno), str(value))
+                    process_log.add("Error", err_msg)  # Log Error
+                    list_obj = None
         else:
             list_obj = None
     else:
@@ -440,6 +451,8 @@ def pull_info(status, user_params, json_data, pull_instruct, conditions, bring_t
     ret_val = process_status.SUCCESS
 
     out_json = is_bring("json", bring_type)
+    out_list = is_bring("list", bring_type)
+
 
     dynamic_string = ""
     if is_bring("count", bring_type):
@@ -461,7 +474,7 @@ def pull_info(status, user_params, json_data, pull_instruct, conditions, bring_t
             dynamic_string = "[" + to_string(json_data[0]) + "]"
         elif is_bring("first", bring_type):
             dynamic_string = "[" + to_string(json_data[0]) + "]"
-        elif is_bring("unique", bring_type) or is_bring("json", bring_type):
+        elif is_bring("unique", bring_type) or out_json or out_list:
             dynamic_string = "["
             for counter, entry in enumerate(json_data):
                 if counter:
@@ -500,8 +513,9 @@ def pull_info(status, user_params, json_data, pull_instruct, conditions, bring_t
 
     counter_fields = len(pull_instruct)
 
-    if out_json:
+    if out_json or out_list:
         # output a JSON collection - string based on a list with json struct instances
+        # or output as a list
         dynamic_list = []
         dynamic_string = "["  # Output a string - build the string as needed
     else:
@@ -586,7 +600,10 @@ def pull_info(status, user_params, json_data, pull_instruct, conditions, bring_t
 
                 if not is_unique or test_unique(new_string, add_separator, separator, dynamic_string, unique_struct):
                     # no need to test if unique
-                    dynamic_string += new_string
+                    if out_list:
+                        dynamic_string += (new_string + ',')
+                    else:
+                        dynamic_string += new_string
 
         if is_first:
             break       # Only one occurrence
@@ -598,14 +615,15 @@ def pull_info(status, user_params, json_data, pull_instruct, conditions, bring_t
             else:
                 count = len(dynamic_list)
 
-            if is_bring("json", bring_type):
+            if out_json:
                 dynamic_string = "[{\"count\" : %u }]" % count
             else:
                 dynamic_string = str(count)
 
-        elif out_json:
-            for entry in dynamic_list:
-                dynamic_string += entry + ','
+        elif out_json or out_list:
+            if out_json:
+                for entry in dynamic_list:
+                    dynamic_string += entry + ','
             if dynamic_string == '[':
                 # No data
                 dynamic_string = "[]"

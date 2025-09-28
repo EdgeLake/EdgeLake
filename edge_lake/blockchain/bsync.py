@@ -278,6 +278,9 @@ def synchronizer(dummy: str, conditions: dict):
                 # Disable trace on the Master
                 master_msg_array[-1] = '0'
 
+        utils_io.read_lock("blockchain")        # This call is to wait for blockchain merge to complete - if merge is ongoing, wait for it to finish
+        utils_io.read_unlock("blockchain")
+
 
         hash_value = blockchain_stat.get_hash_value()       # The Hash value of the current blockchain file
 
@@ -365,6 +368,9 @@ def master_synchronizer(dummy: str, conditions: dict):
         if not blockchain_select(status, "json", new_file, None):
             ret_val = process_status.BLOCKCHAIN_operation_failed
             break
+
+        utils_io.read_lock("blockchain")        # This call is to wait for blockchain merge to complete - if merge is ongoing, wait for it to finish
+        utils_io.read_unlock("blockchain")
 
         got_hash, new_hash_val = utils_io.get_hash_value(status, new_file, None, None)
 

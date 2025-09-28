@@ -77,11 +77,11 @@ def profiler_new_instance():
         try:
             profiler = cProfile.Profile()
         except:
-            utils_print.output_box("Failed to use cProfile")
+            utils_print.output_box("Failed to use cProfile", "blue")
             profiler = None
 
     else:
-        utils_print.output_box("cProfile not active")
+        utils_print.output_box("cProfile not active", "blue")
         profiler = None
 
     return profiler
@@ -95,16 +95,15 @@ def profiler_start(profiler):
         try:
             profiler.enable()
         except:
-            utils_print.output_box("Failed to start cProfile")
+            utils_print.output_box("Failed to start cProfile","blue")
             ret_val = False
         else:
             ret_val = True
     else:
-        utils_print.output_box("cProfile not active")
+        utils_print.output_box("cProfile not active","blue")
         ret_val = False
 
     return ret_val
-
 
 # ----------------------------------------------------------------------------------------------
 '''
@@ -158,13 +157,13 @@ def profiler_end(profiler):
         try:
             profiler.disable()
         except:
-            utils_print.output_box("Failed to disable cProfile")
+            utils_print.output_box("Failed to disable cProfile","blue")
             ret_val = False
         else:
             ret_val = True
 
     else:
-        utils_print.output_box("cProfile not active")
+        utils_print.output_box("cProfile not active","blue")
         ret_val = False
     return ret_val
 

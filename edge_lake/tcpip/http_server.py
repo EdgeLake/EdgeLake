@@ -97,6 +97,7 @@ user_agent_ = {
 http_methods_ = {
 #   Lookup key
     "sql"       :       "get*post",  # SQL can be post and get (i.e. insert/create is post and query is get)
+    "print"     :       "get*post",  # SQL can be post and get (i.e. insert/create is post and query is get)
     "help"      :       "get",
     "get"       :       "get",
     "blockchain get":   "get",

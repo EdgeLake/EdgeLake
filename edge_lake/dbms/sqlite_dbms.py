@@ -316,9 +316,18 @@ class SQLITE(sql_storage):
         return rows_count
 
     # ==================================================================
+    # Execute SQL from a buffer
+    # ==================================================================
+    def process_multi_insert_buff(self, status, dbms_name, table_name, db_cursor, insert_buffer):
+
+        ret_val = self.execute_sql_stmt(status, db_cursor, insert_buffer)
+
+        return ret_val
+
+    # ==================================================================
     # Execute SQL as a stmts
     # ==================================================================
-    def execute_sql_file(self, status: process_status, db_cursor, sql_file):
+    def execute_sql_file(self, status: process_status, dbms_name, table_name, db_cursor, sql_file):
 
         ret_val = True
 
@@ -764,13 +773,18 @@ class SQLITE(sql_storage):
                                           " timestamp not null default current_timestamp")
 
         updated_sql = updated_sql.replace(" date not null default now()",
-                                          " timestamp not null default current_timestamp")
+                                          " date not null default (date('now'))")
+
+        updated_sql = updated_sql.replace(" time not null default now()",
+                                          " time not null default (time('now'))")
 
         updated_sql = updated_sql.replace(" serial primary key ",
                                           " integer primary key autoincrement ")
 
         updated_sql = updated_sql.replace(" bigint ",
                                           " integer ")  # SQLite does not have a separate BIGINT data type
+
+
         #  TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP
         # updated_sql = updated_sql.replace(" NOW()", " (datetime('now','localtime'))")
 
@@ -845,7 +859,7 @@ class SQLITE(sql_storage):
                 continue
 
             # Generate values string
-            columns_string = ", ".join("NULL" if col_val == "DEFAULT" else col_val for col_val in row)
+            columns_string = ", ".join("NULL" if (isinstance(col_val, str) and col_val == "DEFAULT") else str(col_val) for col_val in row)
 
             insert_statements.append(f"({columns_string})")
 

@@ -9,7 +9,8 @@ import socket
 import sys
 import threading
 import time
-
+import errno
+import select
 
 # import edge_lake.generic.utils_io as util_io
 import edge_lake.tcpip.message_header as message_header
@@ -22,6 +23,7 @@ import edge_lake.cmd.member_cmd as member_cmd
 import edge_lake.generic.utils_io as utils_io
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.version as version
+import edge_lake.generic.trace_methods as trace_methods
 
 # run tcp client 10.0.0.124 2048 read aaa bbb
 
@@ -213,15 +215,411 @@ def file_send(status, host: str, port: int, input_file: str, large_msg: str, out
 # =======================================================================================================================
 # Open socket - Try X times before return an error
 # =======================================================================================================================
+import socket, errno, select, time, sys, os, struct, traceback
+
+# --------------------------- Platform helpers --------------------------------
+
+def _is_linux() -> bool:
+    """Return True if running on Linux (for TCP_INFO support)."""
+    return sys.platform.startswith("linux")
+
+def _is_windows() -> bool:
+    """Return True if running on Windows (for SIO_KEEPALIVE_VALS)."""
+    return sys.platform.startswith("win")
+
+
+# ---------------------------- Keepalive tuning --------------------------------
+import sys, socket, struct
+
+def _enable_keepalive(sock, idle: float | None = None, interval: float | None = None, count: int | None = None):
+    """
+    Enable TCP keepalive in a cross-platform way.
+    - Windows: uses SIO_KEEPALIVE_VALS with a 3-tuple (onoff, time_ms, interval_ms).
+    - Linux:   uses TCP_KEEPIDLE / TCP_KEEPINTVL / TCP_KEEPCNT when available.
+    - macOS:   uses TCP_KEEPALIVE (idle), and TCP_KEEPINTVL / TCP_KEEPCNT if present.
+    All failures are suppressed; logs 'Warn' and continues.
+    """
+    # Always try to enable keepalive bit first
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    except OSError as e:
+        process_log.add("Warn", f"TCP Client: SO_KEEPALIVE enable failed: {e}")
+        return
+
+    try:
+
+        if sys.platform.startswith("linux"):
+            # Best-effort: options may not exist on all kernels
+            if idle is not None and hasattr(socket, "TCP_KEEPIDLE"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, int(idle))
+            if interval is not None and hasattr(socket, "TCP_KEEPINTVL"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, int(interval))
+            if count is not None and hasattr(socket, "TCP_KEEPCNT"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, int(count))
+        elif sys.platform.startswith("win"):
+            # Windows expects a 3-item tuple, not bytes
+            SIO_KEEPALIVE_VALS = getattr(socket, "SIO_KEEPALIVE_VALS", 0x98000004)
+            onoff = 1
+            time_ms = int((idle if idle is not None else 7200) * 1000)  # default 2h
+            interval_ms = int((interval if interval is not None else 1) * 1000)  # default 1s
+            sock.ioctl(SIO_KEEPALIVE_VALS, (onoff, time_ms, interval_ms))
+
+        elif sys.platform == "darwin":  # macOS
+            # macOS uses TCP_KEEPALIVE for idle time
+            if idle is not None and hasattr(socket, "TCP_KEEPALIVE"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPALIVE, int(idle))
+            if interval is not None and hasattr(socket, "TCP_KEEPINTVL"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, int(interval))
+            if count is not None and hasattr(socket, "TCP_KEEPCNT"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, int(count))
+        else:
+            # Other POSIX—try Linux-style constants if present
+            if idle is not None and hasattr(socket, "TCP_KEEPIDLE"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, int(idle))
+            if interval is not None and hasattr(socket, "TCP_KEEPINTVL"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, int(interval))
+            if count is not None and hasattr(socket, "TCP_KEEPCNT"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, int(count))
+
+    except OSError as e:
+        process_log.add("Warn", f"TCP Client: keepalive tuning failed: {e}")
+
+
+# --------------------------- Root-cause classifier ----------------------------
+
+def _classify_connect_failure(exc=None, soerr: int | None = None, timed_out: bool = False) -> tuple[str, str]:
+    """
+    Return (reason, hint) strings for common connect failures across Linux/Windows.
+    - exc: optional exception object
+    - soerr: optional SO_ERROR integer from getsockopt
+    - timed_out: True for connect timeouts (select() expiration)
+    """
+    e = getattr(exc, "errno", None)
+    code = soerr if soerr is not None else e
+
+    if timed_out:
+        return ("Timed out (no SYN-ACK)",
+                "Likely filtered by firewall/security group or the host is down. Verify listener and inbound rules.")
+
+    if code in (getattr(errno, "ECONNREFUSED", 111), 10061):
+        return ("Connection refused (RST)",
+                "No service is listening on the target port or firewall actively rejects. Start the service or open the port.")
+
+    if code in (getattr(errno, "ENETUNREACH", 101),):
+        return ("Network unreachable",
+                "Routing issue on the client. Check default route/VPC routing tables.")
+
+    if code in (getattr(errno, "EHOSTUNREACH", 113),):
+        return ("Host unreachable",
+                "No route to host; verify remote IP/subnet/gateway.")
+
+    if code in (getattr(errno, "ETIMEDOUT", 110),):
+        return ("Connect timed out",
+                "Packets dropped or remote overwhelmed; check path/firewalls/server load.")
+
+    if code in (getattr(errno, "EADDRNOTAVAIL", 99),):
+        return ("Local address not available",
+                "Invalid source binding; check bind()/interface/IP assignment.")
+
+    if isinstance(exc, socket.gaierror):
+        return ("DNS resolution failed",
+                "Host name not resolvable; check DNS/hosts and spelling.")
+
+    if isinstance(exc, BlockingIOError) and e in (
+        getattr(errno, "EINPROGRESS", 115),
+        getattr(errno, "EALREADY", 114),
+        getattr(errno, "EWOULDBLOCK", 11),
+        10035,  # WSAEWOULDBLOCK on Windows
+    ):
+        return ("Connect in progress",
+                "Non-blocking connect pending; wait for writability and then check SO_ERROR.")
+
+    return (f"Socket error (code={code})", "Inspect server logs, firewall rules, and routing.")
+
+
+# -------------------------- Optional Linux TCP_INFO ---------------------------
+
+def _get_tcp_info(sock) -> dict | None:
+    """
+    Best-effort probe of Linux TCP_INFO to surface RTT/retransmits/state during failures.
+    Returns a small dict or None on non-Linux or unsupported kernels.
+    """
+    if not _is_linux():
+        return None
+    TCP_INFO = getattr(socket, "TCP_INFO", None)
+    if TCP_INFO is None:
+        return None
+    try:
+        raw = sock.getsockopt(socket.IPPROTO_TCP, TCP_INFO, 192)
+        fmt = "BBBBBBxx" + "I"*6  # compact, stable subset
+        vals = struct.unpack_from(fmt, raw)
+        return {
+            "tcpi_state": vals[0],            # 1=ESTABLISHED, 3=SYN_SENT, etc.
+            "tcpi_retransmits": vals[2],
+            "tcpi_probes": vals[3],
+            "tcpi_backoff": vals[4],
+            "tcpi_options": vals[5],
+            "tcpi_rto_ms": vals[6] // 1000,   # usec → ms
+            "tcpi_rtt_ms": vals[7] // 1000,
+            "tcpi_rttvar_ms": vals[8] // 1000,
+            "tcpi_snd_ssthresh": vals[9],
+            "tcpi_snd_cwnd": vals[10],
+            "tcpi_advmss": vals[11],
+        }
+    except OSError:
+        return None
+
+
+# ----------------------------- Deep log helpers -------------------------------
+
+def _log_deep_error(stage: str, host: str, port: int, sock, command: str, exc: Exception,
+                    attempt: int, retry_counter: int) -> None:
+    """
+    Emit a detailed diagnostic for exception-based failures (final attempt only).
+    Includes addresses, socket repr, errno, reason/hint, TCP_INFO (Linux), and traceback.
+    """
+    sock_info = str(sock) if sock else "Socket not created"
+    local_addr = None
+    try:
+        if sock:
+            local_addr = sock.getsockname()
+    except OSError:
+        pass
+
+    reason, hint = _classify_connect_failure(exc=exc)
+    tcp_info = _get_tcp_info(sock)
+    # tb = traceback.format_exc()
+
+    msg = (
+        f"TCP Client Error [{stage}] attempt {attempt}/{retry_counter}\r\n"
+        f"Dest=({host}:{port}) Local={local_addr} Sock={sock_info}\r\n"
+        f"Reason: {reason}\nHint: {hint}\r\n"
+        f"Exception: {type(exc)} errno={getattr(exc,'errno',None)} "
+        f"strerror={getattr(exc,'strerror',None)} msg={exc}\r\n"
+        f"TCP_INFO: {tcp_info}\r\n"
+        f"Command: {command}\r\n"
+        # f"Traceback:\n{tb}"
+    )
+    process_log.add("Error", msg)
+    utils_print.output_box(msg)
+
+
+def _log_deep_timeout(host: str, port: int, sock, command: str,
+                      attempt: int, retry_counter: int, start_ts: float, timeout: float) -> None:
+    """
+    Emit a detailed diagnostic for connect timeouts (final attempt only).
+    Includes timing, addresses, socket repr, reason/hint, and TCP_INFO (Linux).
+    """
+    elapsed = time.time() - start_ts
+    sock_info = str(sock) if sock else "Socket not created"
+    local_addr = None
+    try:
+        if sock:
+            local_addr = sock.getsockname()
+    except OSError:
+        pass
+
+    reason, hint = _classify_connect_failure(timed_out=True)
+    tcp_info = _get_tcp_info(sock)
+
+    msg = (
+        f"TCP Client Error [Timeout] attempt {attempt}/{retry_counter}\r\n"
+        f"Dest=({host}:{port}) Local={local_addr} Sock={sock_info}\r\n"
+        f"Reason: {reason}\nHint: {hint}\r\n"
+        f"Elapsed: {elapsed:.2f}s (limit {timeout}s)\r\n"
+        f"TCP_INFO: {tcp_info}\r\n"
+        f"Command: {command}"
+    )
+    process_log.add("Error", msg)
+    utils_print.output_box(msg)
+
+
+def _safe_close(sock) -> None:
+    """Close a socket, suppressing errors (prevents FD leaks on failure paths)."""
+    try:
+        if sock:
+            sock.close()
+    except OSError:
+        pass
+
+
+def _should_deep(attempt: int, retry_counter: int) -> bool:
+    """Return True only on the final attempt to limit deep logs to once per call."""
+    return attempt >= max(1, int(retry_counter or 1))
+
+
+# --------------------------------- Main API ----------------------------------
+
+def socket_open(host: str, port: int, command: str, connect_timeout: float, retry_counter: int):
+    """
+    Returns a connected blocking socket on success; otherwise logs and returns None.
+    - Uses non-blocking connect + select() + SO_ERROR to handle EINPROGRESS correctly.
+    - Never raises; concise logs on early retries; deep inspection only on the last attempt.
+    - Performs best-effort TCP tuning (NODELAY, KEEPALIVE) on all platforms.
+    """
+    trace_level = trace_methods.is_traced("tcp out")
+    command_str = command.replace("\t", " ")
+
+    # Optional: resolve "self" indirection
+    if net_utils.is_use_self(host, port):
+        host, port = net_utils.get_self_ip_port()
+
+    # No destination IP
+    if host == "0.0.0.0":
+        msg = "TCP Client Error: No destination IP for message: " + command_str
+        process_log.add("Error", msg)
+        utils_print.output_box(msg)
+        return None
+
+    attempts = 0
+    last_err_msg = None
+    total_tries = max(1, int(retry_counter or 1))
+
+    while attempts < total_tries:
+        attempts += 1
+        sock = None
+        start_ts = time.time()
+
+        try:
+            # Create socket
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            except Exception:
+                etype, e = sys.exc_info()[:2]
+                process_log.add_and_print("Error", f"TCP Client: Error socket create: {etype} : {e}")
+                return None
+
+            # Basic tuning (non-fatal if any set fails)
+            try:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                _enable_keepalive(sock)  # portable keepalive
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 20 * params.TCP_BUFFER_SIZE)
+            except OSError as e:
+                # Tose setsockopt calls are tuning, not required for a connection to work.
+                # If any of them fail, the socket can still connect and exchange data using OS defaults—so the code deliberately treats failures as a warning (continue) rather than a hard error (abort).
+                pass
+
+            # Non-blocking connect
+            sock.setblocking(False)
+
+            # Start connect
+            try:
+                sock.connect((host, port))
+            except BlockingIOError as e:
+                # Expected on non-blocking connect if in progress
+                if e.errno not in (
+                    getattr(errno, "EINPROGRESS", 115),
+                    getattr(errno, "EALREADY", 114),
+                    getattr(errno, "EWOULDBLOCK", 11),
+                    10035,  # Windows WSAEWOULDBLOCK
+                ):
+                    # Immediate real error
+                    last_err_msg = (f"TCP Client Error: #{attempts}/{retry_counter} Failed connection with "
+                                    f"{host}:{port} Error: ({type(e)} : [Errno {getattr(e,'errno',None)}] {e}) "
+                                    f"message: {command_str}")
+                    if _should_deep(attempts, total_tries):
+                        _log_deep_error("Immediate connect error", host, port, sock, command_str, e, attempts, retry_counter)
+                        _safe_close(sock)
+                        return None
+                    process_log.add("Error", last_err_msg)
+                    _safe_close(sock)
+                    time.sleep(6)
+                    continue
+            except socket.gaierror as e:
+                # DNS/resolve failure (rare here because we pass IP, but keep for completeness)
+                last_err_msg = (f"TCP Client Error: Name resolution failed for {host}:{port} "
+                                f"({type(e)} : [Errno {e.errno}] {e}) - message not delivered: {command_str}")
+                if _should_deep(attempts, total_tries):
+                    _log_deep_error("DNS resolution", host, port, sock, command_str, e, attempts, retry_counter)
+                else:
+                    process_log.add_and_print("Error", last_err_msg)
+                _safe_close(sock)
+                return None
+            except Exception as e:
+                last_err_msg = (f"TCP Client Error: #{attempts}/{retry_counter} Failed connection with "
+                                f"{host}:{port} Error: ({type(e)} : {e}) message: {command_str}")
+                if _should_deep(attempts, total_tries):
+                    _log_deep_error("Unexpected connect exception", host, port, sock, command_str, e, attempts, retry_counter)
+                    _safe_close(sock)
+                    return None
+                process_log.add("Error", last_err_msg)
+                net_utils.test_network_addr(host, port)
+                _safe_close(sock)
+                time.sleep(6)
+                continue
+
+            # Wait for connect completion (writable) within timeout
+            writable = select.select([], [sock], [], connect_timeout)[1]
+            if not writable:
+                last_err_msg = (f"TCP Client Error: Connection with {host}:{port} timed out after "
+                                f"{connect_timeout}s - message not delivered: {command_str}")
+                if _should_deep(attempts, total_tries):
+                    _log_deep_timeout(host, port, sock, command_str, attempts, retry_counter, start_ts, connect_timeout)
+                    _safe_close(sock)
+                    return None
+                process_log.add("Error", last_err_msg)
+                _safe_close(sock)
+                time.sleep(6)
+                continue
+
+            # Check final status via SO_ERROR
+            soerr = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+            if soerr != 0:
+                conn_refused = soerr in (getattr(errno, "ECONNREFUSED", 111), 10061)
+                err_txt = "Connection Refused" if conn_refused else f"connect failed (SO_ERROR={soerr})"
+                last_err_msg = (f"TCP Client Error: {err_txt} : ({host} : {port}) - "
+                                f"message not delivered: {command_str}")
+                if _should_deep(attempts, total_tries):
+                    e = OSError(soerr, os.strerror(soerr) if hasattr(os, "strerror") else "")
+                    _log_deep_error("SO_ERROR connect failure", host, port, sock, command_str, e, attempts, retry_counter)
+                    _safe_close(sock)
+                    return None
+                process_log.add("Error", last_err_msg)
+                _safe_close(sock)
+                time.sleep(6)
+                continue
+
+            # Connected → restore blocking mode for send/recv
+            sock.setblocking(True)
+            sock.settimeout(None)
+
+            # Trace hook
+            if trace_level:
+                trace_methods.add_details("tcp out",
+                    **{"Connect retries": str(attempts - 1), "Socket Connect": str(sock)})
+
+            return sock  # SUCCESS
+
+        except Exception as e:
+            # Catch-all safety net
+            last_err_msg = (f"TCP Client Error: Unexpected error during connect to {host}:{port} "
+                            f"({type(e)} : {e}) - message not delivered: {command_str}")
+            if _should_deep(attempts, total_tries):
+                _log_deep_error("Generic failure", host, port, sock, command_str, e, attempts, retry_counter)
+                _safe_close(sock)
+                return None
+            process_log.add("Error", last_err_msg)
+            _safe_close(sock)
+            time.sleep(6)
+            continue
+
+    # Final fallback if loop exits without success
+    if last_err_msg:
+        process_log.add_and_print("Error", last_err_msg)
+    else:
+        process_log.add_and_print("Error", f"TCP Client Error: Could not connect to {host}:{port} - {command_str}")
+    return None
+
+'''
 def socket_open(host: str, port: int, command:str, connect_timeout:int, retry_counter:int):
 
-    '''
-    connect_timeout - the wait time on the soc.connect((host, port) call - it is calculated by the user timeout value
-    retry_counter - the number of times to call soc.connect((host, port) - it is calculated by the user timeout value
-    '''
+    
+    # connect_timeout - the wait time on the soc.connect((host, port) call - it is calculated by the user timeout value
+    # retry_counter - the number of times to call soc.connect((host, port) - it is calculated by the user timeout value
+    
     ret_val = True
-
-    trace_level = member_cmd.commands["run client"]['trace']
+    counter = 0
+    trace_level = trace_methods.is_traced("tcp out")
 
     try:
 
@@ -231,6 +629,9 @@ def socket_open(host: str, port: int, command:str, connect_timeout:int, retry_co
         errno, value = sys.exc_info()[:2]
         err_msg = "TCP Client: Error socket create: {0} : {1}".format(str(errno), str(value))
         process_log.add("Error", err_msg)
+        if trace_level:
+            details = {"Socket Create": err_msg}
+            trace_methods.add_details("tcp out", **details)
         ret_val = False
 
     else:
@@ -242,11 +643,6 @@ def socket_open(host: str, port: int, command:str, connect_timeout:int, retry_co
         soc.setblocking(True)  # wait for the data to be send (equal to soc.settimeout(None)
 
         soc.settimeout(connect_timeout)
-
-        counter = 0
-
-        if trace_level > 2:
-            utils_print.output("[Socket create] [Returned socket from: socket.socket(socket.AF_INET, socket.SOCK_STREAM)] %s" % str(soc), True)
 
         if net_utils.is_use_self(host, port):
             # If configuration defined: set self ip = dynamic
@@ -300,8 +696,12 @@ def socket_open(host: str, port: int, command:str, connect_timeout:int, retry_co
                 ret_val = False
             break
 
-    if trace_level > 2:
-        utils_print.output("[Socket create] [Returned socket from: soc.connect((%s, %s))] %s" % (host, str(port), str(soc)), True)
+    if trace_level:
+        details = {
+                "Connect retries": str(counter),
+                "Socket Connect": str(soc),
+                }
+        trace_methods.add_details("tcp out", **details)
 
     if ret_val:
         soc.settimeout(None)        #  If None is given -  the socket is put in blocking mode (for the send).
@@ -310,7 +710,7 @@ def socket_open(host: str, port: int, command:str, connect_timeout:int, retry_co
 
     return soc
 
-
+'''
 # =======================================================================================================================
 # Close socket and place on the free list
 #  use shutdown on a socket before you close it. The shutdown is an advisory to the socket at the other end. Depending on the argument you pass it.
@@ -318,16 +718,31 @@ def socket_open(host: str, port: int, command:str, connect_timeout:int, retry_co
 # =======================================================================================================================
 def socket_close(soc):
     # print_soc_process("close", soc)
+    trace_level = trace_methods.is_traced("tcp out")
+
     try:
-        soc.shutdown()
+        soc.shutdown(socket.SHUT_RDWR)
     except:
-        pass
+        if trace_level:
+            errno, value = sys.exc_info()[:2]
+            details = {"Socket Shutdown": str(value)}
+            trace_methods.add_details("tcp out", **details)
+    else:
+        if trace_level:
+            details = {"Socket Shutdown": "Success"}
+            trace_methods.add_details("tcp out", **details)
 
     try:
         soc.close()
     except:
-        pass
-
+        if trace_level:
+            errno, value = sys.exc_info()[:2]
+            details = {"Socket Close": str(value)}
+            trace_methods.add_details("tcp out", **details)
+    else:
+        if trace_level:
+            details = {"Socket Close": "Success"}
+            trace_methods.add_details("tcp out", **details)
 
 # =======================================================================================================================
 # Prepare a message and send data to server
@@ -380,11 +795,19 @@ def message_prep_and_send(err_value, soc, mem_view: memoryview, command: str, au
 def mem_view_send(soc, mem_view: memoryview):
     # print_soc_process("send", soc)
 
+    trace_network = trace_methods.is_traced("tcp out")
+
     file_no = soc.fileno()
     if file_no < 0:
         err_msg = "TCP Client failed to send a message, socket not active"
         process_log.add("Error", err_msg)
         utils_print.output(err_msg, True)
+        if trace_network:
+            params = {
+                "Open Socket" : err_msg,
+            }
+            trace_methods.add_details("tcp out", **params)
+            trace_methods.print_details("tcp out", "red")
         return False
 
     thread_id = utils_threads.get_thread_number()
@@ -398,6 +821,11 @@ def mem_view_send(soc, mem_view: memoryview):
         err_msg = "TCP Client failed to send a message, socket error: {0} : {1}".format(str(errno), str(value))
         process_log.add("Error", err_msg)
         utils_print.output(err_msg, True)
+        if trace_network:
+            params = {"Socket Timeout": err_msg}
+            trace_methods.add_details("tcp out", **params)
+            trace_methods.print_details("tcp out", "red")
+
         return False
 
     if net_utils.get_TCP_debug():
@@ -424,6 +852,16 @@ def mem_view_send(soc, mem_view: memoryview):
             break
 
     soc.settimeout(None)
+
+    if trace_network:
+        if ret_val:
+            params = {"Socket Send": "OK"}
+            color = "green"
+        else:
+            params = {"Socket Send": err_msg}
+            color = "red"
+
+        trace_methods.add_details("tcp out", **params)
 
     return ret_val
 # -------------------------------------------------------------

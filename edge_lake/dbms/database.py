@@ -49,5 +49,16 @@ class sql_storage(ABC):
     def is_stat_support(self):
         return False                                        # Can estimated number of rows be supported
 
-    def estimate_rows(status, table_name, where_cond):
+    def estimate_rows(self, status, table_name, where_cond):
         return 0                                            # Estimate rows in a table (if supported by the database)
+
+    def configure(self, key, value):
+        '''
+        Change default behaviour of the DBMS
+        '''
+        if hasattr(self, key):
+            setattr(self, key, value)
+            ret_val = process_status.SUCCESS
+        else:
+            ret_val = process_status.ERR_attr_name
+        return ret_val

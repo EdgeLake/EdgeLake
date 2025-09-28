@@ -2360,7 +2360,7 @@ class PIDB:
     # =======================================================================================================================
     # Execute commands from SQL FIle
     # =======================================================================================================================
-    def execute_sql_file(self, status, db_cursor, file_path):
+    def execute_sql_file(self, status, dbms_name, table_name, db_cursor, file_path):
         status.add_keep_error("PI process error: SQL commands from file are not supported")
         return process_status.SQL_not_supported
 

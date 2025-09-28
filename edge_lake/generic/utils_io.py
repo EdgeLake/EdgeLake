@@ -12,6 +12,7 @@ import time
 import gzip
 from os import walk
 import base64
+import json
 
 import edge_lake.generic.process_log as process_log
 import edge_lake.generic.process_status as process_status
@@ -705,16 +706,16 @@ def write_list_to_file(status: process_status, data: list, fname: str, lock_key)
         ret_val = True
 
         if lock_key:
-            write_lock(lock_key)  # prevent multiple writters
+            write_lock(lock_key)  # prevent multiple writers
 
         try:
             with open(file_name, 'w') as f:
-                for entry in data:
-                    f.write(str(entry) + "\n")
+                f.write('\n'.join(str(entry) for entry in data) + '\n')
         except (IOError, EOFError) as e:
-            error_message = "IO Error - failed to write JSON data to file: {0} to file {1} err.".format(file_name,
-                                                                                                        e.args[-1])
+            errno, value = sys.exc_info()[:2]
+            error_message = f"Failed to delete and write policies file at: '{file_name}' with error: '{str(errno)}' - '{str(value)}'"
             status.add_error(error_message)
+            utils_print.output_box(error_message)
             ret_val = False  # return an empty list
 
         if lock_key:
@@ -2165,19 +2166,48 @@ def make_path_file_name(status, dir_name, file_name, file_type):
     return reply_list
 
 # -----------------------------------------------------------------
+# Given a list of policies - write the policies to the file
+# -----------------------------------------------------------------
+def write_multiple_policies(status, message_name, file_name, policies_list):
+
+    ret_val = process_status.SUCCESS
+    policies_str = ""
+    success_counter = 0
+    error_counter = 0
+    for policy in policies_list:
+        try:
+            policies_str += (json.dumps(policy) + "\n")     # Create a single string
+        except:
+            err_message = f"Unable to convert JSON policy to string in order to store in local file: {str(policy)}"
+            status.add_error(err_message)
+            utils_print.output_box(err_message)
+            error_counter += 1
+        else:
+            success_counter += 1
+            
+    if policies_str:
+
+        if not append_data_to_file(status, file_name, message_name, policies_str):
+            ret_val = process_status.File_write_failed      # Return error if write fails
+
+    return [ret_val, success_counter, error_counter]
+
+
+# -----------------------------------------------------------------
 # Append a row to a file
 # -----------------------------------------------------------------
 def append_data_to_file(status, file_name, message_name, data):
-    ret_val = True
-    io_handle = IoHandle()
-    if not io_handle.open_file("append", file_name):
-        status.add_error("Failed to open %s file: %s" % (message_name, file_name))
-        ret_val = False
-    elif not io_handle.append_data(data + "\n"):
-        status.add_error("Failed to write to %s file: %s" % (message_name, file_name))
-        ret_val = False
-    elif not io_handle.close_file():
-        status.add_error("Failed to close %s file: %s" % (message_name, file_name))
+    end_of_line = "" if data[-1] == '\n' else "\n"
+    try:
+        os_file_name = os.path.expanduser(os.path.expandvars(file_name))
+        with open(os_file_name, "a") as f:
+            f.write(data + end_of_line)
+            f.flush()  # Flush Python's internal buffer
+            os.fsync(f.fileno())  # Flush OS-level buffers to disk
+        ret_val = True
+    except:
+        errno, value = sys.exc_info()[:2]
+        status.add_error(f"Failed to write to {message_name} file: {file_name}. Error: {str(value)}")
         ret_val = False
 
     return ret_val

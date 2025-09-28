@@ -347,6 +347,13 @@ Subprocess_failed = 259
 Failed_to_retrieve_dns_name = 260
 Error_in_msg_format = 261
 Local_cmd_only = 262
+Missing_required_attr = 263
+Conflicting_policies = 264
+Failed_PLC_CONNECT = 265
+Failed_PLC_INFO = 266
+Wrong_process_name = 267
+No_trace_data = 268
+Duplicate_process = 269
 
 # note that message is at location of error value + 1 (exit is set at 0)
 status_text = ["Terminating node processes",
@@ -613,6 +620,13 @@ status_text = ["Terminating node processes",
                "Failed to retrieve DNS name",           # 260
                "Error in msg format",                   # 261
                "Needs to be executed locally",          # 262
+               "Missing required policy attribute",     # 263
+               "Conflicting policies",                  # 264
+               "Failed to connect to the PLC",          # 265
+               "Failed to pull PLC info",               # 266
+               "Wrong process name",                    # 267
+               "No trace data",                         # 268
+               "Duplicate process",                     # 269
                ]
 
 
@@ -1274,7 +1288,7 @@ def get_traceback(message):
     stack = repr(traceback.extract_stack())
     stack = stack.replace('>', '\n')
     stack += '\n' + message
-    utils_print.output_box(stack)
+    utils_print.output_box(stack, "green")
 # =======================================================================================================================
 # get the code location from the stack
 # =======================================================================================================================
