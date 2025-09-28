@@ -5,4 +5,4 @@ __pycache__/
 !edge_lake/blockchain
 Dockerfile
 update_code.sh
-setup.py
+../../AnyLog-code/AnyLog-Network/EdgeLake-builder/setup.py
