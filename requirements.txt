@@ -1,49 +1,51 @@
-# The following are the default requirements for python:3.11 which is used as our docker imgae(s).
-
-# setup
+#--- core ---
 cython==3.0.12
 pyyaml==6.0.2
-pyinstaller==6.12.0
+pyinstaller==6.13.0
 six==1.17.0
-
-# General
-# ast>=0.0
-requests==2.32.3
-cryptography==44.0.2
-pyjwt==1.7.1 # in alpine we install py3-jwt
-pyOpenSSL==25.0.0
+setuptools==65.5.0
+requests==2.32.4
 psutil==7.0.0
 orjson==3.10.15
+cryptography==44.0.2
+pyjwt===2.10.1
 
-# Datetime
+#--- networking ---
+netifaces==0.11.0
+pyOpenSSL==25.0.0
+dnspython~=2.7.0
+
+#--- datetime ---
 python-dateutil==2.9.0.post0
 pytz==2025.1
 
-# Database
+#--- blockchain ---
+web3==6.15.1
+py4j>=0.10.9.5
+
+#--- database ---
+# required
 psycopg2-binary==2.9.10
+
+# optional
 pymongo==4.11.2
 
-# North/South Plugins
-paho-mqtt==1.5
-kafka-python==2.0.6
-opcua==0.98.13
-
-# Blockchain
-py-ecc==6.0.0
-web3==6.15.1
-#py4j>=0.0
-
-
-# Images + Videos
-#base64>=0.0
-numpy==2.2.3
-opencv-python-headless>=4.10.0.84
-# numpy; platform_system != "alpine" # in alpine we install py3-nwumpy
-# opencv-python-headless>=0.0; platform_system != "alpine" # in alpine we install py3-opencv
-xhtml2pdf==0.2.17
-# reportlab==3.6.12
-
-# gRPC
+#--- monitoring ---
+# grpc
+protobuf~=5.29.5
 grpcio==1.70.0
 grpcio-tools==1.70.0
 grpcio-reflection==1.70.0
+
+# docker
+docker==7.1.0
+
+#--- industrial ---
+paho-mqtt==1.5
+kafka-python==2.0.6
+pycomm3>=0.12.0
+opcua==0.98.13
+
+#--- blobs ---
+numpy==2.2.3
+
