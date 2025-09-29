@@ -431,17 +431,20 @@ def get_storage(status, key, value):
 # Test if the key exists and compare the value provided to the first in the array
 # =======================================================================================================================
 def test_one_value(conditions, key, test_value):
-    if key in conditions:
-        if isinstance(conditions[key], list):
-            ret_val = test_value in conditions[key]  # conditions[key] is the array with the values for the key
-        else:
-            value = conditions[key]
-            if type(test_value) == type(value):
-                ret_val = test_value == value
+    if conditions:
+        if key in conditions:
+            if isinstance(conditions[key], list):
+                ret_val = test_value in conditions[key]  # conditions[key] is the array with the values for the key
             else:
-                ret_val = False
+                value = conditions[key]
+                if type(test_value) == type(value):
+                    ret_val = test_value == value
+                else:
+                    ret_val = False
+        else:
+            ret_val = False
     else:
-        ret_val = False
+        ret_val = True
 
     return ret_val
 

@@ -2263,7 +2263,9 @@ def store_file(status:process_status,  db_name: str, table_name: str, file_path:
 
     db_connect = get_connection(dbms_name)
     if db_connect == None:
-        status.add_keep_error("DBMS '%s' not connected" % dbms_name)
+        err_msg = "Failed to store file: DBMS '%s' not connected" % dbms_name
+        status.add_keep_error(err_msg)
+        utils_print.output_box(err_msg, 'red')
         ret_val = process_status.ERR_dbms_not_opened
     else:
         ret_val = db_connect.store_file(status, dbms_name, table_name, file_path, file_name, blob_hash_value, archive_date, ignore_duplicate, struct_fname, trace)

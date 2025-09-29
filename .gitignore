@@ -3,6 +3,9 @@ venv/
 .idea
 __pycache__/
 !edge_lake/blockchain
-Dockerfile
+Dockerfile.*
 update_code.sh
-../../AnyLog-code/AnyLog-Network/EdgeLake-builder/setup.py
+copy_files.sh
+nebula/
+pull_logs.sh
+setup.py
