@@ -334,7 +334,7 @@ def _connect_dbms(status, io_buff_in, cmd_words, trace):
 
     db_name = params.get_value_if_available(words_array[2])
     db_type = interpreter.get_one_value(conditions, "type")
-    if db_type != "psql" and db_type != "sqlite" and db_type != "pi" and db_type != "mongo":
+    if db_type != "psql" and db_type != "sqlite" and db_type != "pi" and db_type != "mongo" and db_type !="bucket":
         return process_status.Wrong_dbms_type
 
 
@@ -5786,7 +5786,7 @@ def _process_id(status, io_buff_in, cmd_words, trace):
 def _process_bucket(status, io_buff_in, cmd_words, trace):
 
     words_count = len(cmd_words)
-    if words_count < 6:
+    if words_count < 3:
         return process_status.ERR_command_struct
 
     ret_val, reply = _exec_child_dict(status, commands["bucket"]["methods"], commands["bucket"]["max_words"], io_buff_in,
@@ -10688,12 +10688,6 @@ def file_delete(status, io_buff_in, cmd_words, trace, func_params):
 # =======================================================================================================================
 def file_deliver(status, io_buff_in, cmd_words, trace, func_params):
 
-    if trace_methods.is_traced("tcp in"):
-        details = {
-            "Status": "file_deliver Start",
-        }
-        trace_methods.update_details("tcp in", **details)
-
     ret_val = process_status.SUCCESS
     is_message, offset, file_flag, files_ids, text_opr, file_name = func_params
     command_length = len(cmd_words)
@@ -10716,14 +10710,7 @@ def file_deliver(status, io_buff_in, cmd_words, trace, func_params):
     if not ret_val:
         ret_val = deliver_files(status, io_buff_in, ip, port, tsd_table, files_ids, trace)
 
-    if trace_methods.is_traced("tcp in"):
-        details = {
-            "Status": "file_deliver End",
-        }
-        trace_methods.update_details("tcp in", **details)
-
     return ret_val
-
 # ----------------------------------------------------------------------------
 # Compression and decompression
 # ----------------------------------------------------------------------------
@@ -11003,6 +10990,28 @@ def file_to(status, io_buff_in, cmd_words, trace, func_params):
 
     return ret_val
 
+
+# ----------------------------------------------------------------------------
+# retrieve a file to from a source location and return the file to the rest caller
+
+# file from !file_source
+# ----------------------------------------------------------------------------
+def file_from(status, io_buff_in, cmd_words, trace, func_params):
+
+    j_handle = status.get_active_job_handle()
+    if j_handle.is_rest_caller():
+
+        file_name = cmd_words[2]
+        os_file_name = params.get_value_if_available(file_name)
+
+        ret_val = utils_io.send_file(status, j_handle.get_output_socket(), os_file_name)
+
+    else:
+        status.add_error("the 'file from command needs to be issued Using REST request")
+        ret_val = process_status.ERR_command_struct
+
+    return ret_val
+
 # ----------------------------------------------------------------------------
 # Store a file in a local storage dbms
 
@@ -11239,11 +11248,6 @@ def file_retrieve(status, io_buff_in, cmd_words, trace, func_params):
 # =======================================================================================================================
 def deliver_files(status, io_buff_in, ip, port, tsd_table, files_ids, trace_level):
 
-    if trace_methods.is_traced("tcp in"):
-        details = {
-            "Status": "Deliver Start",
-        }
-        trace_methods.update_details("tcp in", **details)
 
     if metadata.is_current_node(tsd_table):
         tsd_name = "tsd_info"
@@ -11258,12 +11262,6 @@ def deliver_files(status, io_buff_in, ip, port, tsd_table, files_ids, trace_leve
     archive_dir = params.get_value_if_available("!archive_dir")
 
     for range_id, ids_range in enumerate (files_list):
-
-        if trace_methods.is_traced("tcp in"):
-            details = {
-                "Status": f"File copy {range_id}",
-            }
-            trace_methods.update_details("tcp in", **details)
 
         if ids_range.isdecimal():
             start_id = int(ids_range)
@@ -11319,39 +11317,16 @@ def deliver_files(status, io_buff_in, ip, port, tsd_table, files_ids, trace_leve
                                                (range_id + 1, len(files_list), counter, end_id - start_id, ip, port, tsd_table, file_id_str, str(file_found)), True)
 
                         if file_found:
-                            if trace_methods.is_traced("tcp in"):
-                                details = {
-                                    "Step": 1,
-                                }
-                                trace_methods.update_details("tcp in", **details)
-
                             ret_val = transfer_file(status, [(ip, str(port))], file_source, file_dest, message_header.GENERIC_USE_WATCH_DIR, trace_level, "MSG: Deliver File", True)
                         else:
-                            if trace_methods.is_traced("tcp in"):
-                                details = {
-                                    "Step": 2,
-                                }
-                                trace_methods.update_details("tcp in", **details)
-
                             # Send a special event message that the file is not available or can not be transferred
                             ret_val = ha.send_missing_arcived_file(status, io_buff_in, ip, port, tsd_table, file_name, trace_level)
-
-                        if trace_methods.is_traced("tcp in"):
-                            details = {
-                                "Step": 3,
-                            }
-                            trace_methods.update_details("tcp in", **details)
 
                         if ret_val:
                             break   # Failed to send a file or a message
         if ret_val:
             break
 
-    if trace_methods.is_traced("tcp in"):
-        details = {
-            "Status": "Deliver End",
-        }
-        trace_methods.update_details("tcp in", **details)
 
     return ret_val
 # =======================================================================================================================
@@ -18649,13 +18624,26 @@ _file_methods = {
               }
               },
 
+        "from": {'command': file_from,
+           'words_count': 3,
+           'help': {
+               'usage': "file from [source file name]",
+               'example': "file from !tmp_dir/new_config.al\n"
+                          "curl --location 'http://10.0.0.78:7849' --header 'User-Agent: AnyLog/1.23' --header 'command: file from !my_dir/my_file.json",
+               'text': "Return a file via REST",
+               'link': "blob/master/file%20commands.md#return-a-file-via-rest",
+               'keywords': ["unstructured data", "file"],
+           }
+           },
+
         "delete": {'command': file_delete,
             'words_min': 3,
             'help': {
                 'usage': "file delete [file path and name]",
                 'example': "file delete !prep_dir/sensor.json",
                 'text': "Delete the specified file.",
-                 'keywords' : ["file"],
+                 'link': "blob/master/file%20commands.md#return-a-file-via-rest",
+                 'keywords' : ["unstructured data", "file"],
                 }
             },
 
@@ -18834,6 +18822,46 @@ _query_status_methods = {
 }
 
 _get_methods = {
+
+        "bucket groups": {'command': bucket_store.get_connected_groups,
+                      'key_only': True,
+                      'help': {
+                          'usage': "get bucket groups",
+                          'example': "get bucket groups",
+                          'text': "Get the list of the active bucket groups",
+                          'keywords': ["dbms", "bucket"],
+                        }
+                      },
+
+        "bucket files": {'command': bucket_store.get_files,
+                                'words_min': 11,
+                                'help': {
+                                    'usage': "get bucket files where group = [group name] and name = [bucket name] and format = [table/json] and prefix = [prefix]",
+                                    'example': "get bucket files where group = my_group and name = my_bucket and prefix = dir1/",
+                                    'text': "Get the list of files in the bucket",
+                                    'keywords': ["dbms", "bucket"],
+                                    }
+                                },
+
+        "bucket file info": {
+                            'command': bucket_store.file_info,
+                            'min_words': 10,
+                            'help': {'usage': 'get bucket file info where group = [group name] and name = [bucket name] and key = [file key]',
+                                     'example': 'get bucket file info where group = my_group and name = my_bucket and key = my-key',
+                                     'text': 'List file info stored in bucket',
+                                     'keywords': ["dbms", "bucket"],
+                                     },
+                            },
+
+        "bucket names": {'command': bucket_store.get_names,
+                                        'words_min': 6,
+                                        'help': {
+                                            'usage': "get bucket names where group = [group name]",
+                                            'example': "get bucket names where group = my_group",
+                                            'text': "Get the list of bucket names of a group",
+                                            'keywords': ["dbms", "bucket"],
+                                            }
+                                        },
 
         "dynamic stats": {'command': dynamic_stats.get_dynamic_stats,
                  'words_min': 7,
@@ -20018,16 +20046,85 @@ _id_methods = {
 
 _buckets_commands = {
 
-    'create': {
-        'command': bucket_store.bucket_create,
-        'min_words': 10,
-        'help': {'usage': 'pi sql text [sql stmt',
-                 'example': 'pi sql text \"select element_name, sensor_name from sub_t01\"',
-                 'text': 'Issue a command to PI',
-                 'keywords': ["dbms"],
+    'provider connect': {
+        'command': bucket_store.bucket_connect,
+        'min_words': 11,
+        'help': {'usage': 'bucket provider connect where group = [group name] and provider = [buckets provider] and id = [access_key_id] and password = [password] and region = [region]',
+                 'example': 'bucket provider connect where group = my_buckets and provider = akave and id = 123 and password = abc and region = US',
+                 'text': 'Create a connection to a bucket provider',
+                 'keywords': ["dbms", "bucket"],
                  },
         'trace': 0,
     },
+
+    'provider disconnect': {
+        'command': bucket_store.bucket_disconnect,
+        'words_count': 7,
+        'help': {
+            'usage': 'bucket provider disconnect where group = [group name]',
+            'example': 'bucket provider disconnect where group = my_group',
+            'text': 'DIsconnect from a group of buckets',
+            'keywords': ["dbms", "bucket"],
+            },
+        'trace': 0,
+    },
+
+    'create': {
+        'command': bucket_store.bucket_create,
+        'min_words': 10,
+        'help': {'usage': 'bucket create where group = [group name] and name = [bucket name]',
+                 'example': 'bucket create where group = my_buckets and name = ai_models',
+                 'text': 'Create a new bucket within a group',
+                 'keywords': ["dbms", "bucket"],
+                 },
+        'trace': 0,
+    },
+
+    'drop': {
+        'command': bucket_store.bucket_drop,
+        'min_words': 10,
+        'help': {'usage': 'bucket drop where group = [group name] and name = [bucket name] and delete_all = [true/false]',
+                 'example': 'bucket drop where group = my_buckets and name = ai_models and delete_all = true',
+                 'text': 'Drop a bucket within a group',
+                 'keywords': ["dbms", "bucket"],
+                 },
+        'trace': 0,
+    },
+
+    'file upload': {
+        'command': bucket_store.file_upload,
+        'min_words': 10,
+        'help': {'usage': 'bucket file upload where group = [group name] and name = [bucket name] and source_dir = [source dir] and file_name = [file name] and key = [key]',
+                 'example': 'bucket file upload where group = my_group and name = my_bucket and source_dir = my_dir and file_name = file_name and key = my_key',
+                 'text': 'Upload a file to a bucket',
+                 'keywords': ["dbms", "bucket"],
+                 },
+        'trace': 0,
+    },
+
+    'file download': {
+        'command': bucket_store.file_download,
+        'min_words': 10,
+        'help': {'usage': 'bucket file download where group = [group name] and name = [bucket name] and key [file key] and dest_dir = [destination dir] and file_name = [file name]',
+                 'example': 'bucket file download where group = my_group and name = my_bucket and key = my-key and dest_dir = my_dir and file_name = file_name',
+                 'text': 'Download a file from a bucket',
+                 'keywords': ["dbms", "bucket"],
+                 },
+        'trace': 0,
+    },
+
+    'file delete': {
+            'command': bucket_store.file_delete,
+            'min_words': 10,
+            'help': {'usage': 'bucket file delete where group = [group name] and name = [bucket name] and key = [file key] and prefix = [prefix]',
+                     'example': 'bucket file delete where group = my_group and name = my_bucket and key = my-key and prefix = my-prefix',
+                     'text': 'Delete file from bucket. key or prefix must be specified. If both specified, key and all keys with prefix will be deleted.',
+                     'keywords': ["dbms", "bucket"],
+                     },
+            'trace': 0,
+        },
+
+
 }
 # ------------------------------------------------------------------------
 # Command Dictionaries

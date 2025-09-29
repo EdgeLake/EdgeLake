@@ -6,6 +6,7 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import os
 import sys
+import mimetypes
 import shutil
 import hashlib
 import time
@@ -23,6 +24,8 @@ import edge_lake.generic.params as params
 from edge_lake.generic.utils_columns import seconds_to_date, get_current_utc_time
 from edge_lake.generic.utils_json import str_to_json
 
+CRLF = b"\r\n"
+END_CHUNK = b"0\r\n\r\n"
 
 last_time_stamp = 0  # value based on time providing unique string
 
@@ -1184,6 +1187,125 @@ def write_to_stream(status, io_stream, send_data, transfer_encoding, transfer_fi
         ret_val = process_status.ERR_write_stream
 
     return ret_val
+# ==================================================================
+# Return a generic file to the REST caller
+# ==================================================================
+def send_file(status, io_stream, abs_path: str,
+              chunk_size: int = 64 * 1024,
+              use_chunked: bool = True):
+    """
+    Stream a file over an HTTP connection using write_to_stream.
+
+    status      : process status object (your own type)
+    io_stream   : socket-like object with write()
+    abs_path    : absolute path to the file
+    chunk_size  : bytes per chunk
+    use_chunked : if True, Transfer-Encoding: chunked; else Content-Length
+    """
+
+    # Guess MIME type
+    mime, _ = mimetypes.guess_type(abs_path)
+    mime = mime or "application/octet-stream"
+    filename = os.path.basename(abs_path)
+
+    if not os.path.exists(abs_path):
+        # No such file
+        err_msg = f"The file {filename} doesn't exist"
+        status.add_error(err_msg)
+        ret_val = process_status.ERR_file_does_not_exists
+    else:
+        # ----- Build & send headers -----
+        if use_chunked:
+            headers = (
+                b"HTTP/1.1 200 OK\r\n"
+                + f"Content-Type: {mime}\r\n".encode("ascii")
+                + b"Transfer-Encoding: chunked\r\n"
+                + f'Content-Disposition: attachment; filename="{filename}"\r\n'.encode("utf-8")
+                + b"Connection: close\r\n\r\n"
+            )
+        else:
+            size = os.path.getsize(abs_path)
+            headers = (
+                b"HTTP/1.1 200 OK\r\n"
+                + f"Content-Type: {mime}\r\n".encode("ascii")
+                + f"Content-Length: {size}\r\n".encode("ascii")
+                + f'Content-Disposition: attachment; filename="{filename}"\r\n'.encode("utf-8")
+                + b"Connection: close\r\n\r\n"
+            )
+        io_stream.write(headers)
+
+        # ----- Stream file body -----
+        try:
+            with open(abs_path, "rb") as f:
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    # Pass raw bytes to write_to_stream
+                    ret_val = write_file_to_stream(
+                        status,
+                        io_stream,
+                        chunk,           # raw bytes
+                        transfer_encoding=use_chunked,
+                        transfer_final=False
+                    )
+                    if ret_val:
+                        break
+
+                # Final zero-length chunk if using chunked encoding
+                if not ret_val and use_chunked:
+                    ret_val = write_file_to_stream(
+                        status,
+                        io_stream,
+                        b"",             # no payload
+                        transfer_encoding=True,
+                        transfer_final=True
+                    )
+        except:
+            errno, value = sys.exc_info()[:2]
+            err_msg = "Failed to write file to stream with error %s: %s" % (str(errno), str(value))
+            status.add_error(err_msg)
+            ret_val = process_status.ERR_write_stream
+
+    return ret_val
+# ==================================================================
+# Stream IO - Write IO Stream
+# source_id is an id of the caller. Last id is 10
+# See https://docs.python.org/3/library/http.client.html for Transfer-Encoding
+# ==================================================================
+def write_file_to_stream(status, io_stream, send_bytes, transfer_encoding, transfer_final):
+    '''
+    status - the process objext
+    io_stream - the socket
+    send_data - data to deliver
+    transfer_encoding - true with messages with undetermined size: self.send_header('Transfer-Encoding', 'chunked') # https://en.wikipedia.org/wiki/Chunked_transfer_encoding
+    '''
+
+    global crlf_            # encoded CRLF ("\r\n")
+    global end_msg_         # encoded 0 + CRLF + CRLF
+    ret_val = process_status.SUCCESS
+    try:
+        if transfer_encoding:
+            # Add the write size (in hex) in the buffer
+            if send_bytes:
+                io_stream.write(f"{len(send_bytes):X}".encode("ascii"))
+                io_stream.write(CRLF)
+                io_stream.write(send_bytes)
+                io_stream.write(CRLF)
+            if transfer_final:
+                # with Transfer-Encoding, write the final bytes:
+                io_stream.write(END_CHUNK)
+        else:
+            if send_bytes:
+                io_stream.write(send_bytes)
+    except:
+        errno, value = sys.exc_info()[:2]
+        err_msg = "Failed to write file to stream with error %s: %s" % (str(errno), str(value))
+        status.add_error(err_msg)
+        ret_val = process_status.ERR_write_stream
+
+    return ret_val
+
 # ------------------------------------------------------------------
 # Stream to the user browser
 # Example browser:
