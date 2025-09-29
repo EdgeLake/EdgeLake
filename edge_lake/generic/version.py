@@ -94,3 +94,9 @@ def prep_aggregations(dbms_name, table_name):
 
 def process_agg_events(status, dbms_name, table_name, columns_info, json_data):
     return [process_status.SUCCESS, None]
+
+def get_table_agg(status, dbms_name, table_name):
+    return None
+
+def is_ingest_data(dbms_name, table_name):
+    return False

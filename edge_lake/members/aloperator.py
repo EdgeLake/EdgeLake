@@ -5,6 +5,8 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 """
 
 import os
+import time
+
 with_profiler_ = True if os.getenv("PROFILER", "False").lower() == "true" else False      # Needs to return True - otherwise will be False
 if with_profiler_:
     import edge_lake.generic.profiler as profiler
@@ -27,6 +29,9 @@ from edge_lake.generic.streaming_data import flush_buffered_data
 import edge_lake.dbms.create_table as create_table
 import edge_lake.generic.utils_threads as utils_threads
 import edge_lake.generic.stats as stats
+import edge_lake.generic.dynamic_stats as dynamic_stats
+import edge_lake.members.multi_process as multi_process
+
 
 mem_view = None
 
@@ -79,6 +84,7 @@ class OperatorConfig:
         self.archive_dir = None
 
         self.is_distributor = False
+        self.is_helper = False
 
         self.archive_json = False
         self.json_is_compress = False
@@ -236,7 +242,7 @@ def run_operator(dummy: str, conditions: dict):
     stats.update_one_value("operator", "prep_info", "operator timestamp", current_timestamp)    # Update operator start time
 
     if with_profiler_:
-        utils_print.output_box("Starting Operator Profiling ...")
+        utils_print.output_box("Starting Operator Profiling ...","blue")
 
     while 1:
 
@@ -498,11 +504,10 @@ def process_watch_file(status, mem_view, conditions, config, with_tsd_info, par_
                             process_file = False
 
             if process_file:
-
                 if file_info.file_type == "json":
                     # Rename the JSON File to the convention, add hash value to name
 
-                    ret_val, process_file = process_json(status, config, file_info, with_tsd_info, member_id, row_id)
+                    ret_val, process_file = process_json(status, config, file_info, with_tsd_info, member_id, row_id, 0)
                     if trace_level:
                         utils_print.output("[Operator] [process JSON] [%s]" % process_status.get_status_text(ret_val), True)
 
@@ -583,9 +588,15 @@ def get_metadata_info(status):
 # ----------------------------------------------------------
 def process_sql(status, cluster_id, config, file_info, par_section, with_tsd_info, trace_level):
 
+    dbms_name = file_info.dbms_name
+    table_name = file_info.table_name
+    info_key = f"{dbms_name}.{table_name}"
+
+    dynamic_stats.start_timer("operator.sql", info_key, "process_time")
+
     ret_val = process_status.SUCCESS
     process_file = True
-    if partitions.is_partitioned(file_info.dbms_name, file_info.table_name):
+    if partitions.is_partitioned(dbms_name, table_name):
         # Test if the partitioned table declared -> if not -> declare partitioned table
         if not par_section:
             status.add_error("Operator error: Missing 'par_name' definition to extract partition from file name")
@@ -598,31 +609,40 @@ def process_sql(status, cluster_id, config, file_info, par_section, with_tsd_inf
                 ret_val = process_status.Missing_par_in_file_name
                 process_file = False
             else:
-                ret_val = create_table.validate_table(status, mem_view, file_info.dbms_name, file_info.table_name,
+                ret_val = create_table.validate_table(status, mem_view, dbms_name, table_name,
                                       with_tsd_info, file_info.instructions, True, par_name, file_info.file_name, trace_level)
                 if ret_val:
                     process_file = False
                 else:
                     # assign the table to the operator or to a cluster
-                    ret_val = assign_table(status, cluster_id, config, file_info.dbms_name, file_info.table_name, trace_level)
+                    ret_val = assign_table(status, cluster_id, config, dbms_name, table_name, trace_level)
                     if ret_val:
                         process_file = False
 
     if not ret_val:
-        ret_code, rows_counter = process_sql_file(status, config, file_info.dbms_name,
-                         file_info.table_name, file_info.file_name)
+        ret_code, rows_counter = process_sql_file(status, config, dbms_name, table_name, file_info.file_name)
 
         if ret_code:
             # SQL file was processed with no errors
-            table_key = file_info.table_name
+            table_key = table_name
             par_name = file_info.get_partition_name()
             if par_name and par_name != '0':
                 table_key += ("." + file_info.get_partition_name())
-            stats.operator_update_stats("sql", file_info.dbms_name, table_key, False, False)
+            stats.operator_update_stats("sql", dbms_name, table_key, False, False)
         else:
             process_file = False
             ret_val = process_status.ERR_SQL_failure
+    else:
+        rows_counter = 0
 
+    dynamic_stats.stop_timer("operator.sql", info_key, "process_time")         # Add statistics
+
+    stat_info = {
+        "events" : rows_counter,
+        "errors" : 1 if ret_val else 0,
+        "files"  : 1,
+    }
+    dynamic_stats.add_values("operator.sql", info_key, stat_info)      # Add statistics
 
     return [ret_val, process_file]
 
@@ -632,17 +652,26 @@ def process_sql(status, cluster_id, config, file_info, par_section, with_tsd_inf
 # 3) Rename file
 # 4) Make SQL file
 # ----------------------------------------------------------
-def process_json(status, config, file_info, with_tsd_info, member_id, row_id):
+def process_json(status, config, file_info, with_tsd_info, member_id, row_id, helper_id):
     '''
     row_id is the TSD Table Row which is to be updated
+    helper_id - a non-zero value if a helper process
     '''
+
+    dbms_name = file_info.dbms_name
+    table_name = file_info.table_name
+    rows_count = 0
+    info_key = f"{dbms_name}.{table_name}"
+
+    dynamic_stats.start_timer("operator.json", info_key, "process_time")
+
 
     ret_val = process_status.SUCCESS
     process_file = True
 
     if not ret_val:
         # Map to SQL, then compress or delete the file
-        ret_val, sql_file_name, rows_count = process_json_file(status, config, file_info, member_id)
+        ret_val, sql_file_name, rows_count = process_json_file(status, config, file_info, member_id, helper_id)
 
         if not ret_val:
             if with_tsd_info:
@@ -659,7 +688,7 @@ def process_json(status, config, file_info, with_tsd_info, member_id, row_id):
                 tsd_info_updated = False # No HA processes
 
             # JSON file was processed with no errors
-            stats.operator_update_stats("json", file_info.dbms_name, file_info.table_name, False, tsd_info_updated)
+            stats.operator_update_stats("json", dbms_name, table_name, False, tsd_info_updated)
 
             # Stats on number of rows added
             stats.add_one_value("operator", "prep_info", "total rows", rows_count)
@@ -667,12 +696,21 @@ def process_json(status, config, file_info, with_tsd_info, member_id, row_id):
         else:
             process_file = False
 
+    dynamic_stats.stop_timer("operator.json", info_key, "process_time")         # Add statistics
+
+    stat_info = {
+        "events" : rows_count,
+        "errors" : 1 if ret_val else 0,
+        "files"  : 1,
+    }
+    dynamic_stats.add_values("operator.json", info_key, stat_info)      # Add statistics
+
 
     return [ret_val, process_file]
 
 # ----------------------------------------------------------
 # Update the TSD table:
-# 1) depending if file from device or from a member to the cluster
+# 1) Depending on if file from device or from a member to the cluster
 # 2) Update the TSD table
 # 3) Rename file to reflect member
 # ----------------------------------------------------------
@@ -726,7 +764,8 @@ def tsd_table_process(status, file_info, member_id):
 # ----------------------------------------------------------
 # Process JSON File
 # ----------------------------------------------------------
-def process_json_file(status, config, file_info, member_id):
+def process_json_file(status, config, file_info, member_id, helper_id):
+
 
     # tsd_name + tsd_id are entered to the data row
 
@@ -737,7 +776,15 @@ def process_json_file(status, config, file_info, member_id):
     tsd_id = file_info.tsd_row_id
     json_file = file_info.get_file_name()
 
-    sql_file_list, rows_count = map_json_to_insert.map_json_file_to_insert(status, tsd_name, tsd_id, file_info.dbms_name, file_info.table_name, 1, json_file, config.watch_dir, file_info.instructions)
+    # Get the directory for the SQL files
+    if multi_process.is_with_helpers():
+        # This is a main thread distributing to helpers
+        sql_dir = multi_process.get_next_helper_dir(file_info.dbms_name, file_info.table_name)
+    else:
+        sql_dir = config.watch_dir
+
+
+    sql_file_list, rows_count = map_json_to_insert.map_json_file_to_insert(status, True, tsd_name, tsd_id, file_info.dbms_name, file_info.table_name, 1, json_file, sql_dir, file_info.instructions)
     if sql_file_list and len(sql_file_list):
         if config.is_distributor and not file_info.is_from_cluster_member(member_id):
             # This file is from a device and is moved to a distributor
@@ -753,6 +800,7 @@ def process_json_file(status, config, file_info, member_id):
         ret_val = process_status.ERR_json_to_insert
 
     return [ret_val, sql_file_list, rows_count]
+
 
 # ----------------------------------------------------------
 # Move a file that was processed in the streaming data to the distributor or archive
@@ -846,7 +894,10 @@ def assign_table(status, cluster_id, config, dbms_name, table_name, trace_level)
         else:
             ret_val = process_status.SUCCESS
             # Is the table declared in the metadata
-            table_supported = metadata.is_table_supported(status, config.company_name, dbms_name, table_name )
+            if config.is_helper:
+                table_supported = True
+            else:
+                table_supported = metadata.is_table_supported(status, config.company_name, dbms_name, table_name )
 
             if not table_supported:  # This Operator, or this cluster, is not associated with the table
                 # associate the table to an operator or a cluster
@@ -961,4 +1012,9 @@ def get_threads_obj():
     return operator_pool_
 
 def is_active():
+    global is_running
     return is_running
+
+def set_satus(active_mode):
+    global is_running
+    is_running = active_mode

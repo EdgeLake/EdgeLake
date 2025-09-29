@@ -19,6 +19,7 @@ import edge_lake.generic.utils_print as utils_print
 import edge_lake.tcpip.net_utils as net_utils
 import edge_lake.members.policies as policies
 import edge_lake.generic.params as params
+import edge_lake.generic.trace_methods as trace_methods
 
 from edge_lake.generic.utils_columns import compare
 
@@ -31,6 +32,19 @@ delete_blockchain_ = ["blockchain", "drop", "policy", "from", None, "where", "id
 
 
 merge_counter_ = 0  # Counter for the number of time merge was done
+merge_errors_ = 0   # Counter for the number of errors in merge
+
+# ==================================================================
+# Return the merge counter
+# ==================================================================
+def get_merge_counter():
+    global merge_counter_  # Counter for the number of time merge was done
+    return merge_counter_
+
+def get_merge_errors():
+    global merge_errors_
+    return merge_errors_
+
 
 # ==================================================================
 # Delete the main ledger - Mutex is done on the caller
@@ -104,6 +118,8 @@ def blockchain_write(status: process_status, file_name: str, policy: dict, is_mu
     if is_mutex:
         utils_io.write_lock("blockchain")
 
+    trace_methods.print_string("policy write", "Add new policy")
+
     ret_val = utils_io.append_data_to_file(status, file_name, "blockchain", data)
 
     if ret_val:
@@ -148,13 +164,15 @@ def restore_json(status: process_status, data: str):
 # ==================================================================
 # Given a file_name, read all data and store into a list - return the list
 # ==================================================================
-def blockchain_get_all(status: process_status, file_name: str):
+def blockchain_get_all(status: process_status, file_name: str, is_mutex:bool):
     if utils_io.is_path_exists(file_name) is False:
         return None
 
-    utils_io.read_lock("blockchain")
+    if is_mutex:
+        utils_io.read_lock("blockchain")
     list_data = utils_io.read_all_lines_in_file(status, file_name)
-    utils_io.read_unlock("blockchain")
+    if is_mutex:
+        utils_io.read_unlock("blockchain")
 
     if not list_data or not len(list_data):
         return None
@@ -189,7 +207,7 @@ def read_ledger_to_mem(status, is_modified, file_name, trace):
 # =======================================================================================================================
 # For a given key and a set of key value pairs - place the satisfying JSONs in a list
 # =======================================================================================================================
-def blockchain_search(status: process_status, file_name, operation, key, value_pairs, where_cond):
+def blockchain_search(status: process_status, file_name, operation, key, value_pairs, where_cond, is_mutex):
     '''
     status - process status object
     blockchain_file - path to the json file
@@ -217,21 +235,24 @@ def blockchain_search(status: process_status, file_name, operation, key, value_p
             # load the ledger to RAM - this process would only happened once
             read_ledger_to_mem(status, False, file_name, 0)
 
-        utils_io.read_lock("blockchain")
+        if is_mutex:
+            utils_io.read_lock("blockchain")
 
         ret_val, json_list = __get_json(status, key, value_pairs, where_cond)        # Get from the memory image at main_ledger_
 
-        utils_io.read_unlock("blockchain")
+        if is_mutex:
+            utils_io.read_unlock("blockchain")
 
 
     else:
         # READ line by line from file
-
-        utils_io.read_lock("blockchain")
+        if is_mutex:
+            utils_io.read_lock("blockchain")
 
         ret_val, json_list = __read_json(status, file_name, key, value_pairs, where_cond)
 
-        utils_io.read_unlock("blockchain")
+        if is_mutex:
+            utils_io.read_unlock("blockchain")
 
     return [ret_val, json_list]
 
@@ -799,9 +820,12 @@ def validate_struct(status, b_file):
 
     unique_dict = {}        # test unique values in the file
     ret_val = process_status.SUCCESS
+    err_counter = 0
 
-    data_list = blockchain_get_all(status, b_file)
+    data_list = blockchain_get_all(status, b_file, True)
+    index = 0
     if not data_list:
+        err_counter = 0
         ret_val = process_status.Empty_Local_blockchain_file
     else:
         # test local blockchain file
@@ -812,9 +836,20 @@ def validate_struct(status, b_file):
                 if not ret_val:
                     ret_val = policies.validate_policy(status, json_obj, unique_dict)
                     if ret_val:
-                        err_message ="Policy %u in file %s failed: Validation failure" % (index + 1, b_file)
+                        err_message ="Policy error: policy #%u failed: Validation failure" % (index + 1)
                         status.add_error(err_message)
-                        utils_print.output(err_message, True)
+                        utils_print.output_box(err_message + f"\r\n{entry}")
+                        err_counter += 1
+                else:
+                    err_message = "Policy error: policy #%u failed: Policy not in JSON format" % (index + 1)
+                    status.add_error(err_message)
+                    utils_print.output_box(err_message+ f"\r\n{entry}")
+                    err_counter += 1
+    if err_counter:
+        err_message = f"Blockchain test failed: {err_counter}/{index} policies with error. Policies file: {b_file}"
+        status.add_error(err_message)
+        utils_print.output_box(err_message + f"\r\n{entry}")
+        ret_val = process_status.Wrong_blockchain_struct
     return ret_val
 
 # ==================================================================
@@ -825,7 +860,6 @@ def get_policy_object(status, index, policy_str ):
     policy_obj = utils_json.str_to_json(policy_str)
     if not policy_obj:
         message = "Policy validation failed: Policy is not represented as a JSON structure - entry number %u: '%s'" % (index + 1, policy_str)
-        utils_print.output(message, True)
         status.add_error(message)
         ret_val = process_status.Wrong_blockchain_struct
     else:
@@ -931,183 +965,281 @@ def merge_ledgers(status, io_buff_in, new_ledger, existing_ledger, trace):
     global delete_blockchain_
     global main_ledger_
     global merge_counter_                       # Counter for the number of time merge was done
+    global merge_errors_
 
     ledger_list = []                            # a list with the blockchain objects - dynamically organized in this process
+    missing_policies = []                       # Policies from the local ledger that are missing in the new ledger
     anmp_list = []                                  # A list with AnyLog Network Management Policies
     index_by_id = {}                                # a dictionary to the policy by ID
-    ret_val, local_list = blockchain_search(status, existing_ledger, "read", '*',  {"ledger" : "local"}, None)   # get all the local policies
+    message_failure = 0
+    counter_inserted = 0
+    counter_deleted = 0
+    ret_val, local_list = blockchain_search(status, existing_ledger, "read", '*',  {"ledger" : "local"}, None, False)   # get all the local policies
+
+    if trace_methods.is_traced("blockchain sync"):
+        trace_flag = True
+        details = {}
+        details[f"Local policies:"] = f"{len(local_list)}"
+    else:
+        trace_flag = False
+
 
     if not ret_val or ret_val == process_status.No_local_blockchain_file:
         # if ret_val is process_status.No_local_blockchain_file - a new file starting
 
+
         try:
 
-            data_list = blockchain_get_all(status, new_ledger)     # read all rows in new file
+            data_list = blockchain_get_all(status, new_ledger, False)   # read all rows in new file
+            if trace_flag:
+                # counter all policies
+                details[f"Global policies:"] = f"{len(data_list)}"
+
             if not data_list:
                 ret_val = process_status.Empty_Local_blockchain_file
             else:
-                unique_dict = {}  # test unique values in the file
-                ret_val = process_status.SUCCESS
+                ret_val, ledger_list, global_ledger_index = create_policies_index(status, data_list, "anmp", new_ledger)  # Index to the ledger by Policy ID
 
-                if bsync.is_running():
-                    platform_sync = True        # With Blockchain or Master Node
-                    mem_view = memoryview(io_buff_in)
-                    if bsync.is_master():
-                        platform = "master"
-                        ip_port = bsync.get_connection()
-                        update_master_[2] = "(" + ip_port + ")"
-                        delete_master_[2] = "(" + ip_port + ")"
-                    else:
-                        platform = "blockchain"
-                        blockchain_name = bsync.get_connection()
-                        update_blockchain_[3] = blockchain_name
-                        delete_blockchain_[4] = blockchain_name
+                if ret_val:
+                    # Error in metadata file
+                    # This file can't be used
+                    utils_print.output_box(f"Termininating blockchin sync process - unrecognized file format received to {new_ledger}")
                 else:
-                    platform_sync = False
+
+                    index_by_id = global_ledger_index['*']
+                    if trace_flag:
+                        for policy_type, policy_list in global_ledger_index.items():
+                            details[f"Global policies of type '{policy_type}':"] = f"{len(policy_list)}"
+
+                    if "anmp" in global_ledger_index:
+                        anmp_list = list(global_ledger_index["anmp"].values())
 
 
-                # test the new ledger file
-                # Data List is the new ledger from the Master or Blockchain platform
-                for index, entry in enumerate(data_list):   # Go over all entries in the new ledger
-                    if entry:
-                        ret_val, global_policy = get_policy_object(status, index, entry)
-                        if not ret_val:
-                            # Test that the format of the policy is correct
-                            ret_val = policies.validate_policy(status, global_policy, unique_dict)
-                            if ret_val:
-                                # Error in policy
-                                err_message ="Policy %u in file %s failed: Merge failure" % (index + 1, new_ledger)
-                                status.add_error(err_message)
-                                utils_print.output(err_message, True)
-                            else:
-                                policy_type, policy_id = utils_json.get_policy_type_id(global_policy)
+                    unique_dict = {}  # test unique values in the file
+                    ret_val = process_status.SUCCESS
 
-                                if policy_type and policy_id:
-                                    # Update memory structures: a) A list of all policies, b) a list of ANMP policies c) index by ID to the policies
-                                    if policy_type == "anmp":
-                                        # AnyLog Network Management Policy
-                                        # Put in a side list
-                                        anmp_list.append(global_policy)
-                                    else:
-                                        index_by_id[policy_id] = global_policy
-                                    ledger_list.append(global_policy)      # All policies are added (including ANMP)
-
-                                if local_list:
-
-                                    # test that policy in the local list exists in the new file.
-                                    # For policy that is added - If the policy doesn't exist - it will be updated to the new file.
-                                    # For a policy that was deleted - If the policy exists, remove from the new file
-
-                                    for policy_offset, local_policy in enumerate(local_list):
-                                        if utils_json.get_policy_type(local_policy) != "deleted":
-                                            if policies.compare_policies(local_policy, global_policy):
-                                                # this policy is represented in the new ledger - remove from the list
-                                                del local_list[policy_offset]  # this policy to remove
-                                                break
-
-
-                if local_list:      # local_list includes all the policies in the current active blockchain.json
-                    # The policies which are not on the new_ledger are:
-                    # 1) Added to the new ledger
-                    # 2) Resend to the blockchain platform
-                    for local_policy in local_list:
-                        # Update the new ledge
-                        policy_type, policy_id = utils_json.get_policy_type_id(local_policy)
-
-                        if policy_type != "deleted":
-                            ret_val = policies.validate_policy(status, local_policy, unique_dict)
-                            if ret_val:
-                                # the policy to merge is not valid
-                                err_message = "Policy to merge is not valid: %s" % str(local_policy)
-                                status.add_error(err_message)
-                                utils_print.output(err_message, True)
-                                continue
+                    if bsync.is_running():
+                        platform_sync = True        # With Blockchain or Master Node
+                        mem_view = memoryview(io_buff_in)
+                        if bsync.is_master():
+                            platform = "master"
+                            ip_port = bsync.get_connection()
+                            update_master_[2] = "(" + ip_port + ")"
+                            delete_master_[2] = "(" + ip_port + ")"
+                            if trace_flag:
+                                details[f"Platform:"] = f"Master@{ip_port}"
                         else:
-                            # Deleted policy
-                            if not policy_id in index_by_id:
-                                # index_by_id is a dictionary to all the active policies
-                                # The policy id deleted from the main ledger
-                                continue
-
-                            for index, tested_id in enumerate(main_ledger_):
-                                # Go over all policies to remove the deleted policy
-                                if policy_id == utils_json.get_object_id(tested_id):
-                                    if index >= len(ledger_list):
-                                        break               # Same policy delete multiple times
-                                    del ledger_list[index]
-
-                                    del index_by_id[policy_id]  # Avoid sending the delete message twice
-                                    break
-                            # Will add next to the new ledger (in blockchain_write)
-
-                        if not blockchain_write(status, new_ledger, local_policy, False): # no need to mutex during the write as the process is mutexed
-                            ret_val = process_status.ERR_process_failure
-                            break
+                            platform = "blockchain"
+                            blockchain_name = bsync.get_connection()
+                            update_blockchain_[3] = blockchain_name
+                            delete_blockchain_[4] = blockchain_name
+                            if trace_flag:
+                                details[f"Platform:"] = f"Blockchain@{blockchain_name}"
+                    else:
+                        platform_sync = False
 
 
-                        if policy_type and policy_id and policy_type != "deleted":
-                            # Update memory structures: a) A list of all policies, b) a list of ANMP policies c) index by ID to the policies
-                            if policy_type == "anmp":
-                                # AnyLog Network Management Policy
-                                # Put in a side list
-                                anmp_list.append(local_policy)
+                    new_local_list = []
+
+                    for index, local_policy in enumerate(local_list):  # Go over all entries in the local ledge
+                        policy_type, policy_id = utils_json.get_policy_type_id(local_policy)
+                        if not policy_id in index_by_id or policy_type == "deleted":
+                            new_local_list.append(local_policy)     # This is a local policy which is not in the main ledge or which is deleted
+
+
+                    local_list = new_local_list
+
+                    if local_list:      # local_list includes all the policies in the current active blockchain.json
+                        # The policies which are not on the new_ledger are:
+                        # 1) Added to the new ledger
+                        # 2) Resend to the blockchain platform
+                        for local_policy in local_list:
+                            # Update the new ledge
+                            policy_type, policy_id = utils_json.get_policy_type_id(local_policy)
+
+                            if policy_type != "deleted":
+                                ret_val = policies.validate_policy(status, local_policy, unique_dict)
+                                if ret_val:
+                                    # the policy to merge is not valid
+                                    err_message = "Policy to merge is not valid: %s" % str(local_policy)
+                                    status.add_error(err_message)
+                                    utils_print.output(err_message, True)
+                                    continue
                             else:
-                                index_by_id[policy_id] = local_policy
-                            ledger_list.append(local_policy)      # All policies are added (including ANMP)
+                                # Deleted policy
+                                if not policy_id in index_by_id:
+                                    # index_by_id is a dictionary to all the active policies
+                                    # The policy id deleted from the main ledger
+                                    continue
 
-                        # Update the platform
-                        if platform_sync:
+                                for index, tested_id in enumerate(main_ledger_):
+                                    # Go over all policies to remove the deleted policy
+                                    if policy_id == utils_json.get_object_id(tested_id):
+                                        if index >= len(ledger_list):
+                                            break               # Same policy delete multiple times
+                                        del ledger_list[index]
 
-                            local_policy[policy_type]["ledger"] = "global"
+                                        del index_by_id[policy_id]  # Avoid sending the delete message twice
+                                        break
+                                # Will add next to the new ledger (in blockchain_write)
 
-                            policy_str = utils_json.to_string(local_policy)
+                            missing_policies.append(local_policy)
 
-                            if platform == "master":
-                                if policy_type == "deleted":
-                                    # Delete a policy from the master
-                                    delete_master_[9] = policy_id
-                                    reply_val = member_cmd.run_client(status, mem_view, delete_master_, 0)  # We ignore errors as the master may be down
+                            if policy_type and policy_id and policy_type != "deleted":
+                                # Update memory structures: a) A list of all policies, b) a list of ANMP policies c) index by ID to the policies
+                                if policy_type == "anmp":
+                                    # AnyLog Network Management Policy
+                                    # Put in a side list
+                                    anmp_list.append(local_policy)
                                 else:
-                                    # Add a new policy to the master
-                                    update_master_[5] = policy_str
-                                    # This is an update to the database  of the master + ignore the errors
-                                    reply_val = member_cmd.run_client(status, mem_view, update_master_, 0)  # We ignore errors as the master may be down
-                            elif platform == "blockchain":
-                                if policy_type == "deleted":
-                                    # Delete a policy from the master
-                                    delete_blockchain_[8] = policy_id
-                                    reply_val, reply = member_cmd.blockchain_commit(status, mem_view, delete_blockchain_, 0, None)  # We ignore errors as the network may be down
-                                else:
-                                    update_blockchain_[4] = policy_str
-                                    reply_val, reply = member_cmd.blockchain_commit(status, mem_view, update_blockchain_, 0, None)  # We ignore errors as the network may be down
+                                    index_by_id[policy_id] = local_policy
+                                ledger_list.append(local_policy)      # All policies are added (including ANMP)
+
+                            # Update the platform
+                            if platform_sync:
+
+                                local_policy[policy_type]["ledger"] = "global"
+
+                                policy_str = utils_json.to_string(local_policy)
+
+                                if platform == "master":
+                                    if policy_type == "deleted":
+                                        # Delete a policy from the master
+                                        counter_deleted += 1
+                                        delete_master_[9] = policy_id
+                                        reply_val = member_cmd.run_client(status, mem_view, delete_master_, 0)  # We ignore errors as the master may be down
+                                        if reply_val:
+                                            message_failure += 1
+                                    else:
+                                        # Add a new policy to the master
+                                        counter_inserted += 1
+                                        update_master_[5] = policy_str
+                                        # This is an update to the database  of the master + ignore the errors
+                                        reply_val = member_cmd.run_client(status, mem_view, update_master_, 0)  # We ignore errors as the master may be down
+                                        if reply_val:
+                                            message_failure += 1
+                                elif platform == "blockchain":
+                                    if policy_type == "deleted":
+                                        counter_deleted += 1
+                                        # Delete a policy from the master
+                                        delete_blockchain_[8] = policy_id
+                                        reply_val, reply = member_cmd.blockchain_commit(status, mem_view, delete_blockchain_, 0, None)  # We ignore errors as the network may be down
+                                        if reply_val:
+                                            message_failure += 1
+                                    else:
+                                        counter_inserted += 1
+                                        update_blockchain_[4] = policy_str
+                                        reply_val, reply = member_cmd.blockchain_commit(status, mem_view, update_blockchain_, 0, None)  # We ignore errors as the network may be down
+                                        if reply_val:
+                                            message_failure += 1
         except:
             err_message = "Merge ledgers process failed"
             status.add_error(err_message)
-            utils_print.output(err_message, True)
+            utils_print.output_box(err_message)
+            ret_val = process_status.ERR_process_failure
 
+        if trace_flag:
+            details[f"Policies inserts to {platform}"] = f"{counter_inserted}"
+            details[f"Policies deletes from {platform}"] = f"{counter_deleted}"
+            details[f"Message failure"] = f"{message_failure}"
 
         if not ret_val:
-            merge_anmp(status, anmp_list, ledger_list, index_by_id)        # Merge ANMP policies with the ledger
-            utils_io.write_lock("blockchain")
+            # Write all new policies to file
+            ret_val, success_counter, error_counter = utils_io.write_multiple_policies(status, "Blockchain during merge files", new_ledger, missing_policies)
 
-            if trace:
-                current_entries = len(main_ledger_) if main_ledger_ else 0 # The number of entries before the merge
-                new_entries = len(ledger_list) if ledger_list else 0 # The number of new entries
+            if trace_flag:
+                details[f"Policies merged"] = f"{success_counter}"
+                details[f"Policies merged failed"] = f"{error_counter}"
 
-            main_ledger_ = ledger_list          # Update the ledger list
+            if not ret_val:     # Write did not fail
 
-            utils_io.write_unlock("blockchain")
+                merge_counter_ += 1  # Counter for the number of time merge was done
 
-    merge_counter_ += 1  # Counter for the number of time merge was done
+                merge_anmp(status, anmp_list, ledger_list, index_by_id)        # Merge ANMP policies with the ledger
+
+                if trace:
+                    current_entries = len(main_ledger_) if main_ledger_ else 0 # The number of entries before the merge
+                    new_entries = len(ledger_list) if ledger_list else 0 # The number of new entries
+
+                main_ledger_ = ledger_list          # Update the ledger list
+        else:
+            merge_errors_ += 1
+
+
+
+
+    if trace_flag:
+        details[f"Process returned code"] = f"{ret_val}"
+        if ret_val:
+            details[f"Process returned error"] = f"{process_status.get_status_text(ret_val)}"
+        trace_methods.add_details("blockchain sync", **details)
+        trace_methods.print_details("blockchain sync", None)
 
     return ret_val
 
-# ==================================================================
-# Return the merge counter
-# ==================================================================
-def get_merge_counter():
-    global merge_counter_  # Counter for the number of time merge was done
-    return merge_counter_
+
+# ==========================================================================
+# Create a dictionary that maps the policy ID to each policy in the list
+# Return 1) One index for all, and a seperate index as f(policy type)
+# =========================================================================
+def create_policies_index(status, local_list, ignore_type, ledger_file_name):
+
+    ret_val = process_status.SUCCESS
+    policies_list = []
+    mapping_dict = {}
+    ledger_index = {
+        '*' : mapping_dict
+    }
+
+    error_counter = 0       # Count the number of policies with errors - these policies are ignored
+    for index, entry in enumerate(local_list):
+        if entry:       # If not empty line
+            ret_val, policy = get_policy_object(status, index, entry)
+            if not ret_val:
+                if isinstance(policy,dict) and len(policy):
+                    policies_list.append(policy)
+                    policy_type = next(iter(policy))
+                    if "id" in policy[policy_type]:
+                        policy_id = policy[policy_type]["id"]
+                        if policy_id in mapping_dict:
+                            # Non unique policy
+                            err_message = f"Policy Type: '{policy_type}' with ID: '{policy_id}' is not unique - Policy Ignored"
+                            status.add_error(err_message)
+                            utils_print.output_box(err_message)
+                            error_counter += 1
+                            continue
+                    else:
+                        err_message = f"Policy: '{policy_type}' in line {index+1} is missing 'id' attribute - Policy Ignored"
+                        status.add_error(err_message)
+                        utils_print.output_box(err_message)
+                        error_counter += 1
+                        continue
+
+                    if policy_type != ignore_type:
+                        # ignore type is "anmp" policy which is treated differently
+                        mapping_dict[policy_id] = policy                     # Keep ID as f(all policies)
+
+                    if not policy_type in ledger_index:
+                        ledger_index[policy_type] = {}
+                    ledger_index[policy_type][policy_id] = policy        # Keep ID as f(policy type)
+            else:
+                # File corrupted
+                err_message = f"Policy #{index+1} is not recognized - File ignored: potential error in new file: {ledger_file_name}"
+                status.add_error(err_message)
+                utils_print.output_box(err_message)
+                ret_val = process_status.ERR_process_failure
+                break
+
+    if error_counter:
+        # Policies with errors
+        err_msg = f"Merge process had {error_counter} policies with errors. Run 'blockchain test' to identify the policies"
+        status.add_error(err_msg)
+        utils_print.output_box(err_msg)
+
+    return [ret_val, policies_list, ledger_index]
+
+
+
 # ==================================================================
 # Merge AnyLog Network Management Policies with the in-memory ledger
 # ==================================================================

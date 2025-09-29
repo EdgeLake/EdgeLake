@@ -16,7 +16,7 @@ import edge_lake.generic.utils_data as utils_data
 import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.utils_columns as utils_columns
 import edge_lake.cmd.member_cmd as member_cmd
-from edge_lake.tcpip.net_utils import get_dns
+from edge_lake.tcpip.net_utils import get_dns, is_running_in_vm
 
 # List of chars that terminate a key
 end_key_chars = {
@@ -41,6 +41,7 @@ cond_signs = {
     "contains" : 1,
     "startswith" : 1,
     "endswith" : 1,
+    "childfrom" : 1,
 }
 
 al_func_ = {        # ANyLog Functions
@@ -74,11 +75,24 @@ else:
     os_wind = False
 
 def init(home_path):
+    """
+    Changes:
+        1. set network values as params
+        2. if VM, we want to use find_ip() for local_ip not external
+    """
+    try: # set IS_VM manually or using script (manul for docker)
+        is_vm = True if 'IS_VM' in os.environ and str(os.getenv('IS_VM')).lower() == 'true' else is_running_in_vm()
+    except:
+        is_vm = is_running_in_vm()
 
-    local_ip = tcpip_server.get_ip()
-    add_param("ip",local_ip )  # add default IP
-    external_ip = tcpip_server.get_external_ip()
+    external_ip = tcpip_server.get_external_ip() # get external_ip
+    local_ip = tcpip_server.get_ip() # get internal / local IP
+    # if is_vm is True:
+    #     local_ip = find_ip()
+
+    add_param('is_vm', is_vm) # check if virtual machine
     add_param("external_ip", external_ip)  # add external IP
+    add_param('ip', local_ip) # add local / internal IP
     add_param("anylog_server_port", str(2048))  # add sever default port
     add_param("anylog_rest_port", str(2148))  # add RESTful API port
 
@@ -98,6 +112,18 @@ def init(home_path):
     set_directory_locations(home_path)
 
 
+# =======================================================================================================================
+# Get the dictionary
+# =======================================================================================================================
+def get_user_defined():
+    global user_defined
+    return user_defined
+# =======================================================================================================================
+# Set the global dictionary
+# =======================================================================================================================
+def set_user_defined(new_user_defined):
+    global user_defined
+    user_defined = new_user_defined
 # =======================================================================================================================
 # Return the path separator ('/' or '\\') based on the OS
 # =======================================================================================================================
@@ -1570,3 +1596,18 @@ def create_result_struct(assignment, out_obj):
 
     add_param(key, value)
 
+# ----------------------------------------------------------------------
+# Get multiple values - return the list with the values that satisfies the keys
+# ----------------------------------------------------------------------
+def get_values(status, command_name, keys_list):
+
+    values_list = [process_status.SUCCESS]
+
+    for key in keys_list:
+        value =  get_value_if_available(key)
+        values_list.append(value)       # always return  value, even if null
+        if not value:
+            status.add_error(f"{command_name}: Missing '{key}' in local dictionary")
+            values_list[0] = process_status.Missing_configuration
+
+    return values_list

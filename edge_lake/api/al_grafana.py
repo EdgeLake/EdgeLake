@@ -83,10 +83,13 @@ class AlQueryParams:
         self.attribute = []
         self.trace_level = trace_func.get_func_trace_level("grafana")   # Could change by a dashboard's panel info
         self.timezone = None    # Timezone from Grafana
+        self.include_tables = None      # List of tables to be treated as table selected
+        self.extend_keys = None              # Added info pushed to the query
         self.fixed_points = False  # Use fixed data points in increment function to show fixed intervals
         self.grafana_start_ms = 0
         self.grafana_end_ms = 0
         self.grafana_interval_ms = 0
+        self.user_limit = 0
         if "scopedVars" in body_info and "__interval_ms" in body_info["scopedVars"] and 'value' in body_info["scopedVars"]["__interval_ms"]:
             self.grafana_interval_ms =  body_info["scopedVars"]["__interval_ms"]["value"]
             grafana_seconds = self.grafana_interval_ms / 1000
@@ -245,12 +248,38 @@ class AlQueryParams:
 
                 if "timezone" in al_data:
                     self.timezone = al_data["timezone"]
+                if "include" in al_data:
+                    # List of tables to be treated as table selected
+                    if not isinstance(al_data["include"], list):
+                        err_msg = "Grafana Payload: 'include' value is not a list"
+                        return [process_status.Err_grafana_payload, err_msg]
+                    include_list = al_data["include"]
+                    if not all(isinstance(item, str) for item in include_list):
+                        err_msg = "Grafana Payload: 'include' entries needs to be strings representing table names"
+                        return [process_status.Err_grafana_payload, err_msg]
+                    self.include_tables = f"({','.join(include_list)})"
+                if "extend" in al_data:
+                    # Added info pushed to the query
+                    if not isinstance(al_data["extend"], list):
+                        err_msg = "Grafana Payload: 'extend' value is not a list"
+                        return [process_status.Err_grafana_payload, err_msg]
+                    extend_list = al_data["extend"]
+                    if not all(isinstance(item, str) for item in extend_list):
+                        err_msg = "Grafana Payload: 'extend' entries needs to be strings"
+                        return [process_status.Err_grafana_payload, err_msg]
+                    self.extend_keys = f"({','.join(extend_list)})"
 
                 if "dbms" in al_data.keys():
                     self.dbms_name = str(al_data["dbms"])  # DBMS name mention explicitly in the JSON
                 if "table" in al_data.keys():
                     self.table_name = str(al_data["table"])  # Table name mention explicitly in the JSON
                     table_provided = True
+                    index = self.table_name.find('.')  # Table name may be dbms_name.table_name
+                    if index > 0 and index < (len(self.table_name) - 1):
+                        # Get the dbms name and the table name from the lookup for the list of tables \
+                        # This process is under - if request_handler.path.startswith("/search"):
+                        self.dbms_name = self.table_name[:index]  # DBMS name from the menu showing yable name + dbms name
+                        self.table_name = self.table_name[index + 1:]
                 else:
                     table_provided = False
 
@@ -361,7 +390,15 @@ class AlQueryParams:
                 if "time_column" in al_data.keys():
                     self.column_time = str(al_data["time_column"])
                 if "value_column" in al_data.keys():
-                    self.column_value = str(al_data["value_column"])
+                    values =  al_data["value_column"]
+                    if isinstance(values, list):
+                        # multiple_columns
+                        self.column_value = ' and value_column = '.join(values)
+                    else:
+                        self.column_value = str(al_data["value_column"])
+                if "limit" in al_data.keys():
+                    if isinstance(al_data["limit"], int):
+                        self.user_limit = al_data["limit"]
                 if "servers" in al_data.keys():
                     servers = al_data["servers"]
                     if isinstance(servers,str):
@@ -406,7 +443,17 @@ class AlQueryParams:
 
                         func_str = "and " + " and ".join(f"function = {col}" for col in self.functions) + " "
 
-                    self.details = f"get aggregations by time where dbms = {self.dbms_name} and table = {self.table_name} {func_str}and format = json"
+                    value_column_name = self.get_value_column()     # COuld be one or more
+                    if not value_column_name:
+                        value_column_name = "value"     # Default
+
+                    limit = self.get_user_limit()
+                    if limit:
+                        limit_stmt = f" and limit = {limit}"
+                    else:
+                        limit_stmt = ""
+
+                    self.details = f"get aggregations by time where dbms = {self.dbms_name} and table = {self.table_name} and value_column = {value_column_name} {func_str}and timezone = utc and format = json{limit_stmt}"
 
         if self.request_type != "aggregations":     # With aggregations column names are known
             # If column names not provided - try best guess
@@ -467,6 +514,11 @@ class AlQueryParams:
     # =======================================================================================================================
     def get_time_column(self):
         return self.column_time
+    # =======================================================================================================================
+    # Return the name of the column identified as the value_column
+    # =======================================================================================================================
+    def get_value_column(self):
+        return self.column_value
 
     # =======================================================================================================================
     # Return the number of data points in an increment function
@@ -487,10 +539,16 @@ class AlQueryParams:
         return self.table_name
 
     # =======================================================================================================================
-    # Max rows returned to Grafana
+    # Max rows returned to Grafana = a grafana limit
     # =======================================================================================================================
     def get_limit(self):
         return self.limit
+
+    # =======================================================================================================================
+    # A user limit in the payload
+    # =======================================================================================================================
+    def get_user_limit(self):
+        return self.user_limit
 
     # =======================================================================================================================
     # Additional info to the wgere condition
@@ -565,7 +623,18 @@ class AlQueryParams:
     # =======================================================================================================================
     def get_timezone(self):
         return "utc"            # return self.timezone
+    # =======================================================================================================================
+    # Get a list of keys representing information added to the query.
+    # For example @table_name
+    # =======================================================================================================================
+    def get_extend(self):
+        return self.extend_keys
 
+    # =======================================================================================================================
+    # Get a list of tables to be considered like the main table
+    # =======================================================================================================================
+    def get_include(self):
+        return self.include_tables
 
     # =======================================================================================================================
     # Return True for SQL query over the user data
@@ -846,38 +915,51 @@ def set_timeseries_struct(status, dbms_name, table_name, query_params, reply_dat
                 is_time = True  # X axis is time value
                 break
 
-    return get_timeseries_response(status, dbms_name, table_name, title_list, grafana_data_types, rows, base_column_name, base_column_id, is_time)
+    return get_timeseries_response(status, dbms_name, table_name, title_list, None, grafana_data_types, rows, base_column_name, base_column_id, is_time)
 
 # --------------------------------------------------------------------------------------------------------
 # Reformat aggregation reply to a query result set
 # --------------------------------------------------------------------------------------------------------
-def reformat_aggregations(status, dbms_name, table_name, reply_data):
+def reformat_aggregations(status, is_dest_servers, dbms_name, table_name, reply_data):
+    '''
+    is_dest_servers - True if was sent to a server and reply contains server ID
+    '''
     gr_str= ""
     reply_json = utils_json.str_to_json(reply_data)
     if reply_json and len(reply_json):
         query_list = []         # Organize aggregation output as a query output
 
-        node_data = utils_json.get_inner(reply_json)        # Remove the node ID
+        if is_dest_servers:
+            node_data = utils_json.get_inner(reply_json)        # Remove the node ID
+        else:
+            node_data = reply_json
 
         if len(node_data):                                  # With data received from the node
-            for timestamp, values in node_data.items():
-                if not len(values):
+            target_counter = 0
+            for target, agg_values in node_data.items():        # Target is the column name
+                if not len(agg_values):
                     break       # No data - only date
 
+                first_entry = agg_values[0]
+                title_list = list(first_entry.keys())         # Keys in each row
+                project_names = ["timestamp" if entry == "timestamp" else (f"{entry}({target})") for entry in first_entry]   # Names to project
+                grafana_data_types = ["timestamp"] + ["number"] * (len(title_list) - 1)
 
-                values_dict = {
-                    "timestamp" : timestamp,
-                }
+                rows = []
+                index = 1
+                for single_entry in agg_values:
+                    columns = {}
+                    columns[target] = index
+                    index += 1
+                    for name, value in single_entry.items():
+                        columns[name] = value
+                    rows.append(columns)
 
-                values_dict.update(values)
-                query_list.append(values_dict)
+                if target_counter:
+                    gr_str += ", "
 
-            first_entry = query_list[0]
-            title_list = list(first_entry.keys())
-            grafana_data_types = ["timestamp"] + ["number"] * len(title_list)
-
-            gr_str = get_timeseries_response(status, dbms_name, table_name, title_list, grafana_data_types, query_list, "timestamp", 0, True)
-
+                gr_str += get_timeseries_response(status, dbms_name, table_name, title_list, project_names, grafana_data_types, rows, "timestamp", 0, True)
+                target_counter += 1
     return gr_str
 # --------------------------------------------------------------------------------------------------------
 # Organize the timeseries response
@@ -902,12 +984,13 @@ Example timeseries response - pairs of values - the first is the Y value (measur
 ]
 '''
 # --------------------------------------------------------------------------------------------------------
-def get_timeseries_response(status, dbms_name, table_name, title_list, grafana_data_types, rows, base_column_name, base_column_id, is_time):
+def get_timeseries_response(status, dbms_name, table_name, title_list, project_names, grafana_data_types, rows, base_column_name, base_column_id, is_time):
     '''
     status - the status object
     dbms_name
     table_name
     title_list:list - the names of the columns
+    project_names: list - optional, names to return to grafana.
     grafana_data_types:list - the grafana data types per each column
     rows - the list of rows
     base_column_name - the x-axis column name
@@ -954,7 +1037,7 @@ def get_timeseries_response(status, dbms_name, table_name, title_list, grafana_d
                     else:
                         # First row
                         if is_time:
-                            target_name = title_list[index]    # The field being queried for
+                            target_name = project_names[index] if project_names else title_list[index]    # The field being queried for
                         else:
                             if base_column_name in row:
                                 target_name = base_column_name
@@ -988,6 +1071,171 @@ def get_timeseries_response(status, dbms_name, table_name, title_list, grafana_d
 # =======================================================================================================================
 def set_grafana_error(dbms_name, table_name, error_msg):
     return f'{{"target": \"{dbms_name}.{table_name}", "datapoints": [], "error" : "{error_msg}" }}'
+
+
+# =======================================================================================================================
+# Return the Grafana time series stat with the extended information
+# Example string returned:
+# {"target": "t99<avg>", "datapoints": [[32.85971006253553,1744945516387], [19.105,1745016747623], [31.436796116504848,1745018351697], [32.055238095238096,1745044903053]]},{"target": "t99<min>", "datapoints": [[0.02,1744945516387], [8.65,1745016747623], [0.39,1745018351697], [0.03,1745044903053]]},{"target": "t99<max>", "datapoints": [[62.9,1744945516387], [29.56,1745016747623], [63.75,1745018351697], [63.37,1745044903053]]}
+# =======================================================================================================================
+def set_extended_timeseries_struct(table_name, extend, reply_data, functions, is_fixed_points, grafana_start_time, grafana_end_time, interval_time, trace_level):
+    '''
+    table_name - the table to process
+    extend - the list of extended info, for example: @dbms_name, @table_name
+    reply_data - the data returned by the dbms
+    functions - the functions returned to grafana
+    is_fixed_points - if "data_points" are set to "fixed" in the grafana JSON - using the grafana points vs. AnyLog points
+    grafana_start_time - the start time by grafana
+    interval_time - the interval time by grafana
+    '''
+
+    if extend:
+        extend_list = extend[1:-1].split(',')
+        keys_list =  [item[1:] for item in extend_list]     # These are the column names with the additional info
+    else:
+        keys_list = None
+
+    if not functions:
+        # The default: Min Max Avg
+        with_min = True
+        with_max = True
+        with_avg = True
+        with_range = False
+        with_count = False
+    else:
+        with_min = "min" in functions
+        with_max = "max" in functions
+        with_avg = "avg" in functions
+        with_range = "range" in functions
+        with_count = "count" in functions
+
+    prep_struct = {}
+
+    reply_json = utils_json.str_to_json(reply_data)
+
+    if reply_json:
+        rows = reply_json["Query"]
+        index = -1  # Needed for the trace command below if no data returned
+
+        for index, entry in enumerate(rows):
+            attr_time = entry["timestamp"]
+            # attr_ms = utils_columns.get_ms_from_date_time(attr_time)
+
+            attr_ms = utils_columns.get_utc_to_ms(attr_time)
+
+            if keys_list:
+                # Could be the table name + dbms name
+                info_key = ".".join(str(entry[key]) for key in keys_list)
+            else:
+                info_key = table_name   # all is of the same table
+
+
+            if not info_key in prep_struct:
+                # First time
+                info_bucket = {}
+                info_bucket["counter"] = 0
+                prep_struct[info_key] = info_bucket
+                info_bucket["grafana_time"] = grafana_start_time
+
+                if with_avg:
+                    info_bucket["gr_avg"] = {
+                        "target" : f"{info_key}.<avg>",
+                        "datapoints" : []
+                    }
+                if with_min:
+                    info_bucket["gr_min"] = {
+                        "target": f"{info_key}.<min>",
+                        "datapoints": []
+                    }
+                if with_max:
+                    info_bucket["gr_max"] = {
+                        "target": f"{info_key}.<max>",
+                        "datapoints": []
+                    }
+                if with_range:
+                    info_bucket["gr_range"] = {
+                        "target": f"{info_key}.<range>",
+                        "datapoints": []
+                    }
+                if with_count:
+                    info_bucket["gr_count"] = {
+                        "target": f"{info_key}.<count>",
+                        "datapoints": []
+                    }
+                    # gr_count = '{"target": "%s", "datapoints": [' % (table_name + "<count>")  # Count values string
+
+            info_bucket = prep_struct[info_key]       # The new setup for this extended info
+            info_bucket["counter"] += 1               # count instances with this info key
+            grafana_time = info_bucket["grafana_time"]
+
+            if is_fixed_points:
+                # return fixed points - regardless if dbms includes the data or not
+                while (grafana_time + interval_time) <= attr_ms:
+                    # return nulls for missing info
+                    if info_bucket["counter"] > 1:      # Ignore the first entry
+                        if with_avg:
+                            info_bucket["gr_avg"]["datapoints"].append([None, grafana_time])
+                        if with_min:
+                            info_bucket["gr_min"]["datapoints"].append([None, grafana_time])
+                        if with_max:
+                            info_bucket["gr_max"]["datapoints"].append([None, grafana_time])
+                        if with_range:
+                            info_bucket["gr_range"]["datapoints"].append([None, grafana_time])
+                        if with_count:
+                            info_bucket["gr_count"]["datapoints"].append([None, grafana_time])
+
+                    grafana_time += interval_time
+
+
+                attr_ms = grafana_time      # use the grafana time
+                grafana_time += interval_time
+                info_bucket["grafana_time"] = grafana_time
+
+            try:
+                if with_avg:
+                    attr_avg = entry["avg_val"]
+                    info_bucket["gr_avg"]["datapoints"].append([attr_avg, attr_ms])
+                if with_min:
+                    attr_min = entry["min_val"]
+                    info_bucket["gr_min"]["datapoints"].append([float(attr_min), attr_ms])
+                if with_max:
+                    attr_max = entry["max_val"]
+                    info_bucket["gr_max"]["datapoints"].append([float(attr_max), attr_ms])
+                if with_range:
+                    attr_range = entry["range_val"]
+                    info_bucket["gr_range"]["datapoints"].append([float(attr_range), attr_ms])
+                if with_count:
+                    attr_count = entry["count_val"]
+                    info_bucket["gr_count"]["datapoints"].append([attr_count, attr_ms])
+            except:
+                return ""
+
+
+        if trace_level > 1:
+            utils_print.output("\r\n[Grafana] [increments returned %u rows]" % (index + 1), True)
+
+    gr_str = ""
+    is_first = True
+    for target_info in prep_struct.values():
+        # create the grafana info for each table returned (note multiple tables are returned with include and extend)
+        for target_key, target_values in target_info.items():
+            if not target_key.startswith("gr_"):
+                continue        # Not info returned to grafana
+            if is_first:
+                is_first = False
+            else:
+                gr_str += ','
+
+            gr_str += f'{{"target": "{target_values["target"]}", "datapoints": '
+            datapoints =  target_values["datapoints"]
+            gr_str += f"{datapoints}"
+            gr_str += "}"
+
+    if is_fixed_points:
+        gr_str = gr_str.replace(" [None,", " [null,")
+
+    return gr_str  # return string in grafana format
+
 # =======================================================================================================================
 # Organize the reply data (to the default query) in the Grafana format to time series view
 # Example: data_str = '[{"target": "series B", "datapoints": [[-0.5799358614273129, 1598992658000], [-0.9281617508387254, 1599014215647], [0.18279045401831143, 1599014236823]]}]'
@@ -1548,6 +1796,14 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                 # Set pass_throgh to False because result set is manipulated by this API
                 conditions = f"timezone = {timezone} and pass_through = false"
 
+                include_tables = query_params.get_include()     # Get a list of tables that are queries with the main table
+                if include_tables:
+                    conditions += f" and include = {include_tables}"
+
+                extend_list = query_params.get_extend()     # Get a list of keys that extend the query info
+                if extend_list:
+                    conditions += f" and extend = {extend_list}"
+
                 # Execute and wait for completion
                 ret_val = native_api.exec_sql_stmt(status, servers, dbms_name, conditions, statement, timeout)
 
@@ -1556,7 +1812,7 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                     status.add_error(err_msg)
 
                     if trace_level:
-                        show_grafana_process(status, query_params, trace_level, decode_body, "query", ret_val, -1, servers, timezone, dbms_name, statement)
+                        show_grafana_process(status, query_params, trace_level, decode_body, "query", ret_val, -1, servers, conditions, dbms_name, statement)
 
                     if queries_count == 1:
                         data_str = err_msg
@@ -1573,7 +1829,7 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                 ret_val, reply_data, rows_counter = native_api.get_sql_reply_data(status, dbms_name, None)
 
                 if trace_level:
-                    show_grafana_process(status, query_params, trace_level, decode_body, "query", ret_val, rows_counter, servers, timezone, dbms_name, statement)
+                    show_grafana_process(status, query_params, trace_level, decode_body, "query", ret_val, rows_counter, servers, conditions, dbms_name, statement)
 
                 if ret_val:
                     if queries_count == 1:
@@ -1584,7 +1840,7 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                     continue  # Ignore this query and get to the next
 
                 if reply_data:
-                    # With data
+                    # PROCESS DATA REQUEST - With data
                     data_str = map_sql_replies(status, query_params, target_id, data_str, reply_data, trace_level)
 
                     if not data_str:
@@ -1633,8 +1889,10 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                     multiple_servers = False
 
                 if query_params.get_request_type() == "aggregations":
+                    dbms_name = query_params.get_dbms_name()
                     table_name = query_params.get_table_name()
-                    data_str = reformat_aggregations(status, dbms_name, table_name, reply_data)
+                    is_dest_servers = True if query_params.get_destination_servers() else False  # If was send to a server or executed locally
+                    data_str = reformat_aggregations(status, is_dest_servers, dbms_name, table_name, reply_data)
                 else:
                     data_str = json_to_grafana_table(status, statement, reply_data, multiple_servers)
 
@@ -1676,7 +1934,7 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
 # Either in Grafana: trace_level : 1
 # Or as a command: trace level = 1 grafana
 # =======================================================================================================================
-def show_grafana_process(status, query_params,  trace_level, decode_body, call_type, ret_val, rows_returned, servers, timezone, dbms_name, statement ):
+def show_grafana_process(status, query_params,  trace_level, decode_body, call_type, ret_val, rows_returned, servers, conditions, dbms_name, statement ):
     '''
     call_type is query, command or map
     '''
@@ -1699,7 +1957,7 @@ def show_grafana_process(status, query_params,  trace_level, decode_body, call_t
         else:
             details = ""
 
-        al_cmd = f"run client ({servers}) sql {dbms_name} timezone = {timezone} {statement}"
+        al_cmd = f"run client ({servers}) sql {dbms_name} {conditions} {statement}"
 
         print_msg = f"\rProcess: [{ret_val}:{msg_text}] Rows: [{rows_returned}] Details: [{details}]\r\nStmt: [{al_cmd}]"
 
@@ -1802,7 +2060,11 @@ def map_sql_replies(status, query_params, target_id, data_str, reply_data, trace
                 data_str += set_sql_timeseries_struct(status, table_name, reply_data, is_fixed_points, start_time_ms, end_time_ms, interval_time_ms, trace_level)  # Organize in the grafana format
             else:
                 # SQL was created by the JSON Payload
-                data_str += set_default_timeseries_struct(table_name, reply_data, functions, is_fixed_points, start_time_ms, end_time_ms, interval_time_ms, trace_level)  # Organize in the grafana format
+                extend = query_params.get_extend()          # A list of keys that extend the result set - like @table_name
+                if extend:
+                    data_str += set_extended_timeseries_struct(table_name, extend, reply_data, functions, is_fixed_points, start_time_ms, end_time_ms, interval_time_ms, trace_level)  # Organize in the grafana format
+                else:
+                    data_str += set_default_timeseries_struct(table_name, reply_data, functions, is_fixed_points, start_time_ms, end_time_ms, interval_time_ms, trace_level)  # Organize in the grafana format
         else:
             data_str += set_timeseries_struct(status, dbms_name, table_name, query_params,
                                               reply_data)  # Organize in the grafana format

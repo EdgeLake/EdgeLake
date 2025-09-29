@@ -505,7 +505,11 @@ class OutputManager():
 
         if self.destination == "buffer":
             # assign the output:
-            params.add_param(self.assign_key, (self.output_str[:-1] + "]"))
+            if self.format_type == "Table":
+                params.add_param(self.assign_key, (self.output_str[:-1] + "]"))
+            else:
+                # JSON - End the query info
+                params.add_param(self.assign_key, (self.output_str + "]}]"))
         elif  self.format_type == "table":
             if self.out_list_counter:
                 # Print whatever is left in the table struct

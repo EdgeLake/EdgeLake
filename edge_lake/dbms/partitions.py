@@ -22,6 +22,19 @@ partition_struct = {}  # describes how data is partitioned
 # Example: par_test_data_2019_10_15_17_h01_timestamp
 
 # ---------------------------------------------------------------
+# Returns the partitions described on this node
+# ---------------------------------------------------------------
+def get_partition_struct():
+    global partition_struct
+    return partition_struct
+# ---------------------------------------------------------------
+# Set the partitioned struct (used by a helper process)
+# ---------------------------------------------------------------
+def set_partition_struct(part):
+    global partition_struct
+    partition_struct = part
+
+# ---------------------------------------------------------------
 # Return True for partitioned table
 # ---------------------------------------------------------------
 def is_partitioned(dbms_name, table_name):

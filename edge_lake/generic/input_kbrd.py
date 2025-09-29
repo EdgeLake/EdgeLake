@@ -112,6 +112,11 @@ class Keyboard:
                 in_command = sys.stdin.readline()
         except KeyboardInterrupt:
             in_command = ""
+        else:
+            if len (in_command) > 2 and in_command[-2] == ' ':
+                # Remove spaces before the '\n'. Without this fix, the system hang in a code block as "<....> " hangs
+                in_command = in_command[:-1].rstrip() + in_command[-1]
+
 
         return in_command
 

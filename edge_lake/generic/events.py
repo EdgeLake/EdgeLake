@@ -16,6 +16,7 @@ import edge_lake.blockchain.blockchain as blockchain
 import edge_lake.generic.interpreter as interpreter
 import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.utils_print as utils_print
+import edge_lake.generic.trace_methods as trace_methods
 from edge_lake.generic.utils_threads import seconds_sleep, get_thread_name
 
 #                                  Must     Add      Is
@@ -220,20 +221,25 @@ def use_new_blockchain_file(status, io_buff_in, old_file, blockchain_file, new_f
         return process_status.SUCCESS   # The next sync will get the updates
 
     in_merge_ = True
+    ret_val = process_status.SUCCESS
 
-    utils_io.write_unlock("new")
+
+    utils_io.write_lock("blockchain")  # Local blockchain can't be updated in merge
+
+    utils_io.write_unlock("new") # A new file can be copied but not merged
+
+    trace_methods.print_string("blockchain merge", "Start Merge")
 
     if merge_ledgers:
         # Test if the old file includes updates not included on the new file.
         # If the answer is Yes --> add the info to the new file + update the blockchain platform
         # This process validates the structure of the new file
+
         ret_val = blockchain.merge_ledgers(status, io_buff_in, new_file, blockchain_file, trace)
+
         if trace:
             message = process_status.get_status_text(ret_val)
             utils_print.output(f"New Blockchain: Merged status: {message}", True)
-
-    else:
-        ret_val = blockchain.validate_struct(status, new_file)
 
 
     if ret_val:
@@ -266,8 +272,6 @@ def use_new_blockchain_file(status, io_buff_in, old_file, blockchain_file, new_f
 
         if not ret_val:
 
-            utils_io.write_lock("blockchain")
-
             if utils_io.is_path_exists(blockchain_file):
                 # move current --> old
                 if not utils_io.rename_file(status, blockchain_file, old_file):
@@ -286,10 +290,11 @@ def use_new_blockchain_file(status, io_buff_in, old_file, blockchain_file, new_f
                         ret_val = process_status.Failed_to_rename_file
 
 
-            utils_io.write_unlock("blockchain")
-
-
     in_merge_ = False
+
+    trace_methods.print_string("blockchain merge", "End Merge")
+
+    utils_io.write_unlock("blockchain")
 
     return ret_val
 

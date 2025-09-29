@@ -295,8 +295,10 @@ def prep_data_string(src_str):
             return '`'
         return ' '
 
+
     # Perform the replacement
     result = basic_pattern_.sub(replacement, src_str)
+
 
     return result
 
@@ -471,54 +473,63 @@ def check_timestamp(line: str):
     str_length = len(line)
 
     if str_length > 10:
-        if line[-6] == '+' and datetime.strptime(line, '%m/%d/%Y %I:%M:%S %p %z'):
-            ret_val = True
+        if line[-6] == '+' or line[-6] == '-':
+            for fmt in ("%Y-%m-%d %H:%M:%S%z",
+                        "%Y-%m-%dT%H:%M:%S.%f%z",
+                        "%Y-%m-%dT%H:%M:%S",
+                        "%m/%d/%Y %I:%M:%S %p %z"):
+                try:
+                    datetime.strptime(line, fmt)
+                    return True
+                except ValueError:
+                    continue
+
+
+        if line[-3] == ':' and (line[-6] == '+' or line[-6] == '-') and line[-2:].isnumeric() and  line[-5:-3].isnumeric():
+            # UTC offset format like 2011-11-04T00:05:23+04:00
+            line = line[:-6]
+            str_length -= 6
+
+        if line[-1] == 'Z':
+            # remove the Z char
+            date_length = str_length - 1
         else:
-            if line[-3] == ':' and (line[-6] == '+' or line[-6] == '-') and line[-2:].isnumeric() and  line[-5:-3].isnumeric():
-                # UTC offset format like 2011-11-04T00:05:23+04:00
-                line = line[:-6]
-                str_length -= 6
+            date_length = str_length
 
-            if line[-1] == 'Z':
-                # remove the Z char
-                date_length = str_length - 1
+        if line[4] == '-' and line[7] == '-' and line[date_length - 1].isdigit():
+            if date_length >= 27:
+                date_length = 26  # the function strptime doesn't take 27 chars
+            if line[10] == 'T':
+                # Remove the 'T' - Format like '2019-10-11T17:13:39.0430145Z'
+                date_str = line[:10] + " " + line[11:date_length]
             else:
-                date_length = str_length
-
-            if line[4] == '-' and line[7] == '-' and line[date_length - 1].isdigit():
-                if date_length >= 27:
-                    date_length = 26  # the function strptime doesn't take 27 chars
-                if line[10] == 'T':
-                    # Remove the 'T' - Format like '2019-10-11T17:13:39.0430145Z'
-                    date_str = line[:10] + " " + line[11:date_length]
-                else:
 
 
-                    # test utc offset - example:  2021-11-04 00:05:23+04:00
-                    if line[-6] == '+' and int(line[-2:]) >=0 and int(line[-5:-3]) >=0:
-                        date_length -= 6
+                # test utc offset - example:  2021-11-04 00:05:23+04:00
+                if line[-6] == '+' and int(line[-2:]) >=0 and int(line[-5:-3]) >=0:
+                    date_length -= 6
 
-                    date_str = line[:date_length]
+                date_str = line[:date_length]
 
-                if date_length == 19:
-                    # no milliseconds
-                    try:
-                        datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')  # returns this format if line is correct
-                        ret_val = True
-                    except ValueError as err:
-                        pass
-                    except:
-                        pass
-                elif date_length > 19 and date_str[19] == '.' and len(date_str) >= 21 and len(date_str) <= 27:
-                    # if longer than 26 characters: '2019-10-11T18:02:48.0370025Z'
-                    try:
-                        datetime.strptime(date_str,
-                                                   '%Y-%m-%d %H:%M:%S.%f')  # returns this format if line is correct
-                        ret_val = True
-                    except ValueError as err:
-                        pass
-                    except:
-                        pass
+            if date_length == 19:
+                # no milliseconds
+                try:
+                    datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')  # returns this format if line is correct
+                    ret_val = True
+                except ValueError as err:
+                    pass
+                except:
+                    pass
+            elif date_length > 19 and date_str[19] == '.' and len(date_str) >= 21 and len(date_str) <= 27:
+                # if longer than 26 characters: '2019-10-11T18:02:48.0370025Z'
+                try:
+                    datetime.strptime(date_str,
+                                               '%Y-%m-%d %H:%M:%S.%f')  # returns this format if line is correct
+                    ret_val = True
+                except ValueError as err:
+                    pass
+                except:
+                    pass
     return ret_val
 
 
