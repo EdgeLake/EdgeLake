@@ -6,12 +6,14 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import os
 import sys
+import mimetypes
 import shutil
 import hashlib
 import time
 import gzip
 from os import walk
 import base64
+import json
 
 import edge_lake.generic.process_log as process_log
 import edge_lake.generic.process_status as process_status
@@ -22,6 +24,8 @@ import edge_lake.generic.params as params
 from edge_lake.generic.utils_columns import seconds_to_date, get_current_utc_time
 from edge_lake.generic.utils_json import str_to_json
 
+CRLF = b"\r\n"
+END_CHUNK = b"0\r\n\r\n"
 
 last_time_stamp = 0  # value based on time providing unique string
 
@@ -705,16 +709,16 @@ def write_list_to_file(status: process_status, data: list, fname: str, lock_key)
         ret_val = True
 
         if lock_key:
-            write_lock(lock_key)  # prevent multiple writters
+            write_lock(lock_key)  # prevent multiple writers
 
         try:
             with open(file_name, 'w') as f:
-                for entry in data:
-                    f.write(str(entry) + "\n")
+                f.write('\n'.join(str(entry) for entry in data) + '\n')
         except (IOError, EOFError) as e:
-            error_message = "IO Error - failed to write JSON data to file: {0} to file {1} err.".format(file_name,
-                                                                                                        e.args[-1])
+            errno, value = sys.exc_info()[:2]
+            error_message = f"Failed to delete and write policies file at: '{file_name}' with error: '{str(errno)}' - '{str(value)}'"
             status.add_error(error_message)
+            utils_print.output_box(error_message)
             ret_val = False  # return an empty list
 
         if lock_key:
@@ -1183,6 +1187,125 @@ def write_to_stream(status, io_stream, send_data, transfer_encoding, transfer_fi
         ret_val = process_status.ERR_write_stream
 
     return ret_val
+# ==================================================================
+# Return a generic file to the REST caller
+# ==================================================================
+def send_file(status, io_stream, abs_path: str,
+              chunk_size: int = 64 * 1024,
+              use_chunked: bool = True):
+    """
+    Stream a file over an HTTP connection using write_to_stream.
+
+    status      : process status object (your own type)
+    io_stream   : socket-like object with write()
+    abs_path    : absolute path to the file
+    chunk_size  : bytes per chunk
+    use_chunked : if True, Transfer-Encoding: chunked; else Content-Length
+    """
+
+    # Guess MIME type
+    mime, _ = mimetypes.guess_type(abs_path)
+    mime = mime or "application/octet-stream"
+    filename = os.path.basename(abs_path)
+
+    if not os.path.exists(abs_path):
+        # No such file
+        err_msg = f"The file {filename} doesn't exist"
+        status.add_error(err_msg)
+        ret_val = process_status.ERR_file_does_not_exists
+    else:
+        # ----- Build & send headers -----
+        if use_chunked:
+            headers = (
+                b"HTTP/1.1 200 OK\r\n"
+                + f"Content-Type: {mime}\r\n".encode("ascii")
+                + b"Transfer-Encoding: chunked\r\n"
+                + f'Content-Disposition: attachment; filename="{filename}"\r\n'.encode("utf-8")
+                + b"Connection: close\r\n\r\n"
+            )
+        else:
+            size = os.path.getsize(abs_path)
+            headers = (
+                b"HTTP/1.1 200 OK\r\n"
+                + f"Content-Type: {mime}\r\n".encode("ascii")
+                + f"Content-Length: {size}\r\n".encode("ascii")
+                + f'Content-Disposition: attachment; filename="{filename}"\r\n'.encode("utf-8")
+                + b"Connection: close\r\n\r\n"
+            )
+        io_stream.write(headers)
+
+        # ----- Stream file body -----
+        try:
+            with open(abs_path, "rb") as f:
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    # Pass raw bytes to write_to_stream
+                    ret_val = write_file_to_stream(
+                        status,
+                        io_stream,
+                        chunk,           # raw bytes
+                        transfer_encoding=use_chunked,
+                        transfer_final=False
+                    )
+                    if ret_val:
+                        break
+
+                # Final zero-length chunk if using chunked encoding
+                if not ret_val and use_chunked:
+                    ret_val = write_file_to_stream(
+                        status,
+                        io_stream,
+                        b"",             # no payload
+                        transfer_encoding=True,
+                        transfer_final=True
+                    )
+        except:
+            errno, value = sys.exc_info()[:2]
+            err_msg = "Failed to write file to stream with error %s: %s" % (str(errno), str(value))
+            status.add_error(err_msg)
+            ret_val = process_status.ERR_write_stream
+
+    return ret_val
+# ==================================================================
+# Stream IO - Write IO Stream
+# source_id is an id of the caller. Last id is 10
+# See https://docs.python.org/3/library/http.client.html for Transfer-Encoding
+# ==================================================================
+def write_file_to_stream(status, io_stream, send_bytes, transfer_encoding, transfer_final):
+    '''
+    status - the process objext
+    io_stream - the socket
+    send_data - data to deliver
+    transfer_encoding - true with messages with undetermined size: self.send_header('Transfer-Encoding', 'chunked') # https://en.wikipedia.org/wiki/Chunked_transfer_encoding
+    '''
+
+    global crlf_            # encoded CRLF ("\r\n")
+    global end_msg_         # encoded 0 + CRLF + CRLF
+    ret_val = process_status.SUCCESS
+    try:
+        if transfer_encoding:
+            # Add the write size (in hex) in the buffer
+            if send_bytes:
+                io_stream.write(f"{len(send_bytes):X}".encode("ascii"))
+                io_stream.write(CRLF)
+                io_stream.write(send_bytes)
+                io_stream.write(CRLF)
+            if transfer_final:
+                # with Transfer-Encoding, write the final bytes:
+                io_stream.write(END_CHUNK)
+        else:
+            if send_bytes:
+                io_stream.write(send_bytes)
+    except:
+        errno, value = sys.exc_info()[:2]
+        err_msg = "Failed to write file to stream with error %s: %s" % (str(errno), str(value))
+        status.add_error(err_msg)
+        ret_val = process_status.ERR_write_stream
+
+    return ret_val
+
 # ------------------------------------------------------------------
 # Stream to the user browser
 # Example browser:
@@ -2165,19 +2288,48 @@ def make_path_file_name(status, dir_name, file_name, file_type):
     return reply_list
 
 # -----------------------------------------------------------------
+# Given a list of policies - write the policies to the file
+# -----------------------------------------------------------------
+def write_multiple_policies(status, message_name, file_name, policies_list):
+
+    ret_val = process_status.SUCCESS
+    policies_str = ""
+    success_counter = 0
+    error_counter = 0
+    for policy in policies_list:
+        try:
+            policies_str += (json.dumps(policy) + "\n")     # Create a single string
+        except:
+            err_message = f"Unable to convert JSON policy to string in order to store in local file: {str(policy)}"
+            status.add_error(err_message)
+            utils_print.output_box(err_message)
+            error_counter += 1
+        else:
+            success_counter += 1
+            
+    if policies_str:
+
+        if not append_data_to_file(status, file_name, message_name, policies_str):
+            ret_val = process_status.File_write_failed      # Return error if write fails
+
+    return [ret_val, success_counter, error_counter]
+
+
+# -----------------------------------------------------------------
 # Append a row to a file
 # -----------------------------------------------------------------
 def append_data_to_file(status, file_name, message_name, data):
-    ret_val = True
-    io_handle = IoHandle()
-    if not io_handle.open_file("append", file_name):
-        status.add_error("Failed to open %s file: %s" % (message_name, file_name))
-        ret_val = False
-    elif not io_handle.append_data(data + "\n"):
-        status.add_error("Failed to write to %s file: %s" % (message_name, file_name))
-        ret_val = False
-    elif not io_handle.close_file():
-        status.add_error("Failed to close %s file: %s" % (message_name, file_name))
+    end_of_line = "" if data[-1] == '\n' else "\n"
+    try:
+        os_file_name = os.path.expanduser(os.path.expandvars(file_name))
+        with open(os_file_name, "a") as f:
+            f.write(data + end_of_line)
+            f.flush()  # Flush Python's internal buffer
+            os.fsync(f.fileno())  # Flush OS-level buffers to disk
+        ret_val = True
+    except:
+        errno, value = sys.exc_info()[:2]
+        status.add_error(f"Failed to write to {message_name} file: {file_name}. Error: {str(value)}")
         ret_val = False
 
     return ret_val

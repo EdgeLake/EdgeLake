@@ -89,6 +89,7 @@ class AlQueryParams:
         self.grafana_start_ms = 0
         self.grafana_end_ms = 0
         self.grafana_interval_ms = 0
+        self.user_limit = 0
         if "scopedVars" in body_info and "__interval_ms" in body_info["scopedVars"] and 'value' in body_info["scopedVars"]["__interval_ms"]:
             self.grafana_interval_ms =  body_info["scopedVars"]["__interval_ms"]["value"]
             grafana_seconds = self.grafana_interval_ms / 1000
@@ -273,6 +274,12 @@ class AlQueryParams:
                 if "table" in al_data.keys():
                     self.table_name = str(al_data["table"])  # Table name mention explicitly in the JSON
                     table_provided = True
+                    index = self.table_name.find('.')  # Table name may be dbms_name.table_name
+                    if index > 0 and index < (len(self.table_name) - 1):
+                        # Get the dbms name and the table name from the lookup for the list of tables \
+                        # This process is under - if request_handler.path.startswith("/search"):
+                        self.dbms_name = self.table_name[:index]  # DBMS name from the menu showing yable name + dbms name
+                        self.table_name = self.table_name[index + 1:]
                 else:
                     table_provided = False
 
@@ -383,7 +390,15 @@ class AlQueryParams:
                 if "time_column" in al_data.keys():
                     self.column_time = str(al_data["time_column"])
                 if "value_column" in al_data.keys():
-                    self.column_value = str(al_data["value_column"])
+                    values =  al_data["value_column"]
+                    if isinstance(values, list):
+                        # multiple_columns
+                        self.column_value = ' and value_column = '.join(values)
+                    else:
+                        self.column_value = str(al_data["value_column"])
+                if "limit" in al_data.keys():
+                    if isinstance(al_data["limit"], int):
+                        self.user_limit = al_data["limit"]
                 if "servers" in al_data.keys():
                     servers = al_data["servers"]
                     if isinstance(servers,str):
@@ -428,7 +443,17 @@ class AlQueryParams:
 
                         func_str = "and " + " and ".join(f"function = {col}" for col in self.functions) + " "
 
-                    self.details = f"get aggregations by time where dbms = {self.dbms_name} and table = {self.table_name} {func_str}and format = json"
+                    value_column_name = self.get_value_column()     # COuld be one or more
+                    if not value_column_name:
+                        value_column_name = "value"     # Default
+
+                    limit = self.get_user_limit()
+                    if limit:
+                        limit_stmt = f" and limit = {limit}"
+                    else:
+                        limit_stmt = ""
+
+                    self.details = f"get aggregations by time where dbms = {self.dbms_name} and table = {self.table_name} and value_column = {value_column_name} {func_str}and timezone = utc and format = json{limit_stmt}"
 
         if self.request_type != "aggregations":     # With aggregations column names are known
             # If column names not provided - try best guess
@@ -489,6 +514,11 @@ class AlQueryParams:
     # =======================================================================================================================
     def get_time_column(self):
         return self.column_time
+    # =======================================================================================================================
+    # Return the name of the column identified as the value_column
+    # =======================================================================================================================
+    def get_value_column(self):
+        return self.column_value
 
     # =======================================================================================================================
     # Return the number of data points in an increment function
@@ -509,10 +539,16 @@ class AlQueryParams:
         return self.table_name
 
     # =======================================================================================================================
-    # Max rows returned to Grafana
+    # Max rows returned to Grafana = a grafana limit
     # =======================================================================================================================
     def get_limit(self):
         return self.limit
+
+    # =======================================================================================================================
+    # A user limit in the payload
+    # =======================================================================================================================
+    def get_user_limit(self):
+        return self.user_limit
 
     # =======================================================================================================================
     # Additional info to the wgere condition
@@ -879,38 +915,51 @@ def set_timeseries_struct(status, dbms_name, table_name, query_params, reply_dat
                 is_time = True  # X axis is time value
                 break
 
-    return get_timeseries_response(status, dbms_name, table_name, title_list, grafana_data_types, rows, base_column_name, base_column_id, is_time)
+    return get_timeseries_response(status, dbms_name, table_name, title_list, None, grafana_data_types, rows, base_column_name, base_column_id, is_time)
 
 # --------------------------------------------------------------------------------------------------------
 # Reformat aggregation reply to a query result set
 # --------------------------------------------------------------------------------------------------------
-def reformat_aggregations(status, dbms_name, table_name, reply_data):
+def reformat_aggregations(status, is_dest_servers, dbms_name, table_name, reply_data):
+    '''
+    is_dest_servers - True if was sent to a server and reply contains server ID
+    '''
     gr_str= ""
     reply_json = utils_json.str_to_json(reply_data)
     if reply_json and len(reply_json):
         query_list = []         # Organize aggregation output as a query output
 
-        node_data = utils_json.get_inner(reply_json)        # Remove the node ID
+        if is_dest_servers:
+            node_data = utils_json.get_inner(reply_json)        # Remove the node ID
+        else:
+            node_data = reply_json
 
         if len(node_data):                                  # With data received from the node
-            for timestamp, values in node_data.items():
-                if not len(values):
+            target_counter = 0
+            for target, agg_values in node_data.items():        # Target is the column name
+                if not len(agg_values):
                     break       # No data - only date
 
+                first_entry = agg_values[0]
+                title_list = list(first_entry.keys())         # Keys in each row
+                project_names = ["timestamp" if entry == "timestamp" else (f"{entry}({target})") for entry in first_entry]   # Names to project
+                grafana_data_types = ["timestamp"] + ["number"] * (len(title_list) - 1)
 
-                values_dict = {
-                    "timestamp" : timestamp,
-                }
+                rows = []
+                index = 1
+                for single_entry in agg_values:
+                    columns = {}
+                    columns[target] = index
+                    index += 1
+                    for name, value in single_entry.items():
+                        columns[name] = value
+                    rows.append(columns)
 
-                values_dict.update(values)
-                query_list.append(values_dict)
+                if target_counter:
+                    gr_str += ", "
 
-            first_entry = query_list[0]
-            title_list = list(first_entry.keys())
-            grafana_data_types = ["timestamp"] + ["number"] * len(title_list)
-
-            gr_str = get_timeseries_response(status, dbms_name, table_name, title_list, grafana_data_types, query_list, "timestamp", 0, True)
-
+                gr_str += get_timeseries_response(status, dbms_name, table_name, title_list, project_names, grafana_data_types, rows, "timestamp", 0, True)
+                target_counter += 1
     return gr_str
 # --------------------------------------------------------------------------------------------------------
 # Organize the timeseries response
@@ -935,12 +984,13 @@ Example timeseries response - pairs of values - the first is the Y value (measur
 ]
 '''
 # --------------------------------------------------------------------------------------------------------
-def get_timeseries_response(status, dbms_name, table_name, title_list, grafana_data_types, rows, base_column_name, base_column_id, is_time):
+def get_timeseries_response(status, dbms_name, table_name, title_list, project_names, grafana_data_types, rows, base_column_name, base_column_id, is_time):
     '''
     status - the status object
     dbms_name
     table_name
     title_list:list - the names of the columns
+    project_names: list - optional, names to return to grafana.
     grafana_data_types:list - the grafana data types per each column
     rows - the list of rows
     base_column_name - the x-axis column name
@@ -987,7 +1037,7 @@ def get_timeseries_response(status, dbms_name, table_name, title_list, grafana_d
                     else:
                         # First row
                         if is_time:
-                            target_name = title_list[index]    # The field being queried for
+                            target_name = project_names[index] if project_names else title_list[index]    # The field being queried for
                         else:
                             if base_column_name in row:
                                 target_name = base_column_name
@@ -1790,7 +1840,7 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                     continue  # Ignore this query and get to the next
 
                 if reply_data:
-                    # With data
+                    # PROCESS DATA REQUEST - With data
                     data_str = map_sql_replies(status, query_params, target_id, data_str, reply_data, trace_level)
 
                     if not data_str:
@@ -1839,8 +1889,10 @@ def process_queries(status, dbms_name, request_handler, decode_body, timeout):
                     multiple_servers = False
 
                 if query_params.get_request_type() == "aggregations":
+                    dbms_name = query_params.get_dbms_name()
                     table_name = query_params.get_table_name()
-                    data_str = reformat_aggregations(status, dbms_name, table_name, reply_data)
+                    is_dest_servers = True if query_params.get_destination_servers() else False  # If was send to a server or executed locally
+                    data_str = reformat_aggregations(status, is_dest_servers, dbms_name, table_name, reply_data)
                 else:
                     data_str = json_to_grafana_table(status, statement, reply_data, multiple_servers)
 

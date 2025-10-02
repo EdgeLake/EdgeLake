@@ -67,6 +67,10 @@ import edge_lake.generic.trace_func as trace_func
 import edge_lake.api.plc_client as plc_client
 import edge_lake.api.opcua_client as opcua_client
 import edge_lake.api.etherip_client as etherip_client
+import edge_lake.generic.trace_methods as trace_methods
+import edge_lake.pull.pull_server as pull_server
+import edge_lake.generic.dynamic_stats as dynamic_stats
+import edge_lake.dbms.bucket_store as bucket_store
 
 from edge_lake.json_to_sql.suggest_create_table import *
 from edge_lake.dbms.dbms import connect_dbms, get_real_dbms_name
@@ -168,7 +172,7 @@ script_commands_ = {
         "bounds": process_status.UPDATE_BOUNDS      # Update Min and Max in aggregations
     },
 }
-
+max_command_words = 0   # Set from user_cmd or in the helper call
 
 nodes_options_ = ['operator','publisher','query','master']
 nodes_pattern_ = '|'.join(map(re.escape, nodes_options_))   # This is to quickly find node type
@@ -177,7 +181,12 @@ commands_pattern_ = "|".join(re.escape(word) for word in commands_options_)
 
 relay_info_ = {}        # Info on this node as a relay node
 
-
+def get_max_command_words():
+    global max_command_words
+    return max_command_words
+def set_max_command_words( value ):
+    global max_command_words
+    max_command_words = value      # Used in the helper process
 
 # =======================================================================================================================
 # Return True if the query pool is active
@@ -212,6 +221,7 @@ test_active_ = {
     "kafka consumer": ("Kafka Consumer", al_kafka.is_active, al_kafka.get_info),
     "gRPC": ("gRPC", grpc_client.is_running, grpc_client.get_status_string),
     "plc": ("PLC Client", plc_client.is_running, plc_client.get_status_string),
+    "pull processes": ("Pull Processes", pull_server.is_active, pull_server.get_info),
 }
 
 
@@ -324,7 +334,7 @@ def _connect_dbms(status, io_buff_in, cmd_words, trace):
 
     db_name = params.get_value_if_available(words_array[2])
     db_type = interpreter.get_one_value(conditions, "type")
-    if db_type != "psql" and db_type != "sqlite" and db_type != "pi" and db_type != "mongo":
+    if db_type != "psql" and db_type != "sqlite" and db_type != "pi" and db_type != "mongo" and db_type !="bucket":
         return process_status.Wrong_dbms_type
 
 
@@ -378,13 +388,46 @@ def _connect_dbms(status, io_buff_in, cmd_words, trace):
         utils_print.output(err_msg, True)
         return 0 # Return 0 even if the database created
 
-    db_info.create_dbms(dbms.get_dbms_name(), dbms, db_type, dbms.with_connection_pool())
+    db_info.create_dbms(dbms.get_dbms_name(), dbms, db_type, dbms.with_connection_pool(), db_usr, password, host, port)
 
     process_log.add("SQL", "DBMS Connect: Type: " + db_type + " User: " + db_usr + " Port: " + port + " DBMS: " + dbms_name)
 
     utils_print.output("Database %s using %s connected!" % (dbms_name, db_type), True)
 
     return process_status.SUCCESS
+
+
+# =======================================================================================================================
+# Update config params in the dbms
+# set dbms config where name = my_dbms and cvs_sql_file = true and map_json_to_list = true
+# =======================================================================================================================
+def set_dbms_config(status, io_buff_in, cmd_words, trace):
+
+    # get the conditions to execute the JOB
+    #                               Must     Add      Is
+    #                               exists   Counter  Unique
+
+    keywords = {"name": ("str", True, False, True),
+                "cvs_sql_file": ("bool", False, False, True),
+                "map_json_to_list": ("bool", False, False, True),
+                }
+
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words,
+                                                                   4, 0, keywords,
+                                                                   False)
+    if not ret_val:
+
+        key_values_list = []        # the config values to update
+        for key, value_to_set in conditions.items():
+            if key == "name":
+                dbms_name = value_to_set[0]                     # The dbms name to update
+            else:
+                key_values_list.append((key, value_to_set[0]))      # The key - value t update in the dbms
+
+        ret_val = db_info.configure_dbms(status, dbms_name, key_values_list)
+
+    return ret_val
+
 
 # =======================================================================================================================
 # Get the configuration policies used on the node
@@ -776,14 +819,14 @@ def blockchain_retrieve(status, blockchain_file, operation, key, json_search, wh
                 status.add_error("Error in JSON search key: '%s'" % str(value_pairs))
                 ret_val = process_status.ERR_json_search_key
             else:
-                ret_val, blockchain_out = blockchain.blockchain_search(status, blockchain_file, operation, key, value_pairs, None)
+                ret_val, blockchain_out = blockchain.blockchain_search(status, blockchain_file, operation, key, value_pairs, None, True)
                 if not ret_val and not blockchain_out:
                     status.set_warning_value(process_status.WARNING_empty_data_set)
         else:
             status.add_error("Error in JSON search key: '%s'" % str(json_data))
             ret_val = process_status.ERR_json_search_key
     else:  # No json_search object
-        ret_val, blockchain_out = blockchain.blockchain_search(status, blockchain_file, operation, key, None, where_cond)
+        ret_val, blockchain_out = blockchain.blockchain_search(status, blockchain_file, operation, key, None, where_cond, True)
 
     return ret_val, blockchain_out
 
@@ -1215,7 +1258,10 @@ def blockchain_push(status, io_buff_in, cmd_words, trace, func_params):
                 else:
                     ret_val = process_status.BLOCKCHAIN_operation_failed
 
+
+    trace_methods.count_method("blockchain push", ret_val)
     if trace:
+
         if json_dictionary:
             policy_type = utils_json.get_policy_type(json_dictionary)
         else:
@@ -1225,7 +1271,8 @@ def blockchain_push(status, io_buff_in, cmd_words, trace, func_params):
             policy_type = "Wrong policy type"
         err_text = process_status.get_status_text(ret_val)
         utils_print.output("\r\n[Command: blockchain push] [Policy Type: %s] [Result: %s]" % (policy_type, err_text), False)
-        if json_dictionary:
+
+        if trace >= 2 and json_dictionary:
             utils_print.struct_print(json_dictionary, True, True)
 
     return [ret_val, None]
@@ -2543,7 +2590,7 @@ def count_words_to_str(cmd_words, first_word):
 def get_files_from_dir(status, source, repeat_time, dir_path, object_type, file_types, name_list, private_process, ignore_dict, return_list):
     '''
     status - status object
-    source - the name of the caller i.e.: "operator"
+    source - the name of the caller i.e.: "operator" - None is provided from a non managed Process like Helper process
     repeat_time - seconds to process the dir
     dir_path - the directory to manage
     object_type - file or dir
@@ -2588,7 +2635,7 @@ def get_files_from_dir(status, source, repeat_time, dir_path, object_type, file_
                     status.set_warning_value(process_status.WARNING_no_files_in_dir)
                     break
 
-                if process_status.is_exit(source):
+                if source and process_status.is_exit(source):
                     ret_val = process_status.EXIT
                     break  # all threads stopped by user
                 if is_thread_stopped():
@@ -2677,6 +2724,9 @@ def send_message(err_value, status, ip: str, port: int, mem_view: memoryview, co
         metadata.set_operator_status(status, ip, port, "not_responding", None)
         status.add_keep_error("Failed to create a socket using: %s:%d" % (ip, port))
         ret_val = process_status.NETWORK_CONNECTION_FAILED
+
+
+    # log_method("send_message", ret_val)   # Print message send
 
     return ret_val
 # =======================================================================================================================
@@ -2877,6 +2927,20 @@ def send_command_to_nodes(status, io_buff_in, ip_port_list: list, receivers: int
                           job_mutexed, trace):
 
     #      command  =  self.get_executable_command(message, None)
+
+    trace_network = trace_methods.is_traced("tcp out")
+    if trace_network:
+        # Enabled by: -  trace method on tcp out
+        trace_level = 1
+        details = {"Method": "Synchronous - single_target_node"}
+        details["Message"] = message
+        details["IP:Port List"] = str(ip_port_list)
+        trace_methods.add_details("tcp out", **details)
+    else:
+        trace_level = 0
+
+    ret_val = process_status.SUCCESS
+
     mem_view = memoryview(io_buff_in)
 
     message_header.set_error(mem_view, 0)  # reset the error code
@@ -2919,10 +2983,13 @@ def send_command_to_nodes(status, io_buff_in, ip_port_list: list, receivers: int
                 if unique_job_id:
                     j_instance.set_receiver_info(receiver_id, ip, port)  # save the ip and port of the nodes receiving the message
 
-                if trace:
+                if trace_level:
                     from_ip, from_port = message_header.get_source_ip_port(mem_view)
-                    utils_print.output_box("(%s:%s) --> (%s:%s) Command: '%s' ..." % (from_ip, from_port, ip, port, message[:20]))
-                    utils_print.output("\rSend .....", False)
+
+                    msg_path = "(%s:%s) --> (%s:%s) Command: '%s' ..." % (from_ip, from_port, ip, port, message[:20])
+                    details = {"Path": msg_path}
+                    trace_methods.add_details("tcp out", **details)
+
 
                 if not ip_port[4] or ip_port[5]:
                     # ip_port[4] if FALSE - is the case in a query without a node supporting a cluster (and subset is set to True in the query destination)
@@ -2934,13 +3001,11 @@ def send_command_to_nodes(status, io_buff_in, ip_port_list: list, receivers: int
 
                     if ret_val == process_status.ERR_large_command:
                         # Send as a file message
-                        ret_val = net_client.large_message(status, ip, int(port), mem_view, message, data)
+                        if trace_level:
+                            details = {"Large Msg": "True"}
+                            trace_methods.add_details("tcp out", **details)
 
-                if trace:
-                    if ret_val:
-                        utils_print.output("..... Failed", True)
-                    else:
-                        utils_print.output("..... OK", True)
+                        ret_val = net_client.large_message(status, ip, int(port), mem_view, message, data)
 
         if ret_val != process_status.SUCCESS:
             # Ret_val will be changed to SUCCESS if subset (allowing subset of replies)
@@ -2950,6 +3015,18 @@ def send_command_to_nodes(status, io_buff_in, ip_port_list: list, receivers: int
             ret_val = process_status.SUCCESS
 
         receiver_id += 1
+
+    if trace_level:
+        if ret_val:
+            details = {"Result": f"Error - {process_status.get_status_text(ret_val)} "}
+            color = "red"
+
+        else:
+            details = {"Result": "Success "}
+            color = "green"
+
+        trace_methods.add_details("tcp out", **details)
+        trace_methods.print_details("tcp out", color)
 
     return ret_val
 
@@ -3078,7 +3155,7 @@ def run_client(status, io_buff_in, cmd_words, trace):
     if (words_list[word_offset] == "file" or words_list[word_offset] == "directory") and words_count > (
             word_offset + 1) and words_list[word_offset + 1] == "copy":  # read from file
         if dest_names != "":
-            ret_val, ip_port_values = resolve_destination(status, dest_names, False, None, "main")
+            ret_val, ip_port_values = resolve_destination(status, dest_names, False, None, None, None, "main")
             if ret_val:
                 return ret_val
             if not len(ip_port_values):
@@ -3505,6 +3582,33 @@ def get_sql_processing_info(status, cmd_words, words_count, index):
         if (info_offset + 1) < info_count:
             ret_val, counter, conditions = interpreter.get_dict_from_words(status, info_words, info_offset, info_count,
                                                                            cmd_instructions, False)
+            if "include" in conditions:
+                include_list = conditions["include"]
+                if len(include_list) == 1:
+                    tables_str = include_list[0]
+                    if len(tables_str) > 15 and tables_str.startswith("blockchain"):
+                        # Get blockchain info
+                        sub_str, left_brackets, right_brakets = utils_data.cmd_line_to_list_with_json(status, tables_str, 0, 0)  # a list with words in command line
+                        if left_brackets != right_brakets:
+                            status.add_error(f"Error in 'blockchain get' cmd inside 'include' param (wrong brackets): '{tables_str}'")
+                            return [process_status.ERR_command_struct, None, "", ""]
+                        ret_val, tables = blockchain_get(status, sub_str, "", True)
+                        if ret_val:
+                            return [process_status.ERR_command_struct, None, "", ""]
+                        if not tables:
+                            status.add_error(f"Error in 'blockchain get' cmd inside 'include' param (no metadata returned): '{tables_str}'")
+                            return [process_status.ERR_command_struct, None, "", ""]
+                        tables_str = tables[1:-1].strip() if (tables[0] == "[" and tables[-1] == ']') else tables
+                    tables_list = tables_str.split(',')
+                    if len(tables_list) > 1:
+                        # For example:
+                        # tables_list = nov.t1,nov.t2
+                        # include=(!tables_list)
+                        # --> split the tables
+                        new_list = [item.strip() for item in tables_list] #  remove leading and trailing spaces from each string in a list
+                        conditions["include"] = new_list
+
+
 
             if not ret_val:
                 ret_val = interpreter.test_values(status, conditions, "format", format_values)
@@ -4443,7 +4547,8 @@ def query_row_by_row(status, dbms_cursor, io_buff_in, conditions, sql_time, sql_
             next_offset = offset_row
             if ret_val:
                 break
-
+        if ret_val:
+            break
 
     if not ret_val and not fetch_counter:
         ret_val = process_status.Empty_data_set
@@ -4452,70 +4557,71 @@ def query_row_by_row(status, dbms_cursor, io_buff_in, conditions, sql_time, sql_
     # operator_time is the time spend with the operators
     # sql_time is the time for the sql stmt
     # timers.get_timer(0) is the time to get the rows
-    fetch_time = timers.get_timer(0)
-    network_time = timers.get_timer(1)
-    dbms_time = operator_time + sql_time + fetch_time
+    if not ret_val or ret_val == process_status.Empty_data_set:
+        fetch_time = timers.get_timer(0)
+        network_time = timers.get_timer(1)
+        dbms_time = operator_time + sql_time + fetch_time
 
-    if message:
+        if message:
 
-        job_instance.get_query_monitor().update_monitor(dbms_time)
-        query_log_time = job_instance.get_query_log_time()  # -1 means no logging, 0 - all or value representing query threshold in seconds
-        if query_log_time >= 0:
-            if query_log_time <= dbms_time:
-                # log slow queries
-                query_info = f"Sec: {dbms_time:>4,} Rows: {fetch_counter:>6,} DBMS: {dbms_cursor.get_table_name()} SQL: {sql_command}"
-                process_log.add("query", query_info)
+            job_instance.get_query_monitor().update_monitor(dbms_time)
+            query_log_time = job_instance.get_query_log_time()  # -1 means no logging, 0 - all or value representing query threshold in seconds
+            if query_log_time >= 0:
+                if query_log_time <= dbms_time:
+                    # log slow queries
+                    query_info = f"Sec: {dbms_time:>4,} Rows: {fetch_counter:>6,} DBMS: {dbms_cursor.get_table_name()} SQL: {sql_command}"
+                    process_log.add("query", query_info)
 
-        # if data retrieved is send to a query node
-        if ret_val != process_status.ERR_network:
-            if ret_val == process_status.AT_LIMIT:          # Rows transferred at SQL LIMIT
-                ret_val = process_status.SUCCESS
-            else:
-                par_id = message_header.get_partition_id(io_buff_in)
-                ret_val = update_thread_query_done(status, ip, Job_location, job_id, ret_val, block_number, dbms_rows, rows_to_transfer,
-                                                  sql_time, fetch_time, network_time, dbms_cursor, par_id, sql_command)  # Summary per thread
-
-                if ret_val == process_status.AT_LIMIT:  # Rows transferred at SQL LIMIT
+            # if data retrieved is send to a query node
+            if ret_val != process_status.ERR_network:
+                if ret_val == process_status.AT_LIMIT:          # Rows transferred at SQL LIMIT
                     ret_val = process_status.SUCCESS
+                else:
+                    par_id = message_header.get_partition_id(io_buff_in)
+                    ret_val = update_thread_query_done(status, ip, Job_location, job_id, ret_val, block_number, dbms_rows, rows_to_transfer,
+                                                      sql_time, fetch_time, network_time, dbms_cursor, par_id, sql_command)  # Summary per thread
 
-            # Transfer last rows (or the error message) with thee "last block" flag"
-            if ret_val:
-                # Some data may be in the block - make sure that the query process ignores this data
-                message_header.set_data_segment_to_command(mem_view)
+                    if ret_val == process_status.AT_LIMIT:  # Rows transferred at SQL LIMIT
+                        ret_val = process_status.SUCCESS
 
-            message_header.set_error(mem_view, ret_val)
+                # Transfer last rows (or the error message) with thee "last block" flag"
+                if ret_val:
+                    # Some data may be in the block - make sure that the query process ignores this data
+                    message_header.set_data_segment_to_command(mem_view)
 
-            message_header.set_block_number(mem_view, block_number, True)
+                message_header.set_error(mem_view, ret_val)
 
-            message_header.set_counter_jsons(mem_view, rows_counter)  # save the number of JSON segments in the block
+                message_header.set_block_number(mem_view, block_number, True)
 
-            message_header.set_operator_time(mem_view, dbms_time, network_time)
+                message_header.set_counter_jsons(mem_view, rows_counter)  # save the number of JSON segments in the block
 
-            if net_client.mem_view_send(soc, mem_view):  # send last block
-                ret_val = process_status.SUCCESS  # ret_value needs to be reset because it may be Empty_data_set
-            else:
-                ret_val = process_status.ERR_network  # failure in message send
-                status.add_error("Query failed to send block #%u to: %s:%u" % (block_number, ip, port))
+                message_header.set_operator_time(mem_view, dbms_time, network_time)
 
-        net_client.socket_close(soc)
+                if net_client.mem_view_send(soc, mem_view):  # send last block
+                    ret_val = process_status.SUCCESS  # ret_value needs to be reset because it may be Empty_data_set
+                else:
+                    ret_val = process_status.ERR_network  # failure in message send
+                    status.add_error("Query failed to send block #%u to: %s:%u" % (block_number, ip, port))
 
-        # text ="\nLast: block_id = %u, par_id = %u, soc_id = %u" % (block_number, message_header.get_partition_id(mem_view), id(soc))
-        # utils_print.output(text, True)
-        if is_debug_method("query"):
-            utils_print.output("\r\nEnd  : %s.%s.%s.%s.%s" % (job_id, dbms_cursor.get_dbms_name(), dbms_cursor.get_table_name(), message_header.get_partition_id(io_buff_in), ret_val), False)
+            net_client.socket_close(soc)
 
-        if commands["sql"]["trace"]:
-            # Output the data delivered
-            utils_print.output("\r\n[Total blocks Transferred from table: '%s'] [%u]" % (dbms_cursor.get_table_name(), fetch_counter), False)
+            # text ="\nLast: block_id = %u, par_id = %u, soc_id = %u" % (block_number, message_header.get_partition_id(mem_view), id(soc))
+            # utils_print.output(text, True)
+            if is_debug_method("query"):
+                utils_print.output("\r\nEnd  : %s.%s.%s.%s.%s" % (job_id, dbms_cursor.get_dbms_name(), dbms_cursor.get_table_name(), message_header.get_partition_id(io_buff_in), ret_val), False)
+
+            if commands["sql"]["trace"]:
+                # Output the data delivered
+                utils_print.output("\r\n[Total blocks Transferred from table: '%s'] [%u]" % (dbms_cursor.get_table_name(), fetch_counter), False)
 
 
-    else:
-        j_handle.set_query_completed()  # Flag that the query is completed such that the REST thread will not re-print the summary
-        if not ret_val or ret_val > process_status.NON_ERROR_RET_VALUE:
-            ret_val = output_manager.finalize(status, io_buff_in, fetch_counter, dbms_time, False, True, nodes_replied)
+        else:
+            j_handle.set_query_completed()  # Flag that the query is completed such that the REST thread will not re-print the summary
+            if not ret_val or ret_val > process_status.NON_ERROR_RET_VALUE:
+                ret_val = output_manager.finalize(status, io_buff_in, fetch_counter, dbms_time, False, True, nodes_replied)
 
-        if output_manager.is_with_result_set():
-            j_handle.set_outpu_buff(output_manager.get_result_set())
+            if output_manager.is_with_result_set():
+                j_handle.set_outpu_buff(output_manager.get_result_set())
 
 
     return ret_val
@@ -5331,8 +5437,7 @@ def update_target_query(status, io_buff_in, input_query_id, dest_job, name_key):
 
     message = "run client () " + dest_job.get_sql_mesg_prefix() + query_txt
 
-    sub_str, left_brackets, right_brakets = utils_data.cmd_line_to_list_with_json(status, message, 0,
-                                                                                  0)  # a list with words in command line
+    sub_str, left_brackets, right_brakets = utils_data.cmd_line_to_list_with_json(status, message, 0, 0)  # a list with words in command line
     ret_val, word_offset, dest_names, ip_port_values = get_command_ip_port(status, sub_str)
     if ret_val:
         return ret_val
@@ -5465,6 +5570,7 @@ def get_file_names(words_array, counter_files, offset, end_array):
         is_end = False  # 2 files
     words_count, file1 = concatenate_words(words_array, offset, is_end)  # get the source file name to process
     if words_count == -1:  # not structured well
+        process_log.add("Error", f"Failed to retrieve first file name starting from '{words_array[offset]}'")
         ret_val = process_status.ERR_command_struct  # return "Command error - usage: ..."
     else:
         if file1 == "":
@@ -5473,9 +5579,9 @@ def get_file_names(words_array, counter_files, offset, end_array):
             # get second file
             if counter_files == 2:
                 offset_second = offset + 1 + 2 * words_count  # offset second file name
-                words_count, file2 = concatenate_words(words_array, offset_second,
-                                                       end_array)  # get the dest file name to process
+                words_count, file2 = concatenate_words(words_array, offset_second, end_array)  # get the dest file name to process
                 if words_count == -1:  # not structured well
+                    process_log.add("Error", f"Failed to retrieve second file name starting from '{words_array[offset]}'")
                     ret_val = process_status.ERR_command_struct  # return "Command error - usage: ..."
 
     return [ret_val, file1, file2]
@@ -5672,6 +5778,22 @@ def _process_id(status, io_buff_in, cmd_words, trace):
     ret_val, reply = _exec_child_dict(status, commands["id"]["methods"], commands["id"]["max_words"], io_buff_in, cmd_words, 1, trace)
 
     return ret_val
+
+
+# =======================================================================================================================
+# RS
+# =======================================================================================================================
+def _process_bucket(status, io_buff_in, cmd_words, trace):
+
+    words_count = len(cmd_words)
+    if words_count < 3:
+        return process_status.ERR_command_struct
+
+    ret_val, reply = _exec_child_dict(status, commands["bucket"]["methods"], commands["bucket"]["max_words"], io_buff_in,
+                                      cmd_words, 1, trace)
+
+    return ret_val
+
 
 # =======================================================================================================================
 # Send reply to the destination IP and Port (retrieved from the message header)
@@ -6642,6 +6764,8 @@ def _exit(status, io_buff_in, cmd_words, trace):
 
         plc_client.exit("all")  # exit all clients
 
+        pull_server.exit("all")
+
         ret_val = process_status.EXIT
         for sleep_event in process_status.process_sleep_event.values():
             # the thread can be signaled to exit sleep
@@ -6692,6 +6816,11 @@ def _exit(status, io_buff_in, cmd_words, trace):
     elif words_count == 3 and words_array[1] == "scheduler" and words_array[2].isdecimal():
         # exit specific scheduler
         task_scheduler.set_not_active(int(words_array[2]))
+
+    elif words_count == 3 and words_array[1] == "pull":
+        # exit scheduled pull
+        # exit pull node_events
+        pull_server.exit(words_array[2])
 
     else:
         status.add_error("Process name '%s' in 'exit' command is not valid" % ' '.join(words_array))
@@ -6894,6 +7023,30 @@ def get_tables_for_dbms(status, dbms_name):
         table_list.sort()
 
     return table_list
+
+# =======================================================================================================================
+# Change the IP used
+# Command: set internal ip with [interface_name]
+# Example: set internal ip with enp0s8
+# Example: set internal ip with default
+# =======================================================================================================================
+def set_internal_ip(status, io_buff_in, cmd_words, trace):
+
+    if cmd_words[3] == "with":
+        interface_name = params.get_value_if_available(cmd_words[4])
+        if interface_name == "default":
+            tcpip_server.reset_nic_ip()     # Reset the nic IP to original value
+            nic_ip = tcpip_server.get_ip()  # get internal / local IP
+            ret_val = process_status.SUCCESS
+        else:
+            ret_val, nic_ip = tcpip_server.set_local_ip_method(status, interface_name)
+        if not ret_val:
+            ret_val = params.add_param('ip', nic_ip) # add local / internal IP
+    else:
+        ret_val = process_status.ERR_command_struct
+
+    return ret_val
+
 
 # =======================================================================================================================
 # Set max output table width
@@ -7895,7 +8048,7 @@ def _map_json_to_insert(status, io_buff_in, cmd_words, trace):
         return process_status.ERR_command_struct
     tsd_id = interpreter.get_one_value_or_default(conditions, "tsd_id", 0)
 
-    sql_file_list, rows_count = map_json_to_insert.map_json_file_to_insert(status, str(tsd_name), tsd_id, dbms_name, table_name, 0, json_file, sql_dir, instructions)
+    sql_file_list, rows_count = map_json_to_insert.map_json_file_to_insert(status, False, str(tsd_name), tsd_id, dbms_name, table_name, 0, json_file, sql_dir, instructions)
     if not sql_file_list or not len(sql_file_list):
         ret_val = process_status.ERR_json_to_insert
     else:
@@ -7999,7 +8152,7 @@ def set_profiler(status, io_buff_in, cmd_words, trace):
             # is already on
             status.add_error("Repeatable calls to set profiler to 'on' for target: %s" % target)
             return process_status.Profiler_call_not_in_sequence
-        comment = "Sart New Run" if reset_results else "Continue Previous Run"
+        comment = "Start New Run" if reset_results else "Continue Previous Run"
 
     elif operation == "off":
         # Turn off
@@ -8014,7 +8167,7 @@ def set_profiler(status, io_buff_in, cmd_words, trace):
 
     if not ret_val:
         opr_name = "Start" if operation == "on" else "Stop"
-        utils_print.output_box(f"{opr_name} {target} profiling ... {comment}")
+        utils_print.output_box(f"{opr_name} {target} profiling ... {comment}", "blue")
 
     return ret_val
 # =======================================================================================================================
@@ -8363,17 +8516,15 @@ def start_rest_threads(external_ip, external_port, internal_ip, internal_port, i
 # A process that flushes the streaming data to files
 # Example: run streamer
 # Example: run streamer where watch_dir = ...
+# Example: run streamer once       # Flush once
 # =======================================================================================================================
 def _run_streamer(status, io_buff_in, cmd_words, trace):
 
     words_count = len(cmd_words)
-    if words_count < 2 or words_count == 3:
-        return process_status.ERR_command_struct
 
     if streaming_data.is_running:
         status.add_error("Duplicate call to initiate Streamer process")
         return process_status.Process_already_running
-
     if words_count == 2:
         # only use defaults
         conditions = {}
@@ -8393,8 +8544,8 @@ def _run_streamer(status, io_buff_in, cmd_words, trace):
     if ret_val:
         return ret_val
 
-    test_dir = interpreter.get_one_value(conditions, "prep_dir")
-    ret_val = utils_io.test_dir_exists_and_writeable(status, test_dir, True)
+    prep_dir = interpreter.get_one_value(conditions, "prep_dir")
+    ret_val = utils_io.test_dir_exists_and_writeable(status, prep_dir, True)
     if ret_val:
         return ret_val
 
@@ -8402,8 +8553,8 @@ def _run_streamer(status, io_buff_in, cmd_words, trace):
     if ret_val:
         return ret_val
 
-    test_dir = interpreter.get_one_value(conditions, "watch_dir")
-    ret_val = utils_io.test_dir_exists_and_writeable(status, test_dir, True)
+    watch_dir = interpreter.get_one_value(conditions, "watch_dir")
+    ret_val = utils_io.test_dir_exists_and_writeable(status, watch_dir, True)
     if ret_val:
         return ret_val
 
@@ -8411,16 +8562,29 @@ def _run_streamer(status, io_buff_in, cmd_words, trace):
     if ret_val:
         return ret_val
 
-    test_dir = interpreter.get_one_value(conditions, "err_dir")
-    ret_val = utils_io.test_dir_exists_and_writeable(status, test_dir, True)
+    err_dir = interpreter.get_one_value(conditions, "err_dir")
+    ret_val = utils_io.test_dir_exists_and_writeable(status, err_dir, True)
     if ret_val:
         return ret_val
 
-
+    # Continueosly with a thread
     t = threading.Thread(target=streaming_data.flush_buffers, args=("dummy", conditions))
     t.start()
 
     return process_status.SUCCESS
+
+# =======================================================================================================================
+# Force the flush of the buffers to disk - ignore thresholds
+# =======================================================================================================================
+def flush_memory_buffs(status, io_buff_in, cmd_words, trace):
+
+    ret_val, watch_dir,  err_dir, prep_dir = params.get_values(status, "Flush Buffers", ["!watch_dir", "!err_dir", "!prep_dir"])
+
+    if ret_val:
+        return ret_val
+
+    ret_val = streaming_data.flush_buffered_data(status, watch_dir, prep_dir, err_dir, True)    # Ignore thresholds
+    return ret_val
 
 # =======================================================================================================================
 # Subscribe to a gRPC broker
@@ -8778,7 +8942,99 @@ def _run_message_broker(status, io_buff_in, cmd_words, trace):
     return ret_val
 
 # =======================================================================================================================
-# Init the broler threads
+# Run a pull process like Syslog or Danfoss
+# run scheduled pull where name = locallog and type = eventlog and source = localhost and frequency = 5
+#       and topic = (name = abc and dbms = lsl_demo and table = ping_sensor and column.timestamp.timestamp = "bring [timestamp]" and column.value.int = "bring [value]")
+# =======================================================================================================================
+def _run_scheduled_pull(status, io_buff_in, cmd_words, trace):
+
+    keywords = {"name": ("str", True, False, True),         # Process Name
+                "type": ("str", True, False, True),         # i.e eventlog (in windows), docker
+                "dbms": ("str", False, False, True),        # dest dbms name
+                "table": ("str", False, False, True),       # dest table name
+                "source": ("str", False, False, True),      # localhost or IP
+                "frequency": ("int", True, False, True),    # In seconds
+                "continuous": ("bool", False, False, True),  # If true, pulls continuously as long as data is available, ignoring frequency
+                "event_type" : ("str", False, False, False),  # Type of event to pull, i.e. error in windows event log.
+                "topic": ("nested", False, False, False),
+                "stdout" : ("bool", False, False, True),  # If true, prints a setup of data pulled
+                }
+
+    ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 4, 0, keywords, False)
+    if ret_val:
+        # conditions satisfied by keywords
+        return process_status.Error_command_params
+
+    process_name = conditions["name"][0]
+    if process_name == "all":
+        # all is a reserved word
+        status.add_error("Scheduled Pull Error: The keyword 'all' is a reserved name and can't serve for process name")
+        return process_status.Wrong_process_name
+
+    if pull_server.is_active(process_name):
+        status.add_error(f"Scheduled Pull Error: The process '{process_name}' is currently running")
+        return process_status.Wrong_process_name
+
+    source_type =  conditions["type"][0]
+    if source_type == "docker":
+        # source key is not needed
+        pass
+    elif source_type != "eventlog":
+        err_msg = f"Wrong type in 'run scheduled call command: '{source_type}' not recognized"
+        status.add_error(err_msg)
+        return process_status.ERR_command_struct
+    else:
+        source = interpreter.get_one_value_or_default(conditions, "source", None)
+        if not source:
+            status.add_error("Missing 'source' in 'run scheduled pull' command")
+            return process_status.Error_command_params
+
+
+
+    if "topic" in conditions:
+        # Push to the message broker
+        interpreter.set_nested_default(status, conditions, "topic", "qos", 0)       # Set 0 on QOS if missing
+
+        interpreter.add_value(conditions, "broker", "scheduled_pull")  # Flag that this is a scheduled_pull broker
+
+        # Topic info is not provided in parentheses - Test QOS range
+        ret_val = interpreter.test_nested_range(status, conditions, "topic", "qos", (0,2) )  # test quality of service is between 0 and 2
+        if ret_val:
+            return ret_val
+
+        # Associate this user with the topics and get back a USER ID
+        ret_val, user_id = mqtt_client.register(status, conditions)
+        if ret_val:
+            return ret_val
+    else:
+        user_id = 0
+        if not "dbms" in conditions:
+            status.add_error("Missing DBMS name in 'run scheduled pull' command")
+            return process_status.ERR_command_struct
+        if not "table" in conditions:
+            status.add_error("Missing Table name in 'run scheduled pull' command")
+            return process_status.ERR_command_struct
+        # test that directories are defined
+        ret_val = interpreter.add_value_if_missing(status, conditions, "prep_dir", "!prep_dir")
+        if ret_val:
+            return ret_val
+        ret_val = interpreter.add_value_if_missing(status, conditions, "watch_dir", "!watch_dir")
+        if ret_val:
+            return ret_val
+        ret_val = interpreter.add_value_if_missing(status, conditions, "err_dir", "!err_dir")
+        if ret_val:
+            return ret_val
+
+
+    t = threading.Thread(target=pull_server.call_data, args=(user_id, conditions, trace))
+    t.start()
+
+    return process_status.SUCCESS
+
+
+
+# =======================================================================================================================
+# Init the broker threads
 # =======================================================================================================================
 def start_broker_threads(url, port, url_internal, port_internal, is_bind, url_bind, workers_count, trace):
 
@@ -8899,20 +9155,9 @@ def stream_data(status, io_buff_in, cmd_words, trace):
     source = interpreter.get_one_value_or_default(conditions, "source", "0")
     instructions = interpreter.get_one_value_or_default(conditions, "instructions", "0")
 
-    prep_dir = params.get_value_if_available("!prep_dir")  # dir where the data will be written
-    watch_dir = params.get_value_if_available("!watch_dir")  # dir where the data will be written
-    err_dir = params.get_value_if_available("!err_dir")
-    if not prep_dir or not err_dir or not watch_dir:
-        if not prep_dir:
-            missing_name = "prep_dir"
-        elif not watch_dir:
-            missing_name = "watch_dir"
-        else:
-            missing_name = "err_dir"
-        status.add_error(f"Stream command: Missing {missing_name} in local dictionary")
-        return process_status.Missing_configuration
-
-    ret_val, hash_value = streaming_data.add_data(status, mode, row_counter, prep_dir, watch_dir, err_dir, dbms_name, table_name, source, instructions, "json", msg_data)
+    ret_val, watch_dir, err_dir, prep_dir = params.get_values(status, "Stream",["!watch_dir", "!err_dir", "!prep_dir"])
+    if not ret_val:
+        ret_val, hash_value = streaming_data.add_data(status, mode, row_counter, prep_dir, watch_dir, err_dir, dbms_name, table_name, source, instructions, "json", msg_data)
 
     return ret_val
 # =======================================================================================================================
@@ -9641,7 +9886,7 @@ def blockchain_update_dbms(status: process_status, words_array: list, blockchain
     else:
         return process_status.ERR_command_struct
 
-    policies = blockchain.blockchain_get_all(status, source_file)
+    policies = blockchain.blockchain_get_all(status, source_file, True)
     host = tcpip_server.get_ip()
     if not policies:
         ret_val = process_status.Empty_Local_blockchain_file
@@ -9815,7 +10060,7 @@ def blockchain_insert_all(status, mem_view, policy, is_local, blockchain_file, m
         status.add_error("Policy in 'blockchain insert' command has no type")
         ret_val = process_status.Wrong_policy_structure
     else:
-
+        local_file_updated = False
         # Add ID and date
         ret_val = policies.add_json_id_date(policy)  # if there is no ID to the JSON, add ID
         if ret_val:
@@ -9844,6 +10089,7 @@ def blockchain_insert_all(status, mem_view, policy, is_local, blockchain_file, m
                         elif not blockchain.blockchain_write(status, b_file, policy, True):
                             ret_val = process_status.ERR_process_failure
                         else:
+                            local_file_updated = True    # A flag the the local policy file was updated
                             bplatform.count_local_txn() # A counter for the number of updates done to the local ledger file
                 else:
                     # Print the error in the policy
@@ -9863,29 +10109,64 @@ def blockchain_insert_all(status, mem_view, policy, is_local, blockchain_file, m
                         push_words = ["run", "client", None, "blockchain", "push", policy_str]
                         push_words[2] = "(" + ip_port + ")"
                         reply_val = run_client(status, mem_view, push_words, 0)   # We ignore errors as the master may be down
-                        if reply_val and return_err:
-                            # if called from the CLI - an error message is returned
-                            ret_val = reply_val
+                        if reply_val:
+                            ret_val = shared_metadata_update_failure(status, reply_val, policy_type, local_file_updated, "Master Node", ip_port)
+                            if ret_val:
+                                break
 
                 # Update the blockchain platform
+                if not ret_val and platform and len(platform):
+                    reply_val = update_bchain_platform(status, mem_view, is_local, platform, policy_id, policy_str, return_err)
+                    if reply_val:
+                        ret_val = shared_metadata_update_failure(status, reply_val, policy_type, local_file_updated, "Blockchain", platform[0])
 
-                if platform and len(platform):
-                    ret_val = update_bchain_platform(status, mem_view, is_local, platform, policy_id, policy_str, return_err)
 
 
     if policy_type == "operator" or policy_type == "cluster" or policy_type == "table":
         bsync.blockchain_stat.set_force_load()  # Force a reload of the metadata
         blockchain_load(status, ["blockchain", "get", "cluster"], False, 0)       # Do not wait for process sync or update from blockchain
 
-    if _blockchain_methods["insert"]["trace"]:
+    trace_methods.count_method("blockchain insert", ret_val)
+
+    trace_level = _blockchain_methods["insert"]["trace"]
+    if trace_level:
         if not policy_type:
             policy_type = "Wrong policy type"
         err_text = process_status.get_status_text(ret_val)
         utils_print.output("\r\n[Command: blockchain insert] [Policy Type: %s] [Result: %s]" % (policy_type, err_text), False)
-        utils_print.struct_print(policy, True, True)
+        if trace_level >= 2:
+            utils_print.struct_print(policy, True, True)
 
 
     return ret_val
+# -----------------------------------------------------------------------------------------------------
+# An Error in updating the shared metadata
+# -----------------------------------------------------------------------------------------------------
+def shared_metadata_update_failure(status,  reply_val, policy_type, local_file_updated, dest_type, dest):
+    '''
+    status - status object
+    reply_val - the error value return from the shared metadata update
+    policy_type - the type of policy that failed
+    local_file_updated - bool value to indicate if the local file was updated
+    dest_type - Master or blockchain
+    dest - the ID of the master or blockchain
+    '''
+
+    if not local_file_updated:
+        # Return an error as both the local file and the shared file were not updated
+        err_msg = f"New policy '{policy_type}' failed to update the {dest_type} at '{dest}' and system is not configured to update the local metadata file"
+        utils_print.output_box(err_msg + f"\n{process_status.get_status_text(reply_val)}")
+        ret_val = reply_val
+    else:
+        # Return warning as the local file was updated
+        err_msg = f"Warning: New policy '{policy_type}' failed to update the {dest_type} at '{dest}'"
+        utils_print.output_box(err_msg + f"\n{process_status.get_status_text(reply_val)}", "magenta")
+        ret_val = process_status.SUCCESS
+
+    status.add_error(err_msg)
+
+    return ret_val
+
 # -----------------------------------------------------------------------------------------------------
 # Update one or more blockchain platforms
 # -----------------------------------------------------------------------------------------------------
@@ -10430,7 +10711,6 @@ def file_deliver(status, io_buff_in, cmd_words, trace, func_params):
         ret_val = deliver_files(status, io_buff_in, ip, port, tsd_table, files_ids, trace)
 
     return ret_val
-
 # ----------------------------------------------------------------------------
 # Compression and decompression
 # ----------------------------------------------------------------------------
@@ -10710,6 +10990,28 @@ def file_to(status, io_buff_in, cmd_words, trace, func_params):
 
     return ret_val
 
+
+# ----------------------------------------------------------------------------
+# retrieve a file to from a source location and return the file to the rest caller
+
+# file from !file_source
+# ----------------------------------------------------------------------------
+def file_from(status, io_buff_in, cmd_words, trace, func_params):
+
+    j_handle = status.get_active_job_handle()
+    if j_handle.is_rest_caller():
+
+        file_name = cmd_words[2]
+        os_file_name = params.get_value_if_available(file_name)
+
+        ret_val = utils_io.send_file(status, j_handle.get_output_socket(), os_file_name)
+
+    else:
+        status.add_error("the 'file from command needs to be issued Using REST request")
+        ret_val = process_status.ERR_command_struct
+
+    return ret_val
+
 # ----------------------------------------------------------------------------
 # Store a file in a local storage dbms
 
@@ -10946,6 +11248,7 @@ def file_retrieve(status, io_buff_in, cmd_words, trace, func_params):
 # =======================================================================================================================
 def deliver_files(status, io_buff_in, ip, port, tsd_table, files_ids, trace_level):
 
+
     if metadata.is_current_node(tsd_table):
         tsd_name = "tsd_info"
     else:
@@ -10959,6 +11262,7 @@ def deliver_files(status, io_buff_in, ip, port, tsd_table, files_ids, trace_leve
     archive_dir = params.get_value_if_available("!archive_dir")
 
     for range_id, ids_range in enumerate (files_list):
+
         if ids_range.isdecimal():
             start_id = int(ids_range)
             end_id = start_id + 1              # only a single file
@@ -11017,10 +11321,12 @@ def deliver_files(status, io_buff_in, ip, port, tsd_table, files_ids, trace_leve
                         else:
                             # Send a special event message that the file is not available or can not be transferred
                             ret_val = ha.send_missing_arcived_file(status, io_buff_in, ip, port, tsd_table, file_name, trace_level)
+
                         if ret_val:
                             break   # Failed to send a file or a message
         if ret_val:
             break
+
 
     return ret_val
 # =======================================================================================================================
@@ -11940,6 +12246,8 @@ def process_all_nodes_replied(status, peer_error, node_error, code_status, j_ins
                     if not interpreter.get_one_value(conditions, "table"):
                         # if table name - this is a repeatable query and the data remains in the source table
                         ret_val = query_local_table(status, io_buff_in, job_location, conditions, name_key)  # Query the unified results
+                        if ret_val:
+                            return ret_val
                 elif code_status == 5:  # Metadata was updated
                     if is_rest_caller:
                         info_data = j_instance.get_reply_data("Result.set")
@@ -12012,7 +12320,7 @@ def process_cmd(status, command, print_cmd, source_ip, source_port, io_buffer_in
     '''
     status - user status object
     command - a string containing the command to consider
-    print_cmd - DIsplay command for debug
+    print_cmd - Display command for debug
     source_ip - the IP of the source node (issuing the command)
     source_port - the port of the source node (issuing the command)
     io_buffer_in - the command/data TCP buffer (Network IO buffer)
@@ -13017,6 +13325,7 @@ def exec_script(status, io_buff_in, file_name, is_event, values):
         else:
             index = 0
 
+        trace_methods.count_method("exec script", ret_val)
 
         ret_val = process_cmd(status, command[index:], False, None, None, io_buff_in)
 
@@ -14668,6 +14977,8 @@ def reset_replacement_ip(status, io_buff_in, cmd_words, trace):
         net_utils.set_self_ip(None, None)
 
     return process_status.SUCCESS
+
+
 # =======================================================================================================================
 # Set the trace info to on/off for all or a single command
 # =======================================================================================================================
@@ -14850,13 +15161,15 @@ def get_synchronizer(status, io_buff_in, cmd_words, trace):
     call_count = bsync.get_counter_process()    # The number of times the metadata was considering the blockchain file
     load_count = metadata.get_metadata_version()       # The number of times data was loaded to the metadata
     policies_count = blockchain.get_policies_count()
+    sync_ok = blockchain.get_merge_counter()
+    sync_failure = blockchain.get_merge_errors()
 
     metadata_info = [(synchronizer_stat, sync_source, connection, sync_time, version,
-                      time_since_update, call_count, load_count, policies_count)]
+                      time_since_update, call_count, load_count, policies_count, sync_ok, sync_failure)]
 
     reply = utils_print.output_nested_lists(metadata_info, "",
                                             ["Status", "Sync\nSource", "Connection", "Sync\nTime", "Metadata Version",
-                                             "Time\nSince Update", "Calls", "Loads", "Policies"], True)
+                                             "Time\nSince Update", "Calls", "Loads", "Policies", "Sync OK", "Sync Err"], True)
 
 
     return [process_status.SUCCESS, reply]
@@ -15729,13 +16042,14 @@ def get_servers(status, io_buff_in, cmd_words, trace):
                             else:
                                 table_list = [table_name]
 
-                            for table in table_list:
-                                if bring_offset:
-                                    # with bring (determine the output info)
-                                    operators_list += get_operators_json_by_table(status, b_file, company, dbms, table)
-                                else:
-                                    # Return IP + Port
-                                    reply += (get_operators_ip_by_table(status, b_file, company, dbms, table) + "\r\n")
+                            if table_list:
+                                for table in table_list:
+                                    if bring_offset:
+                                        # with bring (determine the output info)
+                                        operators_list += get_operators_json_by_table(status, b_file, company, dbms, table)
+                                    else:
+                                        # Return IP + Port
+                                        reply += (get_operators_ip_by_table(status, b_file, company, dbms, table) + "\r\n")
 
                 if bring_offset:
                     if len(operators_list):
@@ -15834,6 +16148,8 @@ def get_columns(status, io_buff_in, cmd_words, trace):
         keywords = {"dbms":     ("str", True, False, True),
                     "table":    ("str", True, False, True),
                     "format":   ("str", False, False, True),
+                    "sys_col":  ("bool", False, False, True),    # If sys_col = False - remove 4 first system columns
+                    "type":     ("str", False, False, False),  # Data types to output
                 }
 
         ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 3, 0, keywords, False)
@@ -15842,25 +16158,48 @@ def get_columns(status, io_buff_in, cmd_words, trace):
             table_name = interpreter.get_one_value(conditions, "table")
 
             out_format = interpreter.get_one_value_or_default(conditions, "format", "table")
+
+            sys_col = interpreter.get_one_value_or_default(conditions, "sys_col", True) # False ignores system columns
+            data_types = conditions.get("type", None)         # Specify data types (one or more)
+
+
             schema_list = blockchain_select_schema(status, dbms_name, table_name)
+
+            if data_types:
+                # Only specific data types
+                index = 0 if sys_col else 4         # COnsider or not system columns
+                new_list = []
+                for entry in schema_list[index:]:
+                    if entry[1] in data_types:
+                        new_list.append(entry)
+            elif not sys_col:
+                new_list = schema_list[4:]       # Ignore first 4 columns
+            else:
+                new_list = schema_list
+
             if not schema_list:
                 ret_val = process_status.Local_table_not_in_blockchain
             else:
-                if out_format == "json":
+                if out_format == "list":
+                    # Provide a list of the columns, used in grafana
+                    output_list = []
+                    for entry in new_list:
+                        output_list.append({"column" : entry[0]})
+                    reply = utils_json.to_string(output_list)
+
+                elif out_format == "json":
                     columns_dict = {}
-                    for entry in schema_list:
+                    for entry in new_list:
                         columns_dict[entry[0]] = entry[1]
                     reply = utils_json.to_string(columns_dict)
                 else:
                     # table format
-                    reply = utils_print.output_nested_lists(schema_list, "Schema for DBMS: '%s' and Table: '%s'" % (dbms_name, table_name), ["Column Name", "Column Type"], True, "")
+                    reply = utils_print.output_nested_lists(new_list, "Schema for DBMS: '%s' and Table: '%s'" % (dbms_name, table_name), ["Column Name", "Column Type"], True, "")
     else:
         ret_val = process_status.ERR_command_struct
         out_format = None
 
     return [ret_val, reply, out_format]
-
-
 # ------------------------------------------
 # Count the number of files stored in a blobs dbms
 # Command: get files count where dbms = edgex and table = videos
@@ -17672,6 +18011,17 @@ _time_file_methods = {
 }
 _reset_methods = {
 
+        "dynamic stats": {'command': dynamic_stats.reset_dynamic_stats,
+              'key_only': True,
+              'help': {
+                  'usage': "reset dynamic stats",
+                  'example': "reset dynamic stats",
+                  'text': "reset the dynamic statistics",
+                  'link' : "blob/master/helpers.md#reset-helpers-stats",
+                  'keywords': ["monitor", "streaming", "helper"],
+              }
+              },
+
         "stats": {'command': reset_statistics,
                      'words_count': 10,
                      'help': {
@@ -17812,6 +18162,29 @@ _reset_methods = {
 
 }
 _set_methods = {
+
+        "dbms config": {'command': set_dbms_config,
+                           'words_min': 11,
+                           'help': {
+                               'usage': "set dbms config where name = [dbms name] and [condition] = [value]",
+                               'example': "set dbms config where name = my_dbms and cvs_sql_file = true and map_json_to_list = true",
+                               'text': "Dynamicaly configure dbms variables",
+                               'keywords': ["config", "dbms"],
+                           }
+                           },
+        "internal ip": {'command': set_internal_ip,
+                           'words_count': 5,
+                           'help': {
+                               'usage': "set internal ip with [nic name]",
+                               'example': "set internal ip with enp0s3\n"
+                                          "set internal ip with enp0s8\n"
+                                          "set internal ip with default",
+                               'text': "Automatically detect and assign the internal IP address based on the network interface named",
+                               'link': 'blob/master/network%20configuration.md#set-internal-ip-via-network-interface',
+                               'keywords': ["config", "network"],
+                           }
+                           },
+
         "output table width": {'command': set_output_table_width,
                  'words_count': 5,
                  'help': {
@@ -18251,13 +18624,26 @@ _file_methods = {
               }
               },
 
+        "from": {'command': file_from,
+           'words_count': 3,
+           'help': {
+               'usage': "file from [source file name]",
+               'example': "file from !tmp_dir/new_config.al\n"
+                          "curl --location 'http://10.0.0.78:7849' --header 'User-Agent: AnyLog/1.23' --header 'command: file from !my_dir/my_file.json",
+               'text': "Return a file via REST",
+               'link': "blob/master/file%20commands.md#return-a-file-via-rest",
+               'keywords': ["unstructured data", "file"],
+           }
+           },
+
         "delete": {'command': file_delete,
             'words_min': 3,
             'help': {
                 'usage': "file delete [file path and name]",
                 'example': "file delete !prep_dir/sensor.json",
                 'text': "Delete the specified file.",
-                 'keywords' : ["file"],
+                 'link': "blob/master/file%20commands.md#return-a-file-via-rest",
+                 'keywords' : ["unstructured data", "file"],
                 }
             },
 
@@ -18436,6 +18822,84 @@ _query_status_methods = {
 }
 
 _get_methods = {
+
+        "bucket groups": {'command': bucket_store.get_connected_groups,
+                      'key_only': True,
+                      'help': {
+                          'usage': "get bucket groups",
+                          'example': "get bucket groups",
+                          'text': "Get the list of the active bucket groups",
+                          'keywords': ["dbms", "bucket"],
+                        }
+                      },
+
+        "bucket files": {'command': bucket_store.get_files,
+                                'words_min': 11,
+                                'help': {
+                                    'usage': "get bucket files where group = [group name] and name = [bucket name] and format = [table/json] and prefix = [prefix]",
+                                    'example': "get bucket files where group = my_group and name = my_bucket and prefix = dir1/",
+                                    'text': "Get the list of files in the bucket",
+                                    'keywords': ["dbms", "bucket"],
+                                    }
+                                },
+
+        "bucket file info": {
+                            'command': bucket_store.file_info,
+                            'min_words': 10,
+                            'help': {'usage': 'get bucket file info where group = [group name] and name = [bucket name] and key = [file key]',
+                                     'example': 'get bucket file info where group = my_group and name = my_bucket and key = my-key',
+                                     'text': 'List file info stored in bucket',
+                                     'keywords': ["dbms", "bucket"],
+                                     },
+                            },
+
+        "bucket names": {'command': bucket_store.get_names,
+                                        'words_min': 6,
+                                        'help': {
+                                            'usage': "get bucket names where group = [group name]",
+                                            'example': "get bucket names where group = my_group",
+                                            'text': "Get the list of bucket names of a group",
+                                            'keywords': ["dbms", "bucket"],
+                                            }
+                                        },
+
+        "dynamic stats": {'command': dynamic_stats.get_dynamic_stats,
+                 'words_min': 7,
+                 'help': {
+                     'usage': "get dynamic stats where name = [statistics topic]",
+                     'example': "get dynamic stats where name = operator.json\n"
+                                "get dynamic stats where name = operator.sql",
+                     'text': "Dynamic statistics on system components",
+                     'link' : "blob/master/helpers.md#-dynamic-monitoring-of-internal-processes",
+                     'keywords': ["monitor", "streaming", "helper"],
+                 }
+                 },
+
+        'trace info': {
+            'command': trace_methods._get_trace_info,
+            'words_min': 7,
+            'help': {
+                'usage': 'get trace info where process = [process name]',
+                'example': 'get trace info where process = "blockchain insert"',
+                'text': ' Get the trace info.',
+                'keywords': ["debug"],
+            },
+            'trace': 0,
+        },
+
+        'nics list': {
+            'command': net_utils.get_all_nics,
+            'words_count': 3,
+            'key_only' : True,
+            'help': {
+                'usage': 'get nics list',
+                'example': 'get nics list',
+                'text': ' Find all network interfaces (NICs) on a machine.',
+                'link' : 'blob/master/network%20configuration.md#get-the-list-of-nics',
+                'keywords': ["config", "network"],
+            },
+            'trace': 0,
+        },
 
         'relay': {
             'command': get_relay,
@@ -18933,9 +19397,10 @@ _get_methods = {
         "columns": {'command': get_columns,
                'words_min': 10,
                'help': {
-                   'usage': "get columns where dbms = [dbms name] and table = [table name] and format = [table/json]",
+                   'usage': "get columns where dbms = [dbms name] and table = [table name] and format = [table/json/list] and sys_col = [true/false] and type = [data types to project]",
                    'example': "get columns where table = ping_sensor and dbms = dmci\n"
-                              "get columns where table = ping_sensor and dbms = dmci and format = json",
+                              "get columns where table = ping_sensor and dbms = dmci and format = json and sys_col = false\n"
+                              "get columns where dbms=lsl_demo and table=ping_sensor and sys_col = false and type = int and type = \"character varying\" and format = list",
                    'text': "Get the list of columns for the detailed table. The format key is optional.",
                    'link' : 'blob/master/sql%20setup.md#the-get-columns-command',
                    'keywords' : ["metadata", "data"],
@@ -19284,6 +19749,16 @@ _get_methods = {
                     }
                   },
 
+        "scheduled pull": {'command': pull_server.get_pull_info,
+                   'key_only': True,
+                   'help': {
+                       'usage': "get scheduled pull",
+                       'example': "get scheduled pull",
+                       'text': "Statistics on the scheduled pull calls.",
+                       'link': "blob/master/scheduled%20pull.md#command-get-scheduled-pull",
+                       'keywords': ["node info", "streaming"],
+                   }
+                   },
 
         "msg": {'command': get_msg_client_broker,
                      'help': {
@@ -19568,10 +20043,101 @@ _get_methods = {
 _id_methods = {
 
 }
+
+_buckets_commands = {
+
+    'provider connect': {
+        'command': bucket_store.bucket_connect,
+        'min_words': 11,
+        'help': {'usage': 'bucket provider connect where group = [group name] and provider = [buckets provider] and id = [access_key_id] and password = [password] and region = [region]',
+                 'example': 'bucket provider connect where group = my_buckets and provider = akave and id = 123 and password = abc and region = US',
+                 'text': 'Create a connection to a bucket provider',
+                 'keywords': ["dbms", "bucket"],
+                 },
+        'trace': 0,
+    },
+
+    'provider disconnect': {
+        'command': bucket_store.bucket_disconnect,
+        'words_count': 7,
+        'help': {
+            'usage': 'bucket provider disconnect where group = [group name]',
+            'example': 'bucket provider disconnect where group = my_group',
+            'text': 'DIsconnect from a group of buckets',
+            'keywords': ["dbms", "bucket"],
+            },
+        'trace': 0,
+    },
+
+    'create': {
+        'command': bucket_store.bucket_create,
+        'min_words': 10,
+        'help': {'usage': 'bucket create where group = [group name] and name = [bucket name]',
+                 'example': 'bucket create where group = my_buckets and name = ai_models',
+                 'text': 'Create a new bucket within a group',
+                 'keywords': ["dbms", "bucket"],
+                 },
+        'trace': 0,
+    },
+
+    'drop': {
+        'command': bucket_store.bucket_drop,
+        'min_words': 10,
+        'help': {'usage': 'bucket drop where group = [group name] and name = [bucket name] and delete_all = [true/false]',
+                 'example': 'bucket drop where group = my_buckets and name = ai_models and delete_all = true',
+                 'text': 'Drop a bucket within a group',
+                 'keywords': ["dbms", "bucket"],
+                 },
+        'trace': 0,
+    },
+
+    'file upload': {
+        'command': bucket_store.file_upload,
+        'min_words': 10,
+        'help': {'usage': 'bucket file upload where group = [group name] and name = [bucket name] and source_dir = [source dir] and file_name = [file name] and key = [key]',
+                 'example': 'bucket file upload where group = my_group and name = my_bucket and source_dir = my_dir and file_name = file_name and key = my_key',
+                 'text': 'Upload a file to a bucket',
+                 'keywords': ["dbms", "bucket"],
+                 },
+        'trace': 0,
+    },
+
+    'file download': {
+        'command': bucket_store.file_download,
+        'min_words': 10,
+        'help': {'usage': 'bucket file download where group = [group name] and name = [bucket name] and key [file key] and dest_dir = [destination dir] and file_name = [file name]',
+                 'example': 'bucket file download where group = my_group and name = my_bucket and key = my-key and dest_dir = my_dir and file_name = file_name',
+                 'text': 'Download a file from a bucket',
+                 'keywords': ["dbms", "bucket"],
+                 },
+        'trace': 0,
+    },
+
+    'file delete': {
+            'command': bucket_store.file_delete,
+            'min_words': 10,
+            'help': {'usage': 'bucket file delete where group = [group name] and name = [bucket name] and key = [file key] and prefix = [prefix]',
+                     'example': 'bucket file delete where group = my_group and name = my_bucket and key = my-key and prefix = my-prefix',
+                     'text': 'Delete file from bucket. key or prefix must be specified. If both specified, key and all keys with prefix will be deleted.',
+                     'keywords': ["dbms", "bucket"],
+                     },
+            'trace': 0,
+        },
+
+
+}
 # ------------------------------------------------------------------------
 # Command Dictionaries
 # ------------------------------------------------------------------------
 commands = {
+    'bucket': {
+        'command': _process_bucket,
+        'methods': _buckets_commands,
+        'help': {'usage': 'id [command options]',
+                 'link': 'blob/master/authentication.md#users-authentication'},
+        'trace': 0,
+    },
+
     'connect dbms': {
         'command': _connect_dbms,
         'help': {'usage': 'connect dbms [db name] where type = [db type] and user = [db user] and password = [db passwd] and ip = [db ip] and port = [db port] and memory = [true/false] and connection = [db string] and autocommit = [true/false] and unlog = [true/false]',
@@ -19991,7 +20557,8 @@ commands = {
     'run streamer': {
         'command': _run_streamer,
         'help': {'usage': 'run streamer',
-                 'example': 'run streamer',
+                 'example': 'run streamer\n'
+                            'run streamer once',
                  'text': 'Writes streaming data to files',
                  'link': 'blob/master/background%20processes.md#streamer-process',
                  'keywords' : ["configuration", "background processes"],
@@ -20050,6 +20617,16 @@ commands = {
         'trace': 0,
     },
 
+    'flush buffers': {
+        'command': flush_memory_buffs,
+        'help': {'usage': 'flush buffers',
+                 'example': 'flush buffers',
+                 'text': 'flush the streaming buffers to disk, ignore thresholds.',
+                 'keywords': ["streaming"],
+                 },
+        'trace': 0,
+    },
+
     'mqtt': {
         'command': _mqtt_request,
         'help': {'usage': 'mqtt publish where broker = [url] and topic = [topic]',
@@ -20086,6 +20663,18 @@ commands = {
                  'link':'blob/master/background%20processes.md#message-broker',
                  'keywords' : ["streaming", "api", "configuration", "background processes"],
                  },
+        'trace': 0,
+    },
+
+    'run scheduled pull': {
+        'command': _run_scheduled_pull,
+        'help': {
+            'usage': 'run scheduled pull where name = [unique name] and type = [log type] and source = [localhost or IP] and frequency = [in seconds] and dbms = [dbms name] and table = [table name]',
+            'example': 'run scheduled pull where name = local_events and type = eventlog and source = localhost and frequency = 1 and dbms = sensor_data and table = event_log',
+            'text': 'Periodically retrieve data from a specified source (such as Windows Event Log) and insert it into a defined table.',
+            'link': 'blob/master/scheduled_pull.md',
+            'keywords': ["streaming", "api", "configuration", "background processes"],
+            },
         'trace': 0,
     },
 
@@ -20494,6 +21083,17 @@ commands = {
 
         'trace': 0,
     },
+    'trace method': {
+        'command': trace_methods._set_trace_method,
+        'words_min': 4,
+        'help': {'usage': 'trace method [method name]',
+                 'example': 'trace method blockchain insert',
+                 'text': 'Debug the named commands or methods.',
+                 'keywords': ["debug"],
+                 },
+
+        'trace': 0,
+    },
     'help': {
         'command': _print_help,
         'help': {'usage': 'help [command]',
@@ -20539,7 +21139,9 @@ commands = {
                             'exit grpc all\r\n'
                             'exit grpc ip:port\r\n'
                             'exit plc 1\r\n'
-                            'exit plc all',
+                            'exit plc all'
+                            'exit pull pull_name'
+                            'exit pull all',
                  'text': 'exit node - terminate all process and shutdown\r\n'
                          'exit tcp - terminate the TCP listener thread\r\n'
                          'exit rest - terminate the REST listener thread\r\n'
@@ -20714,3 +21316,16 @@ def add_service(service_key, service_info):
     '''
     global test_active_
     test_active_[service_key] = service_info
+
+
+# ---------------------------------------------------------------
+# Init generic params
+# ---------------------------------------------------------------
+def initialize_param():
+    global max_command_words
+
+    max_command_words = set_max_cmd_words(commands)  # Returns the max words for each disctionary
+    update_help_index(commands, "")
+    sort_help_index()
+    utils_columns.utc_delta()  # Time diff to utc
+

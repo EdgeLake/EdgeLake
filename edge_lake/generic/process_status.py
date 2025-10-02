@@ -351,6 +351,19 @@ Missing_required_attr = 263
 Conflicting_policies = 264
 Failed_PLC_CONNECT = 265
 Failed_PLC_INFO = 266
+Wrong_process_name = 267
+No_trace_data = 268
+Duplicate_process = 269
+Duplicate_bucket_name = 270
+Bucket_group_not_declared = 271
+Failed_bucket_create = 272
+Failed_bucket_drop = 273
+Wrong_bucket_name = 274
+Failed_file_upload = 275
+Failed_file_download = 276
+Failed_to_declare_bucket_group = 277
+Failed_bucket_list = 278
+
 
 # note that message is at location of error value + 1 (exit is set at 0)
 status_text = ["Terminating node processes",
@@ -621,6 +634,18 @@ status_text = ["Terminating node processes",
                "Conflicting policies",                  # 264
                "Failed to connect to the PLC",          # 265
                "Failed to pull PLC info",               # 266
+               "Wrong process name",                    # 267
+               "No trace data",                         # 268
+               "Duplicate process",                     # 269
+               "Duplicate bucket name",                 # 270
+               "Bucket group not declared",               # 271
+               "Failed to create a new bucket",         # 272
+               "Failed to drop a bucket",               # 273
+               "Wrong bucket name",                     # 274
+               "Failed to upload a file",                 # 275
+               "Failed to download a file",             # 276
+               "Failed to declare bucket group",         #277
+               "Failed bucket list",                    #278
                ]
 
 
@@ -1282,7 +1307,7 @@ def get_traceback(message):
     stack = repr(traceback.extract_stack())
     stack = stack.replace('>', '\n')
     stack += '\n' + message
-    utils_print.output_box(stack)
+    utils_print.output_box(stack, "green")
 # =======================================================================================================================
 # get the code location from the stack
 # =======================================================================================================================

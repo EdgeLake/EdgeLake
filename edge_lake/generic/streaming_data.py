@@ -19,6 +19,7 @@ import edge_lake.generic.streaming_conditions as streaming_conditions
 import edge_lake.generic.version as version
 from edge_lake.json_to_sql.map_json_to_insert import buffered_json_to_sql
 from edge_lake.generic.process_log import add_and_print
+import edge_lake.members.multi_process as multi_process
 
 
 bufferd_data_ = {}  # A dictionary to maintain buffered data as a f(dbms + table + source + instruction + type)
@@ -126,8 +127,11 @@ def add_data(status, mode, row_counter, prep_dir, watch_dir, err_dir, dbms_name,
     global counter_rows_in_buff_        # Rows in the buffer waiting for flush
     global counter_rows_flushed_        # Rows written with the last flush call
 
-    # Update stats
+    if multi_process.is_with_helpers():
+        # partition the data dynamicaly to the helpwes
+        watch_dir = multi_process.get_next_helper_dir(dbms_name, table_name)
 
+    # Update stats
     hash_value = '0'
     ret_val = process_status.SUCCESS
 
@@ -278,9 +282,16 @@ def preprocess_msg(status, stream_info, dbms_name, table_name, source, instructi
         # Add existing data to buffer
 
         if not stream_info.data_buffer:  # Empty buffer - reset values
-            stream_info.data_buffer = new_data
+            if new_data[-1] == '\n':
+                # not adding the last char
+                stream_info.data_buffer = new_data[:-1]
+            else:
+                stream_info.data_buffer = new_data
         else:
-            stream_info.data_buffer += ('\n' + new_data)
+            if new_data[-1] == '\n':
+                stream_info.data_buffer += ('\n' + new_data[:-1])
+            else:
+                stream_info.data_buffer += ('\n' + new_data)
         data_volume = len(stream_info.data_buffer)
         if is_write_threshold(max_time, max_volume, init_time, data_volume):
             stream_info.buffered_counter = 0  # Statistics - number of rows in the buff
@@ -383,30 +394,70 @@ def update_tsd_table(status, stream_info, dbms_name, table_name, source, instruc
 # =======================================================================================================================
 # Add data to watch dir by first writing to PREP DIR and then Moving the data to the WATCH DIR
 # =======================================================================================================================
-def add_data_prep_to_watch_dir(status, prep_dir, watch_dir, err_dir, dbms_name, table_name, source, instructions, tsd_file_name, file_type,
-                          user_data, hash_value, trace_level):
+def add_data_prep_to_watch_dir(status, prep_dir, watch_dir, err_dir, dbms_name, table_name, source, instructions, tsd_file_name, file_type, user_data, hash_value, trace_level):
 
     if version.prep_aggregations(dbms_name, table_name):  # Sets the monitored struct - or returns false if not monitored
-        # Update the aggregations object for this table
-        json_data = utils_json.str_to_json("[" + user_data.replace("\n",',') + ']')
-        if json_data:
-            ret_val, updated_data, encoding = version.process_agg_events(status, dbms_name, table_name, None, json_data)
-            if ret_val == process_status.IGNORE_EVENT:
-                # Ignore the operator process as it will be written (using aggregations) when time slot is full
-                return process_status.SUCCESS
-
-            if ret_val ==  process_status.AGGREGATE:
-                table_name = f"{encoding}_{table_name}"  # set to aggregation table name with the encoding type as a prefix
-                instructions = "0"  # Disable the instructions as they relate to the source table
-                # restructure as a string
-                new_data = utils_json.to_string(updated_data)[1:-1].replace("},", "}\n")
-            elif ret_val == process_status.SUCCESS:
-                new_data = user_data
-            else:
-                return ret_val      # Error
+        ret_val = write_aggregations(status, prep_dir, watch_dir, err_dir, dbms_name, table_name, source, instructions, tsd_file_name, file_type, user_data, hash_value)
     else:
-        new_data = user_data
+        ret_val = write_by_prep_move(status, prep_dir, watch_dir, err_dir, dbms_name, table_name, source, hash_value, instructions, tsd_file_name, user_data, file_type)
 
+    return ret_val
+# =======================================================================================================================
+# Write the aggregations
+# a) The source file (if flagged to be ingested)
+# b) The aggregations (if flagged to be ingested)
+# =======================================================================================================================
+def write_aggregations(status, prep_dir, watch_dir, err_dir, dbms_name, table_name, source, instructions, tsd_file_name, file_type, user_data, hash_value):
+
+    # Update the aggregations object for this table
+
+    json_data = utils_json.str_to_json("[" + user_data.replace("\n", ',') + ']')
+    if json_data:
+        table_agg = version.get_table_agg(status, dbms_name, table_name)  # get the list of columns, for each column, the aggregation info.
+        if not table_agg:
+            return process_status.ERR_process_failure
+
+        ret_val = process_status.SUCCESS
+        if version.is_ingest_data(dbms_name, table_name):
+            # Test if ingest the source data
+            ret_val = write_by_prep_move(status, prep_dir, watch_dir, err_dir, dbms_name, table_name, source,
+                                         hash_value, instructions, tsd_file_name, user_data, file_type)
+        else:
+            ret_val = process_status.SUCCESS
+
+        if not ret_val:
+
+            for agg_info in table_agg.values():
+                target_dbms = agg_info["target_dbms"]
+                target_table = agg_info["target_table"]
+
+                ret_val, updated_data, encoding = version.process_agg_events(status, target_dbms, target_table, agg_info,
+                                                                             json_data)
+                if ret_val == process_status.IGNORE_EVENT:
+                    # Ignore the operator process as it will be written (using aggregations) when time slot is full
+                    ret_val = process_status.SUCCESS
+                    continue
+
+                if ret_val == process_status.AGGREGATE:
+                    if dbms_name != target_dbms or table_name != target_table:
+                        # The source data was written - only target dbms and target table are written
+                        if version.is_ingest_data(target_dbms, target_table):
+                            # restructure as a string
+                            new_data = utils_json.to_string(updated_data)[1:-1].replace("},", "}\n")
+                            new_has_val = utils_data.get_string_hash('md5', new_data, target_dbms + '.' + target_table)  # Get the Hash of the data that is written to a file
+                            ret_val = write_by_prep_move(status, prep_dir, watch_dir, err_dir, target_dbms, target_table, source,
+                                                         new_has_val, "0", tsd_file_name, new_data, file_type)
+                elif ret_val:
+                    break  # Error
+    else:
+        status.add_error(f"Failed to pull JSON data for aggregations process with table = {table_name} and dbms = {dbms_name}")
+        ret_val = process_status.ERR_process_failure
+
+    return ret_val
+# =======================================================================================================================
+# Write the prep_dir and move to watch dir
+# =======================================================================================================================
+def write_by_prep_move(status,  prep_dir, watch_dir, err_dir, dbms_name, table_name, source, hash_value, instructions, tsd_file_name, new_data, file_type ):
     if tsd_file_name:
         # With write immediate - needs to add the TSD info
         file_name = "%s.%s.%s.%s.%s.%s" % (dbms_name, table_name, source, hash_value, instructions, tsd_file_name)
@@ -425,14 +476,12 @@ def add_data_prep_to_watch_dir(status, prep_dir, watch_dir, err_dir, dbms_name, 
             utils_io.write_str_to_file(status, new_data, prep_file)
         else:
             # Move the file to the watch dir
-            if not  utils_io.move_file(prep_file, watch_dir):
+            if not utils_io.move_file(prep_file, watch_dir):
                 # Move failed - make name unique abd move to the error dir
                 ret_val = process_status.File_move_to_watch_failed
                 extended_name = "err_%u" % ret_val
                 utils_io.file_to_dir(status, err_dir, prep_file, extended_name, True)
-
     return ret_val
-
 # =======================================================================================================================
 # Write the data to the watch dir
 # =======================================================================================================================
@@ -503,8 +552,13 @@ def is_write_threshold(max_time, max_volume, init_time, data_volume):
 # Operator code or Publisher code to manage the buffered data
 # Operates scan through the buffered data and process the data that reached the time threshold
 # =======================================================================================================================
-def flush_buffered_data(status, watch_dir, prep_dir = None, err_dir = None):
+def flush_buffered_data(status, watch_dir, prep_dir = None, err_dir = None, ignore_threshold = False):
+    '''
+    ignore_threshold - force write - used in 'flush buffers' command --> if ignore_threshold is True - error value is returned
+    '''
     global bufferd_data_
+
+    ret_val = process_status.SUCCESS
 
     goto_sleep = True  # The returned value if no data was flushed
 
@@ -525,7 +579,11 @@ def flush_buffered_data(status, watch_dir, prep_dir = None, err_dir = None):
             max_time = stream_info.max_time
             max_volume = stream_info.max_volume
 
-            if is_write_threshold(max_time, max_volume, init_time, 0):
+            if ignore_threshold or is_write_threshold(max_time, max_volume, init_time, 0):
+
+                if multi_process.is_with_helpers():
+                    # partition the data dynamicaly to the helpwes
+                    watch_dir = multi_process.get_next_helper_dir(dbms_name, table_name)
 
                 stream_info.data_buffer = ""
                 stream_info.buffered_counter = 0  # Statistics - number of rows in the buff
@@ -538,12 +596,18 @@ def flush_buffered_data(status, watch_dir, prep_dir = None, err_dir = None):
                                           stream_info.instructions, tsd_file_name, stream_info.file_type, new_data, hash_value, trace_level)
                 else:
                     ret_val = write_data_to_watch_dir(status, watch_dir, dbms_name, table_name, stream_info.source, stream_info.instructions, tsd_file_name, stream_info.file_type, new_data, hash_value, trace_level)
+
+                if ret_val and ignore_threshold:
+                    # Flush buffers command
+                    break
                 goto_sleep = False      # File was written, thread should run through all the files without a single write prior to sleep
 
 
         stream_info.buffer_mutex.release()
 
-    return goto_sleep
+    reply = ret_val if ignore_threshold else goto_sleep # Return error code to flush buffers, otherwise sleep flag
+
+    return reply
 
 # =======================================================================================================================
 # Set thresholds for different data types from the command line
@@ -772,7 +836,7 @@ def get_cached_info(dbms_table):
     return [cached_rows, int(threshold_volume / 1000), volume_used, threshold_time, remaining_time]
 
 # =======================================================================================================================
-# Test for time thresholfd and Write the buffers to disk
+# Test for time threshold and Write the buffers to disk
 # =======================================================================================================================
 def flush_buffers(dummy: str, conditions: dict):
 
@@ -791,7 +855,7 @@ def flush_buffers(dummy: str, conditions: dict):
         if process_status.is_exit("streamer"):
             break
 
-        is_sleep = flush_buffered_data(status, watch_dir, prep_dir, err_dir)
+        is_sleep = flush_buffered_data(status, watch_dir, prep_dir, err_dir, False)
 
         if is_sleep:
             time.sleep(10)

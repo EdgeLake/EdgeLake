@@ -72,8 +72,8 @@ def set_generic_params(operator_status, config):
 
 
 # ----------------------------------------------------------
-# Create table if doesn't exists
-# If the table exists in the database: Test that the table in in the blockchain
+# Create table if doesn't exist
+# If the table exists in the database: Test that the table in the blockchain
 # ----------------------------------------------------------
 def validate_table(status, io_buff,dbms_name, table_name, with_tsd_info, instructions, is_partitioned, par_name, file_name, trace_level):
 

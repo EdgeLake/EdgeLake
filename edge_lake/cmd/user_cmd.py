@@ -97,7 +97,6 @@ import edge_lake.generic.params as params
 import edge_lake.generic.process_status as process_status
 import edge_lake.job.job_scheduler as job_scheduler
 import edge_lake.generic.input_kbrd as input_kbrd
-from edge_lake.generic.utils_columns import utc_delta
 from edge_lake.generic.node_info import is_with_cli, get_license_message
 
 
@@ -110,11 +109,7 @@ except:
 class UserInput:
     def __init__(self):
 
-        member_cmd.max_command_words = member_cmd.set_max_cmd_words(member_cmd.commands)  # Returns the max words for each disctionary
-        member_cmd.update_help_index(member_cmd.commands, "")
-        member_cmd.sort_help_index()
-
-        utc_delta()     # Time diff to utc
+        member_cmd.initialize_param()
 
         if data_home:
             data_dir = data_home
@@ -194,9 +189,9 @@ class UserInput:
 
             if len(in_command):
                 # list the commands to execute
-                commads_list = in_command.split('&')
+                commands_list = in_command.split('&')
 
-                for command in commads_list:  # process command line argument
+                for command in commands_list:  # process command line argument
 
                     if not command:
                         continue
@@ -279,9 +274,9 @@ class UserInput:
 
             place_in_buff = True        # Place the next keyboard command in a buffer for reuse
 
-            commads_list = in_command.split('&')
+            commands_list = in_command.split('&')
 
-            for command in commads_list:  # process command line argument
+            for command in commands_list:  # process command line argument
 
                 if command == '\n':
                     continue

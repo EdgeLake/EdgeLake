@@ -14,7 +14,7 @@ from time import sleep
 import traceback  # Enable for stacktrace
 import dns.resolver
 import dns.reversename
-import netifaces as ni
+import netifaces
 import psutil
 
 
@@ -54,6 +54,37 @@ default_ports_ = {
     "operator" : (32148, 32149, 32150),
     "publisher" : (32248, 32249, 32250)
 }
+
+helper_process_ = False
+helper_name_ = None
+helper_id_ = None
+
+# =======================================================================================================================
+# get connection table
+# =======================================================================================================================
+def get_active_connections():
+    global active_connections_
+    return active_connections_
+# =======================================================================================================================
+# set the active connections
+# =======================================================================================================================
+def set_active_connections(active_connections):
+    global active_connections_
+    active_connections_ = active_connections
+# =======================================================================================================================
+# Flag a helper process
+# =======================================================================================================================
+def set_helper_process(helper_name, helper_counter):
+    global helper_process_
+    global helper_name_
+    global helper_id_
+    helper_process_ = True
+    helper_name_ = helper_name
+    helper_id_ = helper_counter
+
+def get_helper_desc():
+    return f"{helper_name_}:{helper_id_}"
+
 # ----------------------------------------------------------------
 # Get the connection info
 # ----------------------------------------------------------------
@@ -564,8 +595,14 @@ def set_ip_port_in_header(status, mem_view, destination_ip, destination_port):
     global active_connections_
     global reply_addr_
     global reply_port_
+    global helper_process_
 
-    if reply_addr_:
+    if helper_process_:
+        # This is a helper process supporting the main process
+        reply_ip = helper_name_
+        reply_port = helper_id_
+
+    elif reply_addr_:
         # User command: set reply ip = x, x can be "dynamic" to set it on 0.0.0.0
         # The user determined the reply address. If reply address is set to 0.0.0.0 - the reply is determined by the socket at the destination node
         reply_ip = reply_addr_
@@ -590,7 +627,7 @@ def set_ip_port_in_header(status, mem_view, destination_ip, destination_port):
     elif not message_header.set_source_ip_port(mem_view, reply_ip, reply_port):
         if status:
             status.add_error("IP address is larger than max length")
-        ret_va = process_status.ERR_dest_IP_Ports
+        ret_val = process_status.ERR_dest_IP_Ports
     else:
         ret_val = process_status.SUCCESS
 
@@ -742,7 +779,7 @@ def get_external_ip_port():
     global active_connections_
 
     if active_connections_[0][1]:
-        ip_port = active_connections_[0][1][0]   # Get IP and Port of the extenal network
+        ip_port = active_connections_[0][1][0]   # Get IP and Port of the external network
     else:
         ip_port = None
 
@@ -1013,32 +1050,67 @@ def get_interface_for_ip(dest_ip:str):
             if addr.address == local_ip:
                 return iface, local_ip
 
-def __find_ip(nic:str):
-    ip_info = ni.ifaddresses(nic)
-    for family in (ni.AF_INET,):  # Only IPv4 for uniqueness
-        addrs = ip_info.get(family, [])
-        for addr in addrs:
-            ip = addr.get('addr')
-            if ip and not ipaddress.ip_address(ip).is_loopback:
-                return ip
-    return '127.0.0.1'
-
-def find_ip():
-    """
-    Current issue - skips to `enp0s3`
-    """
-    if 'enp0s8' in ni.interfaces(): # Host-Only: Routable between host and VMs, unique per VM
-        my_ip = __find_ip(nic='enp0s8')
-    elif 'enp0s9' in ni.interfaces(): # Internal: Isolated VM-to-VM, no host access
-        my_ip = __find_ip(nic='enp0s9')
-    elif 'enp0s3' in ni.interfaces(): # NAT: Shared IP, non-routable from host or other VMs
-        my_ip = __find_ip(nic='enp0s3')
+# ----------------------------------------------------------------
+# Get a table with the list of nics
+# Command: get nics list
+# ----------------------------------------------------------------
+def get_all_nics(status, io_buff_in, cmd_words, trace):
+    try:
+        nic_dict = psutil.net_if_addrs()
+        ret_val = process_status.SUCCESS
+        nic_list = []
+        for nic, addr in nic_dict.items():
+            _, nic_ip = get_ip_by_nic(status=status, user_nic=nic)
+            stats = psutil.net_if_stats().get(nic)
+            if nic_ip:
+                nic_list.append((nic, nic_ip, stats.speed, stats.isup))
+            else:
+                nic_ip = ""
+                if isinstance(addr, list):
+                    try:
+                        for entry in addr:
+                            if entry.family  == socket.AF_INET:
+                                nic_ip = entry.address
+                                break
+                    except:
+                        pass
+                    nic_list.append((nic, nic_ip, stats.speed, stats.isup))
+    except:
+        errno, value = sys.exc_info()[:2]
+        status.add_error(f"Failed to retrieve the list of nics: {value}")
+        ret_val = process_status.ERR_process_failure
+        reply = None
     else:
-        _, my_ip = get_interface_for_ip(dest_ip='8.8.8.8')
-    my_ip = __find_ip(nic='enp0s8')
-    return my_ip
+        reply = utils_print.output_nested_lists(nic_list, "NICs List", ["Name", "IP", "Speed", "Is Up"], True, "")
 
 
+    return [ret_val, reply]
+
+
+def get_ip_by_nic(status, user_nic:str):
+    """
+      Returns the IPv4 address of the given network interface (NIC).
+
+      :param user_nic: Name of the NIC (e.g., 'enp0s3')
+      :return: IP address as a string, or None if not found
+      """
+    try:
+        addresses = netifaces.ifaddresses(user_nic)
+        inet_info = addresses.get(netifaces.AF_INET)
+        if inet_info:
+            ret_val = process_status.SUCCESS
+            ip_str = inet_info[0]['addr']
+        else:
+            status.add_error(f"Failed to retrieve IP using '{user_nic}'")
+            ret_val = process_status.ERR_source_IP_Ports
+            ip_str = None
+    except:
+        errno, value = sys.exc_info()[:2]
+        status.add_error(f"Failed to identify IP using '{user_nic}': {value}")
+        ret_val = process_status.ERR_source_IP_Ports
+        ip_str = None
+
+    return [ret_val, ip_str]
 # ----------------------------------------------------------------
 # Test the host and port
 # ----------------------------------------------------------------

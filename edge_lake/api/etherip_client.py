@@ -7,11 +7,11 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 # Documentation  https://docs.pycomm3.dev/en/latest/usage/logixdriver.html
 
 import sys
+import os
 
-simulator_mode = True
 try:
     # from pycomm3 import LogixDriver, CommError
-    if simulator_mode:
+    if 'SIMULATOR_MODE' in os.environ and str(os.environ['SIMULATOR_MODE']).lower() == 'true':
         from edge_lake.api.pycomm3_FakeLogixDriver import LogixDriver
     else:
         from pycomm3 import LogixDriver

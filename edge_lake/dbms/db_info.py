@@ -20,11 +20,13 @@ import edge_lake.generic.utils_sql as utils_sql
 import edge_lake.dbms.partitions as partitions
 import edge_lake.dbms.unify_results as unify_results
 import edge_lake.generic.params as params
+import edge_lake.generic.trace_methods as trace_methods
 from edge_lake.generic.process_log import add
 from edge_lake.dbms.sqlite_dbms import get_dbms_connect_info
 from edge_lake.generic.utils_data import get_string_hash, get_formatted_hms
 from edge_lake.dbms.dbms import connect_dbms, is_blobs_dbms
 from edge_lake.generic.stats import operator_update_inserts
+
 
 
 active_dbms = {}  # DBMS info as f(dbms name)
@@ -37,6 +39,20 @@ reported_rows_ = 0      # The number of rows on previous print
 reported_time_ = 0
 total_rows_ = 0
 start_time_ = 0
+
+# ===============================================================
+# Helper DBMS is using this call to get databases declared
+# ===============================================================
+def get_active_dbms():
+    global active_dbms
+
+    # Exclude connection as this object can't be transferred to a different process
+    new_dict = {
+        k: {ik: iv for ik, iv in v.items() if ik != "connection"}
+        for k, v in active_dbms.items()
+    }
+
+    return new_dict
 
 # ===============================================================
 # Update performance stat of the insert stmt
@@ -97,7 +113,7 @@ def set_insert_threshold(value):
 # =======================================
 # Create new database
 # ======================================
-def create_dbms(db_name, dbms, db_type, connection_pool):
+def create_dbms(db_name, dbms, db_type, connection_pool, user, password, host, port):
     '''
     db_name - the logical dbms name
     dbms - the DBMS object
@@ -109,7 +125,7 @@ def create_dbms(db_name, dbms, db_type, connection_pool):
         owner = "system"
     else:
         owner = "user"
-    active_dbms[db_name] = {'connection': dbms, 'db type': db_type, 'pool' : connection_pool, 'owner': owner}
+    active_dbms[db_name] = {'connection': dbms, 'db type': db_type, 'pool' : connection_pool, 'owner': owner, 'user' : user, 'password' : password, 'host' : host, 'port' : port}
 # =======================================
 # Get DBMS connection
 # ======================================
@@ -324,7 +340,7 @@ def process_sql_from_file(status, dbms_name, table_name, file_path):
     else:
 
 
-        ret_val, rows_counter = db_connect.execute_sql_file(status, db_cursor, file_path)
+        ret_val, rows_counter = db_connect.execute_sql_file(status, dbms_name, table_name, db_cursor, file_path)
 
         if ret_val:
             db_connect.commit(status, db_cursor)
@@ -338,6 +354,47 @@ def process_sql_from_file(status, dbms_name, table_name, file_path):
         operator_update_inserts(dbms_name, table_name, rows_counter, False, dbms_process_time) # Update stat on inserts
 
     return [ret_val, rows_counter]
+# =======================================
+# Process a buffer with multiple inserts
+# ======================================
+def process_multi_insert_buff(status, dbms_name, table_name, insert_buffer):
+
+    global start_time_
+
+    if insert_threshold_ and not start_time_:
+        start_time_ = time.time()
+
+    db_connect = get_connection(dbms_name)
+    if db_connect == None:
+        status.add_keep_error("DBMS '%s' not connected" % dbms_name)
+        reply_list = [False, 0]
+        return reply_list
+
+    db_cursor = db_connect.get_cursor(status)
+    if db_cursor == None:
+        reply_list = [False, 0]
+        return reply_list
+    else:
+
+        ret_val = db_connect.process_multi_insert_buff(status, dbms_name, table_name, db_cursor, insert_buffer)
+
+        if ret_val:
+            db_connect.commit(status, db_cursor)
+        else:
+            db_connect.rollback(status, db_cursor)
+
+        if ret_val:
+            rows = db_connect.get_rows_affected(status, db_cursor)
+        else:
+            rows = 0
+
+        db_connect.close_cursor(status, db_cursor)
+
+    if insert_threshold_ and insert_buffer[0].lower().startswith("insert "):
+        update_performance(rows)
+
+    return [ret_val, rows]
+
 # =======================================
 # Process a single delete Statement i.e. Insert / Delete
 # ======================================
@@ -581,6 +638,7 @@ def close_cursor(status: process_status, dbms_cursor: cursor_info):
 # ======================================
 def get_insert_rows(status: process_status, dbms_name: str, table_name: str, insert_size: int, column_names: list,
                     insert_rows: list):
+
     db_connect = get_connection(dbms_name)
     if db_connect == None:
         data_string = ""
@@ -632,6 +690,28 @@ def is_dbms_connected(status, dbms_name: str):
         ret_val = False
     else:
         ret_val = True
+
+    return ret_val
+
+
+# =======================================
+# Configure the DBMS
+# ======================================
+def configure_dbms(status, dbms_name, key_values_list):
+    db_connect = get_connection(dbms_name.lower())
+    if db_connect == None:
+        ret_val = process_status.DBMS_NOT_COMNNECTED
+    else:
+        if db_connect.is_sql_storage():
+            ret_val = process_status.SUCCESS
+            for key_value in key_values_list:
+                ret_val = db_connect.configure(key_value[0], key_value[1])
+                if ret_val:
+                    status.add_error(f"Failed to configure the value of '{key_value[0]}' in DBMS '{dbms_name}")
+                    break
+        else:
+            status.add_error(f"Dynamic config not supported in dbms '{dbms_name}' - not a SQL dbms")
+            ret_val = process_status.NOT_SUPPORTED
 
     return ret_val
 
@@ -1409,7 +1489,7 @@ def drop_dbms(status, dbms_type, dbms_name, user, password, host, port):
                 # Create the database
                 postgres_dbms = connect_dbms(status, "postgres", "psql", user, password, host, port, False, "", None)
                 if postgres_dbms:
-                    create_dbms(postgres_dbms.get_dbms_name(), postgres_dbms, dbms_type, postgres_dbms.with_connection_pool())
+                    create_dbms(postgres_dbms.get_dbms_name(), postgres_dbms, dbms_type, postgres_dbms.with_connection_pool(), user, password, host, port)
             if not test_db_type("postgres", "psql"):
                 status.add_error("'postgres' DBMS is not declared for PSQL")
             else:
@@ -1938,9 +2018,9 @@ def blockchain_select(status, destination: str, filename: str, lock_key: str):
     sql_string = "SELECT host, policy FROM ledger order by date"     # Host may not be part of the policy
 
     ret_val, data_list = select_rows_list(status, "blockchain", sql_string, 0)
+    updated_list = []
 
     if ret_val and data_list != "":
-        updated_list = []
 
         for entry in data_list:
             # reset single quotation
@@ -1983,6 +2063,16 @@ def blockchain_select(status, destination: str, filename: str, lock_key: str):
             ret_val = utils_io.write_list_to_file(status, updated_list, filename, lock_key)
     else:
         ret_val = False
+
+    if trace_methods.is_traced("blockchain sync"):
+        details = {}
+        details[f"Policies selected from DBMS"] = f"{len(data_list)}"
+        details[f"Output to"] = f"{filename}"
+        details[f"Policies written to output"] = f"{len(updated_list)}"
+        details[f"Process returned code"] = f"{str(ret_val)}"
+        trace_methods.add_details("blockchain sync", **details)
+        trace_methods.print_details("blockchain sync", None)
+
 
     return ret_val
 
@@ -2173,7 +2263,9 @@ def store_file(status:process_status,  db_name: str, table_name: str, file_path:
 
     db_connect = get_connection(dbms_name)
     if db_connect == None:
-        status.add_keep_error("DBMS '%s' not connected" % dbms_name)
+        err_msg = "Failed to store file: DBMS '%s' not connected" % dbms_name
+        status.add_keep_error(err_msg)
+        utils_print.output_box(err_msg, 'red')
         ret_val = process_status.ERR_dbms_not_opened
     else:
         ret_val = db_connect.store_file(status, dbms_name, table_name, file_path, file_name, blob_hash_value, archive_date, ignore_duplicate, struct_fname, trace)

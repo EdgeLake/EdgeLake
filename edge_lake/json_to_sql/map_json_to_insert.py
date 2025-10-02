@@ -19,10 +19,27 @@ import edge_lake.generic.process_status as process_status
 import edge_lake.generic.process_log as process_log
 import edge_lake.cmd.member_cmd as member_cmd
 import edge_lake.json_to_sql.mapping_policy as mapping_policy
+import edge_lake.generic.dynamic_stats as dynamic_stats
+
 
 from edge_lake.json_to_sql.suggest_create_table import policy_to_columns_list
 
 MAX_COL_LENGTH_ = 1000
+
+# -------------------------------------------------------------
+# Transform type constants (compatible with Python and Cython)
+# -------------------------------------------------------------
+TRANSFORM_NONE = 0
+TRANSFORM_ADD_QUOTE = 1
+TRANSFORM_BLOB = 2
+TRANSFORM_STR_SECONDS = 3
+TRANSFORM_SECONDS = 4
+TRANSFORM_LIST_STRING = 5
+TRANSFORM_DEFAULT = 6
+TRANSFORM_CURRENT_UTC = 7
+TRANSFORM_NULL = 8
+TRANSFORM_LOCAL_TO_DATETIME = 9
+TRANSFORM_LOCAL_TO_UTC_STR = 10
 
 # ==================================================================
 # Get a list describing the mapping. Every entry in the list includes the following:
@@ -49,74 +66,171 @@ def get_columns_list(status: process_status, dbms_name: str, table_name: str, in
 
     return columns
 
-# ==================================================================
-# Map keys in JSON dict object to INSERT statement based on columns_list
-# ==================================================================
-def map_columns(status: process_status, dbms_name, table_name, tsd_name, tsd_id, json_data, columns_list):
-    """
-    Map keys in JSON dict object to INSERT statement based on columns_list
-    :args:
-       json_data:list - list of JSON objects
-       columns_list:list - list of columns in table
-    :return:
-       list of keys that have corresponding columns
-    """
-
-    current_utc = "\'" + utils_columns.get_current_utc_time() + "\'"
-
+# -------------------------------------------------------------
+# Main mapping function — generate insert-ready arrays from JSON
+# -------------------------------------------------------------
+def map_columns(status, dbms_name, table_name, tsd_name, tsd_id, json_data, columns_list):
+    current_utc = "'" + utils_columns.get_current_utc_time() + "'"
     insert_list = []
-    attr_names_map = {}  # Map the keys in the JSON entry to lower
+    attr_names_map = {}
+
+    # Build transform IDs and precompiled transform functions
+    transform_ids = analyze_json_entry_recompiled(columns_list, attr_names_map, json_data[0])
+    transform_fns = [build_transform_fn(tid, status, dbms_name, table_name, current_utc) for tid in transform_ids]
 
     for entry in json_data:
-
-        value_presence = False
-        time_presence = True        # Will be set to False if "insert_timestamp" (current_utc) is not used
-
         column_array = ["DEFAULT", current_utc, tsd_name, tsd_id]
 
-        for column_info in columns_list[4:]:
+        for index, column_info in enumerate(columns_list[4:]):
+            attr_name = column_info[1]
+            raw_val = get_value_ignore_case(entry, attr_name, attr_names_map)
+            final_val = transform_fns[index](raw_val)
+            column_array.append(str(final_val))
 
-            attribute_name = column_info[1]  # use the column name in the table
-            column_type = column_info[2]
-
-            if isinstance(attribute_name, list):
-                column_value = get_value_by_function(attribute_name, entry, attr_names_map)  # Apply the function in the attribute name to get the column value
-            else:
-                column_value = get_value_ignore_case(entry, attribute_name, attr_names_map)
-                if column_type == "varchar" and len(str(column_value)) > MAX_COL_LENGTH_:
-                    # Put the blob in file ot a database and replace the column with the ID to the blob
-                    if dbms_name and table_name:
-                        ret_val, blob_file_name = mapping_policy.archive_blob_file(status, dbms_name, table_name, column_value)
-                        if blob_file_name:
-                            column_value = blob_file_name       # Replace the value  with the id of the file
-                        else:
-                            column_value = ""                   # Otherwise the blob data will go to the row
-
-            if isinstance(column_value, str):
-                value_presence, column_value = handle_string_column_value(column_value, column_type, column_info[3], current_utc)
-            elif isinstance(column_value, bool):
-                value_presence = True
-            elif isinstance(column_value, int):
-                time_presence = True  # This row has time value
-                if column_type.startswith("timestamp"):
-                    # Assumes seconds and convert to string time
-                    column_value += utils_columns.utc_diff  # Change to UTC
-                    column_value = "\'" + utils_columns.seconds_to_date(column_value) + "\'"
-            elif isinstance(column_value, list) or isinstance(column_value, dict):
-                column_value = "\'" + utils_data.prep_data_string(str(column_value)) + "\'"
-            else:
-                if column_value == None:
-                    column_value = "DEFAULT"
-                else:
-                    value_presence = True  # for example, integers, floats
-
-            column_array.append(str(column_value))
-
-        if time_presence or value_presence:
-            # A minimum of time and value
-            insert_list.append(column_array)  # The insert list is a list of arrays, every entry represent a row as a list of columns
+        insert_list.append(column_array)
 
     return insert_list
+
+def build_transform_fn(transform_id, status, dbms_name, table_name, current_utc):
+    if transform_id == TRANSFORM_NONE:
+        return lambda x: x
+    elif transform_id == TRANSFORM_ADD_QUOTE:
+        return lambda x: f"'{x}'"
+    elif transform_id == TRANSFORM_STR_SECONDS:
+        return utils_columns.str_seconds_to_datetime
+    elif transform_id == TRANSFORM_SECONDS:
+        return utils_columns.seconds_to_datetime
+    elif transform_id == TRANSFORM_LIST_STRING:
+        return lambda x: f"'{utils_data.prep_data_string(str(x))}'"
+    elif transform_id == TRANSFORM_DEFAULT:
+        return lambda x: "DEFAULT"
+    elif transform_id == TRANSFORM_CURRENT_UTC:
+        return lambda x: current_utc
+    elif transform_id == TRANSFORM_NULL:
+        return lambda x: "NULL"
+    elif transform_id == TRANSFORM_LOCAL_TO_DATETIME:
+        return utils_columns.local_to_datetime
+    elif transform_id == TRANSFORM_LOCAL_TO_UTC_STR:
+        return utils_columns.local_to_utc_str
+    elif transform_id == TRANSFORM_BLOB:
+        return lambda x: apply_blob_storage(status, dbms_name, table_name, x)
+    else:
+        return lambda x: x
+
+
+def map_columns_old(status, dbms_name, table_name, tsd_name, tsd_id, json_data, columns_list):
+    current_utc = "'" + utils_columns.get_current_utc_time() + "'"
+    insert_list = []
+    attr_names_map = {}
+
+    transform_list = analyze_json_entry_recompiled(columns_list, attr_names_map, json_data[0])
+
+    for entry in json_data:
+        column_array = ["DEFAULT", current_utc, tsd_name, tsd_id]
+
+        for index, column_info in enumerate(columns_list[4:]):
+            attr_name = column_info[1]
+            raw_val = get_value_ignore_case(entry, attr_name, attr_names_map)
+            transform_id = transform_list[index]
+            final_val = dispatch_transform_recompiled(transform_id, raw_val, status, dbms_name, table_name, current_utc)
+            column_array.append(str(final_val))
+
+        insert_list.append(column_array)
+
+    return insert_list
+
+# -------------------------------------------------------------
+# Apply the transformation logic based on the transform type
+# -------------------------------------------------------------
+def dispatch_transform_recompiled(transform_id, val, status, dbms_name, table_name, current_utc):
+    if transform_id == TRANSFORM_NONE:
+        return val
+    elif transform_id == TRANSFORM_ADD_QUOTE:
+        return "'" + str(val) + "'"
+    elif transform_id == TRANSFORM_STR_SECONDS:
+        return utils_columns.str_seconds_to_datetime(val)
+    elif transform_id == TRANSFORM_SECONDS:
+        return utils_columns.seconds_to_datetime(val)
+    elif transform_id == TRANSFORM_LIST_STRING:
+        return "'" + utils_data.prep_data_string(str(val)) + "'"
+    elif transform_id == TRANSFORM_DEFAULT:
+        return "DEFAULT"
+    elif transform_id == TRANSFORM_CURRENT_UTC:
+        return current_utc
+    elif transform_id == TRANSFORM_NULL:
+        return "NULL"
+    elif transform_id == TRANSFORM_LOCAL_TO_DATETIME:
+        return utils_columns.local_to_datetime(val)
+    elif transform_id == TRANSFORM_LOCAL_TO_UTC_STR:
+        return utils_columns.local_to_utc_str(val)
+    elif transform_id == TRANSFORM_BLOB:
+        return apply_blob_storage(status, dbms_name, table_name, val)
+    else:
+        return val
+
+# -------------------------------------------------------------
+# Analyze one JSON entry to generate transform rules per column
+# -------------------------------------------------------------
+def analyze_json_entry_recompiled(columns_list, attr_names_map, json_entry):
+    transform_list = []
+
+    for column_info in columns_list[4:]:
+        attr_name = column_info[1]
+        col_type = column_info[2]
+        default_val = column_info[3]
+        val = get_value_ignore_case(json_entry, attr_name, attr_names_map)
+
+        if col_type == "varchar" and len(str(val)) > MAX_COL_LENGTH_:
+            transform_list.append(TRANSFORM_BLOB)
+        elif isinstance(val, str):
+            if val == "":
+                if default_val:
+                    if col_type.startswith("timestamp") and default_val == "current_timestamp":
+                        transform_list.append(TRANSFORM_CURRENT_UTC)
+                    else:
+                        transform_list.append(TRANSFORM_DEFAULT)
+                else:
+                    transform_list.append(TRANSFORM_NULL)
+            else:
+                if col_type.startswith("timestamp"):
+                    if val.isdigit():
+                        transform_list.append(TRANSFORM_STR_SECONDS)
+                    elif len(val) > 10 and val[-6] in "+-":
+                        transform_list.append(TRANSFORM_LOCAL_TO_DATETIME)
+                    elif val[10] != 'T':
+                        transform_list.append(TRANSFORM_LOCAL_TO_UTC_STR)
+                    else:
+                        transform_list.append(TRANSFORM_ADD_QUOTE)
+                else:
+                    transform_list.append(TRANSFORM_ADD_QUOTE)
+        elif isinstance(val, bool):
+            transform_list.append(TRANSFORM_NONE)
+        elif isinstance(val, int):
+            if col_type.startswith("timestamp"):
+                transform_list.append(TRANSFORM_SECONDS)
+            else:
+                transform_list.append(TRANSFORM_NONE)
+        elif isinstance(val, (list, dict)):
+            transform_list.append(TRANSFORM_LIST_STRING)
+        elif val is None:
+            transform_list.append(TRANSFORM_DEFAULT)
+        else:
+            transform_list.append(TRANSFORM_NONE)
+
+    return transform_list
+
+# ==================================================================
+# Apply blob storage on the column
+# ==================================================================
+def apply_blob_storage(status, dbms_name, table_name, column_value):
+
+    ret_val, blob_file_name = mapping_policy.archive_blob_file(status, dbms_name, table_name, column_value)
+    if blob_file_name:
+        column_value = blob_file_name  # Replace the value  with the id of the file
+    else:
+        column_value = ""  # Otherwise the blob data will go to the row
+    return column_value
+
 # ==================================================================
 # Process String Field
 # ==================================================================
@@ -223,7 +337,19 @@ def generate_insert_stmt(status: process_status, dbms_name, table_name, insert_s
 # ==================================================================
 # Code to convert JSON file to SQL INSERT statement
 # ==================================================================
-def map_json_file_to_insert(status: process_status, tsd_name, tsd_id, dbms_name, table_name, insert_size: int, json_file, sql_dir, instructions):
+def map_json_file_to_insert(status: process_status, update_dbms, tsd_name, tsd_id, dbms_name, table_name, insert_size: int, json_file, sql_dir, instructions):
+    '''
+    status - thread status
+    update_dbms - True value - if possible (table was created) - update the SQL dbms, otherwise, write sql file
+    tsd_name - TSD table name
+    tsd_id - TSD table id
+    dbms_name - DBMS name
+    table_name - table name
+    insert_size - insert size
+    json_file - json file path
+    sql_dir - SQL directory path
+    instructions - policy instructions
+    '''
     sql_file_list = None
     rows_count = 0
     ret_val = True
@@ -273,7 +399,7 @@ def map_json_file_to_insert(status: process_status, tsd_name, tsd_id, dbms_name,
                     status.add_error(f"Failed to retrieve JSON rows from file: {json_file}")
                     sql_file_list = None
                 else:
-                    sql_file_list, rows_count = map_json_list_to_sql(status, tsd_name, tsd_id, dbms_name, table_name, insert_size, sql_dir, sql_file_name, instruct, json_data)
+                    sql_file_list, rows_count = map_json_list_to_sql(status, update_dbms, "operator", tsd_name, tsd_id, dbms_name, table_name, insert_size, sql_dir, sql_file_name, instruct, json_data)
                     if rows_count:
                         process_log.add("File", "INSERT statement generated from file: %s" % json_file)
                     else:
@@ -283,8 +409,19 @@ def map_json_file_to_insert(status: process_status, tsd_name, tsd_id, dbms_name,
 # ==================================================================
 #Convert JSON list to SQL INSERT statement
 # ==================================================================
-def map_json_list_to_sql(status: process_status, tsd_name, tsd_id, dbms_name, table_name, insert_size,
+def map_json_list_to_sql(status: process_status, update_dbms, process_name, tsd_name, tsd_id, dbms_name, table_name, insert_size,
                             sql_dir, sql_file_name, instruct, json_data):
+    '''
+    status - the thread object
+    update_dbms - True to update the SQL DBMS
+    process_name - the process initiated the call. Example: operator, streaming
+    tsd_name - the TSD table name
+    tsd_id - the TSD ID in the table
+    dbms_name - the DBMS name
+    table_name - the table name
+    insert_size - the size of the INSERT statement
+    sql_dir - the SQL dir to write the sql file - if the dbms is not updated
+    '''
 
     if instruct and len(instruct):
         # Make a copy of the policy as it may be changed using compile_ in Mapping_policy.apply_policy_schema()
@@ -371,14 +508,38 @@ def map_json_list_to_sql(status: process_status, tsd_name, tsd_id, dbms_name, ta
                 ret_val, insert_stmt = columns_to_insert_stmt(status, dbms_name, table_name, table_extension, columns_list, insert_size, insert_columns)
                 if ret_val:
                     # Write SQL data to the database
-                    dbms_start_time = time.time()
-                    ret_val, processed_rows = db_info.process_contained_stmt(status, dbms_name, insert_stmt)
-                    dbms_process_time = time.time() - dbms_start_time
-                    stats.operator_update_inserts(dbms_name, table_name, processed_rows, False, dbms_process_time)  # Update stat on inserts
-                    if ret_val:
-                        table_partition = f"{table_name}.{table_extension}" if table_extension else table_name
-                        stats.operator_update_stats("sql", dbms_name, table_partition, False, False)
-                    else:
+                    if update_dbms:
+                        if table_extension:
+                            t_name = "par_" + table_name + "_" + table_extension  # extend name by partition
+                            info_key = f"{dbms_name}.{table_name}.{table_extension}"
+                        else:
+                            t_name = table_name
+                            info_key = f"{dbms_name}.{table_name}"
+
+                        dbms_start_time = time.time()
+
+                        dynamic_stats.start_timer(f"{process_name}.jsql", info_key, "process_time")
+
+                        ret_val, processed_rows = db_info.process_multi_insert_buff(status, dbms_name, t_name, insert_stmt)
+
+                        dynamic_stats.stop_timer(f"{process_name}.jsql", info_key, "process_time")  # Add statistics
+
+                        stat_info = {
+                            "events": processed_rows,
+                            "errors": 1 if ret_val == False else 0,
+                            "files": 1,
+                        }
+                        dynamic_stats.add_values(f"{process_name}.jsql", info_key, stat_info)  # Add statistics
+
+                        # ret_val, processed_rows = db_info.process_contained_stmt(status, dbms_name, insert_stmt)
+                        dbms_process_time = time.time() - dbms_start_time
+                        stats.operator_update_inserts(dbms_name, table_name, processed_rows, False, dbms_process_time)  # Update stat on inserts
+                        if ret_val:
+                            table_partition = f"{table_name}.{table_extension}" if table_extension else table_name
+                            stats.operator_update_stats("sql", dbms_name, table_partition, False, False)
+
+                    if not ret_val or not update_dbms:
+                        # Write SQL file in 2 cased - request not to update the dbms oor a failure in the update
                         # Failure may be the result of table/partition not yet defined
                         # write the SQL file with insert stmt to a file with .sql extension
                         ret_val = write_sql_file(status, insert_stmt, file_name)
@@ -517,7 +678,6 @@ def buffered_json_to_sql(status, dbms_name, table_name, source, instructions, ts
 
 
     sql_file_name = dbms_name + '.' + table_name
-    sql_file_list, rows_count = map_json_list_to_sql(status, '0', tsd_id, dbms_name, table_name, 1,
-                                                     None, sql_file_name, None, json_data)
+    sql_file_list, rows_count = map_json_list_to_sql(status, True, "streaming", '0', tsd_id, dbms_name, table_name, 1, None, sql_file_name, None, json_data)
 
     return [sql_file_list, rows_count]

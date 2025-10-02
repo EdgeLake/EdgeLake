@@ -175,10 +175,12 @@ def move_lines_up(counter_lines, clear_lines):
 # =======================================================================================================================
 # Print to stdout
 # =======================================================================================================================
-def output(info, is_newLine):
+def output(info, is_newLine, is_mutex = True):
     global new_line_counter
 
-    print_mutex.acquire()
+    if is_mutex:
+        print_mutex.acquire()
+
     try:
         if (is_newLine):
             print_len = len(info)
@@ -223,7 +225,8 @@ def output(info, is_newLine):
         pass
 
     finally:
-        print_mutex.release()   # always release the mutex
+        if is_mutex:
+            print_mutex.release()   # always release the mutex
 
 
 # =======================================================================================================================
@@ -432,12 +435,20 @@ def print_prompt():
 
 
 def get_new_line_counter():
+    global new_line_counter
     return new_line_counter
+def change_line_counter():
+    global new_line_counter
+    new_line_counter += 1
 # --------------------------------------------------------------------
 # Print the values in a dictionary
 # --------------------------------------------------------------------
-def format_dictionary(the_dictionary: dict, key_first, is_print, is_sort, title):
+def format_dictionary(the_dictionary: dict, key_first, is_print, is_sort, title, color = None):
+
+
+
     # find the max length of the first printed value
+
     reply_str = "\r\n"
     if title:
         if key_first:
@@ -471,6 +482,7 @@ def format_dictionary(the_dictionary: dict, key_first, is_print, is_sort, title)
 
         reply_str += "-".ljust(max_length, '-') + '   ' + "-".ljust(next_len, '-') + "\r\n"
 
+
     # print KEY : VALUE or VALUE : KEY
 
 
@@ -487,16 +499,26 @@ def format_dictionary(the_dictionary: dict, key_first, is_print, is_sort, title)
         value = str(the_dictionary[key])
         if key_first:
             entry = key.ljust(max_length) + " : " + value + "\r\n"
-            if is_print:
-                output(entry, False)
-            else:
-                reply_str += entry
+            reply_str += entry
         else:
             entry = value.ljust(max_length) + " : " + key + "\r\n"
-            if is_print:
-                output(entry, False)
-            else:
-                reply_str += entry
+            reply_str += entry
+
+    if is_print:
+
+        print_mutex.acquire()
+
+        if color and color in ansi_codes_:
+            print(ansi_codes_[color][0])  # Start color
+
+        output(reply_str, False, False)
+
+        if color and color in ansi_codes_:
+            print(ansi_codes_[color][1])  # Start color
+
+        print_mutex.release()
+
+        print_prompt()
 
     return reply_str
 

@@ -365,7 +365,7 @@ class MONGO_INSTANCE:
         if not file_path:
             # Source was provides in a rest call
             # the file is provided via REST in the buffer using: curl -X POST -H "command: file store where dbms = admin and table = files and dest = file_rest " -F "file=@testdata.txt" http://10.0.0.78:7849
-            ret_val, message = self. put_from_rest(status, file_name, dbms_name, table_name, blob_hash_value, archive_date )
+            ret_val, message = self.put_from_rest(status, file_name, dbms_name, table_name, blob_hash_value, archive_date )
         else:
 
             if struct_fname:

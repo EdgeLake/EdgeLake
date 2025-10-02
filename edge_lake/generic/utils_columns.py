@@ -177,6 +177,36 @@ def endswith(string_a:str, string_b:str):
         return 1        # Is a substring
     return 0
 
+# ----------------------------------------------------------
+# test occurrences of an immediate child
+# Example blockchain get tag where [path] childfrom Root/
+# ----------------------------------------------------------
+def childfrom(string_a:str, string_b:str):
+
+    if len(string_b) < 2:
+        # Needs to be a number and a char
+        return 0
+
+    if not string_a.startswith(string_b):
+        return 0
+
+    separator = string_b[-1]            # This char flags a directory
+    parent_len = len(string_b)          # number of chars representing the name of the parent dir
+
+    if parent_len == len(string_a):
+        return 0                        # same strings not a child
+
+    count = string_a.count(separator, parent_len)
+    if not count:
+        return 1        # this is an immediate child.
+
+    if count == 1:
+        # if string ends with dir separator - it is an immediate child
+        if string_a[-1] == separator:
+            return 1
+    return 0
+
+
 comarison = {
 
     "<": operator.lt,
@@ -190,6 +220,7 @@ comarison = {
     "contains" : contains,
     "startswith" : startswith,
     "endswith" : endswith,
+    "childfrom" : childfrom,   # for example: blockchain get tag where [path] childfrom Root/
 }
 
 
@@ -1228,6 +1259,14 @@ def get_time_in_seconds(date_time):
 # =======================================================================================================================
 def get_utc_to_ms(utc_time_str):
 
+
+    if len(utc_time_str) > 26:
+        # Truncate fractional seconds to 6 digits if present
+        if utc_time_str[-1] == 'Z':
+            utc_time_str = utc_time_str[:26] + 'Z'
+        else:
+            utc_time_str = utc_time_str[:26]
+
     try:
         if utc_time_str[10] == 'T':
             date_format = "%Y-%m-%dT%H:%M:%S.%fZ" if utc_time_str[-1] == 'Z' else "%Y-%m-%dT%H:%M:%S.%f"
@@ -1456,13 +1495,16 @@ def function_to_time(functions_str):
             time_str = ""
 
     if time_str:
+        if len(time_str) > 6 and (time_str[-6] == '+' or time_str[-6] == '-'):
+            time_str = time_iso_format(time_str)
+
         # manipulate the time by the rest of the string
         for entry in func_array[1:]:
             entry = entry.strip()
             if len(entry) < 3:
                 break  # entry is within quotations
             time_str = apply_time_function(time_str, entry[1:-1])
-            if not entry:
+            if not time_str:
                 break  # non supported function`
 
     return time_str
@@ -1831,8 +1873,16 @@ def ret_time_diff(status, row, casting_str, value):
 
     seconds_diff =  get_date_time_diff(casting_str[10:-2], value)
     if not seconds_diff:
-        time_diff = "00:00:00.0"
-    else:
+        if casting_str.startswith("timediff("):
+            # Compare 2 columns: run client () sql lsl_demo "select max(insert_timestamp), min(insert_timestamp)::timediff(max(insert_timestamp)) from ping_sensor"
+            column_key = casting_str[9:-1]
+            if column_key in row.keys():
+                seconds_diff = get_date_time_diff(row[column_key], value)
+            if not seconds_diff:
+                time_diff = "00:00:00.0"
+        else:
+            time_diff = "00:00:00.0"
+    if seconds_diff:
         ms_diff =  int((seconds_diff - int(seconds_diff)) * 100000)
         hours_time, minutes_time, seconds_time = utils_data.seconds_to_hms(seconds_diff)
         time_diff = "%02u:%02u:%02u.%u" % (hours_time, minutes_time, seconds_time, ms_diff)
@@ -1943,9 +1993,10 @@ def validate_date_string(date_string, format_string=TIME_FORMAT_STR):
 # https://en.wikipedia.org/wiki/UTC_offset
 # =======================================================================================================================
 def time_iso_format(date_string):
-
+    utc_string = ""
     in_utc = False
-    if date_string[-6] == '+':
+    utc_diff = date_string[-6]
+    if utc_diff == '+' or utc_diff == '-':
         try:
             # Parse the input timestamp string using the original format
             timestamp = datetime.strptime(date_string, '%m/%d/%Y %I:%M:%S %p %z')
@@ -1969,7 +2020,6 @@ def time_iso_format(date_string):
             errno, value = sys.exc_info()[:2]
             err_msg = "Failed to change date-time with utc-offset value to UTC: [date-time: '%s'] [error-no: '%s'] [error-val: '%s']" % (date_string, errno, value)
             process_log.add("Error", err_msg)
-            utc_string = None
 
     return utc_string
 # =======================================================================================================================
@@ -2485,3 +2535,37 @@ def get_date_time_diff(time_str1, time_str2):
         process_log.add("Error", f"Failed to calculate seconds diff between '{time_str1}' and '{time_str2}': '{errno}' : '{value}'")
         seconds_difference = 0
     return seconds_difference
+
+# ==================================================================
+# Assume the value is in seconds and change to time string in UTC
+# ==================================================================
+def seconds_to_datetime(seconds):
+    seconds += utc_diff  # Change to UTC
+    return "\'" + seconds_to_date(seconds) + "\'"
+
+# ==================================================================
+# Seconds in string conversion
+# ==================================================================
+def str_seconds_to_datetime(seconds_str):
+    try:
+        date_time =  "\'" + seconds_to_date(int(seconds_str)) + "\'"
+    except:
+        date_time = ""
+    return date_time
+# ==================================================================
+# Local to datetime
+# ==================================================================
+def local_to_datetime(date_str):
+
+    utcoffset = time_iso_format(date_str)
+    if utcoffset:
+        column_value = "\'" + utils_data.prep_data_string(utcoffset) + "\'"
+    else:
+        column_value = ""
+    return column_value
+# ==================================================================
+# Local to utc string
+# ==================================================================
+def local_to_utc_str(date_str):
+    column_value = local_to_utc(date_str)
+    return "\'" + column_value + "\'"

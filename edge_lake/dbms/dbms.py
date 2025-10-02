@@ -9,6 +9,7 @@ from edge_lake.dbms.pi_dbms import PIDB
 from edge_lake.dbms.sqlite_dbms import SQLITE
 from edge_lake.dbms.oledb_dbms import OLEDB
 from edge_lake.dbms.mongodb_dbms import MONGODB
+from edge_lake.dbms.bucket_dbms import BUCKET
 
 import edge_lake.generic.process_status as process_status
 
@@ -17,6 +18,7 @@ supported_databases_ = {
     "psql"      :       ["sql",         "",         ],
     "sqlite"    :       ["sql",         "",         ],
     "mongo"     :       ["blobs",       "blobs_",   ],
+    "bucket"     :      ["blobs",       "blobs_",   ],
 }
 
 # ==================================================================
@@ -122,6 +124,11 @@ def connect_dbms(status, dbms_name, db_type, user, passwd, host, port, in_ram, e
         dbms = MONGODB()
     elif db_type_name.startswith("oledb."):
         dbms = OLEDB(engine_string, db_type_name)
+    elif db_type_name == "bucket":
+        if not engine_string:
+            status.add_error("Missing bucket group name in connection string")
+            return None
+        dbms = BUCKET(engine_string)
     else:
         if db_type_name == "oledb":
             status.add_error("Database type '%s' requires an extension, for example oledb.pi" % db_type)
