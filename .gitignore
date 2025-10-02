@@ -8,4 +8,3 @@ update_code.sh
 copy_files.sh
 nebula/
 pull_logs.sh
-setup.py
