@@ -10137,8 +10137,21 @@ def blockchain_insert_all(status, mem_view, policy, is_local, blockchain_file, m
         if trace_level >= 2:
             utils_print.struct_print(policy, True, True)
 
+    if not local_file_updated:
+        # Return an error as both the local file and the shared file were not updated
+        err_msg = f"New policy '{policy_type}' failed to update the {dest_type} at '{dest}' and system is not configured to update the local metadata file"
+        utils_print.output_box(err_msg + f"\n{process_status.get_status_text(reply_val)}")
+        ret_val = reply_val
+    else:
+        # Return warning as the local file was updated
+        err_msg = f"Warning: New policy '{policy_type}' failed to update the {dest_type} at '{dest}'"
+        utils_print.output_box(err_msg + f"\n{process_status.get_status_text(reply_val)}", "magenta")
+        ret_val = process_status.SUCCESS
+
+    status.add_error(err_msg)
 
     return ret_val
+
 # -----------------------------------------------------------------------------------------------------
 # An Error in updating the shared metadata
 # -----------------------------------------------------------------------------------------------------
@@ -10688,6 +10701,12 @@ def file_delete(status, io_buff_in, cmd_words, trace, func_params):
 # =======================================================================================================================
 def file_deliver(status, io_buff_in, cmd_words, trace, func_params):
 
+    if trace_methods.is_traced("tcp in"):
+        details = {
+            "Status": "file_deliver Start",
+        }
+        trace_methods.update_details("tcp in", **details)
+
     ret_val = process_status.SUCCESS
     is_message, offset, file_flag, files_ids, text_opr, file_name = func_params
     command_length = len(cmd_words)
@@ -10709,6 +10728,12 @@ def file_deliver(status, io_buff_in, cmd_words, trace, func_params):
 
     if not ret_val:
         ret_val = deliver_files(status, io_buff_in, ip, port, tsd_table, files_ids, trace)
+
+    if trace_methods.is_traced("tcp in"):
+        details = {
+            "Status": "file_deliver End",
+        }
+        trace_methods.update_details("tcp in", **details)
 
     return ret_val
 # ----------------------------------------------------------------------------
@@ -11317,8 +11342,20 @@ def deliver_files(status, io_buff_in, ip, port, tsd_table, files_ids, trace_leve
                                                (range_id + 1, len(files_list), counter, end_id - start_id, ip, port, tsd_table, file_id_str, str(file_found)), True)
 
                         if file_found:
+                            if trace_methods.is_traced("tcp in"):
+                                details = {
+                                    "Step": 1,
+                                }
+                                trace_methods.update_details("tcp in", **details)
+
                             ret_val = transfer_file(status, [(ip, str(port))], file_source, file_dest, message_header.GENERIC_USE_WATCH_DIR, trace_level, "MSG: Deliver File", True)
                         else:
+                            if trace_methods.is_traced("tcp in"):
+                                details = {
+                                    "Step": 2,
+                                }
+                                trace_methods.update_details("tcp in", **details)
+
                             # Send a special event message that the file is not available or can not be transferred
                             ret_val = ha.send_missing_arcived_file(status, io_buff_in, ip, port, tsd_table, file_name, trace_level)
 
