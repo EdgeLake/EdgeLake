@@ -21,6 +21,8 @@ import edge_lake.dbms.db_info as db_info
 # ------------------------------------------------------------------------------------
 arch_running_flag = False
 
+status_msg_ = ""
+
 statistics = {
     "processed" : [0,0,0,"",""],      # Info: Counter on JSON Processed: Success, Error, Last-Error, Last File Processed, error placed on status
     "blobs" : {
@@ -37,11 +39,24 @@ def is_arch_running():
     return arch_running_flag
 
 # ------------------------------------------------------------------------------
+# Return config info
+# ------------------------------------------------------------------------------
+def get_info(status):
+
+    global status_msg_
+
+    return status_msg_ if arch_running_flag else ""
+
+
+# ------------------------------------------------------------------------------
 # Read JSON files from the BWATCH dir and archive the data accordingly
+# This file is written in: generic.steaming_data.write_by_prep_move
+# Example: run blobs archiver where dbms = true and folder = false and compress = false and reuse_blobs = true
 # ------------------------------------------------------------------------------
 def data_archiver(dummy: str, conditions: dict):
     global arch_running_flag
     global statistics
+    global status_msg_
 
     status = process_status.ProcessStat()
 
@@ -59,9 +74,12 @@ def data_archiver(dummy: str, conditions: dict):
         watch_dir += params.get_path_separator()
 
     archive_file = conditions["folder"][0]          # archive the file with the blob data (default)
+
     update_dbms = conditions["dbms"][0]             # Update a dbms with the blob data
     compress_file = conditions["compress"][0]
     reuse_blobs = conditions["reuse_blobs"][0]      # True value if the file may already be in the database
+
+    status_msg_ = f"Flags: dbms = {update_dbms}, folder = {archive_file}, compress = {compress_file}, reuse_blobs = {reuse_blobs}"
 
     file_info = utils_io.FileMetadata()     # A structure to manage the info from the file name
 

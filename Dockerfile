@@ -1,42 +1,57 @@
-FROM python:3.11-alpine as base
+# ==== Part 1: Build executable ====
+FROM python:3.11-slim AS builder
 
-# declare params
-ENV PYTHONPATH=/app/EdgeLake/ \
-    EDGELAKE_PATH=/app \
+WORKDIR /app/
+
+# Copy source code
+COPY . EdgeLake/
+
+# Install build dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends bash git openssh-client gcc python3-dev libffi-dev libopencv-dev && \
+    python3 -m pip install --upgrade pip wheel pyyaml==6.0.2 && \
+    python3 -m pip install --upgrade -r /app/EdgeLake/requirements.txt && \
+    python3 /app/EdgeLake/setup.py install && \
+    mv dist/* /app/edgelake_agent && \
+    rm -rf EdgeLake build *.egg-info dist && \
+    apt-get purge -y gcc python3-dev libffi-dev libopencv-dev && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# ==== Part 2: Prepare runtime ====
+FROM python:3.11-slim AS runtime
+
+WORKDIR /app/
+
+# Copy only the executable from builder
+COPY --from=builder /app/edgelake_agent /app/edgelake_agent
+
+# Install runtime dependencies only
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        bash ca-certificates python3-pip git && \
+    python3 -m pip install --no-cache-dir --upgrade \
+        pip \
+        grpcio-tools==1.70.0 \
+        pyyaml==6.0.2 \
+        requests==2.32.4 && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy only scripts/configs needed at runtime
+RUN mkdir -p /app/EdgeLake && \
+    git clone https://github.com/oshadmon/nebula-anylog /app/nebula
+COPY deploy_edgelake.sh /app/deploy_edgelake.sh
+COPY setup.cfg /app/EdgeLake/setup.
+
+# ==== Part 3: Runtime configuration ====
+ENV EDGELAKE_PATH=/app \
     EDGELAKE_HOME=/app/EdgeLake \
+    APP_NAME=edgelake_agent \
     BLOCKCHAIN_DIR=/app/EdgeLake/blockchain \
     DATA_DIR=/app/EdgeLake/data \
     LOCAL_SCRIPTS=/app/deployment-scripts/node-deployment \
-    TEST_DIR=/app/deployment-scripts/test \
-    DEBIAN_FRONTEND=noninteractive \
-    NODE_TYPE=generic \
-    NODE_NAME=edgelake-node \
-    COMPANY_NAME="New Company" \
-    ANYLOG_SERVER_PORT=32548 \
-    ANYLOG_REST_PORT=32549 \
-    LEDGER_CONN=127.0.0.1:32049
+    TEST_DIR=/app/deployment-scripts/tests \
+    DEBIAN_FRONTEND=noninteractive
 
-WORKDIR /app
-
-COPY . EdgeLake
-COPY setup.cfg /app
-COPY LICENSE /app
-COPY README.md /app
-
-EXPOSE $ANYLOG_SERVER_PORT $ANYLOG_REST_PORT $ANYLOG_BROKER_PORT
-
-# Install dependencies
-RUN apk update && apk upgrade && \
-    apk add bash git gcc openssh-client python3 python3-dev py3-pip musl-dev build-base libffi-dev py3-psutil && \
-    python3 -m pip install --upgrade pip && \
-    python3 -m pip install --upgrade -r /app/EdgeLake/requirements.txt && \
-    git clone https://github.com/EdgeLake/deployment-scripts
-
-FROM base AS deployment
-
-# Make sure to set the EDGELAKE_HOME environment variable for Python explicitly
-ENV EDGELAKE_HOME=/app/EdgeLake
-
-# Use exec form of ENTRYPOINT to ensure the environment variables are passed correctly
-# ENTRYPOINT ["/bin/sh"]
-ENTRYPOINT python3 /app/EdgeLake/edge_lake/edgelake.py process /app/deployment-scripts/node-deployment/main.al
+RUN chmod +x /app/deploy_edgelake.sh
+ENTRYPOINT ["/app/deploy_edgelake.sh"]

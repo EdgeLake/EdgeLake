@@ -114,7 +114,9 @@ http_methods_ = {
     "job run":          "post",     #  Executes the specified job command
     "job stop":         "post",     # stops the execution of a particular running job or stops a scheduled job
     "file get":         "get",
-    "file retrieve":    "get",
+    "file retrieve":    "get",      # Used to stream a file to a browser
+    "file to":          "get",      # Copy a file on the same machine to a destination
+    "file from":        "get",      # Return a file to the rest caller: file from D:\Node\EdgeLake\data\tmp
     "test":             "get",
     "wait":             "get*post",
     "subprocess":       "get*post",

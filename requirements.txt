@@ -22,6 +22,8 @@ pytz==2025.1
 #--- blockchain ---
 web3==6.15.1
 py4j>=0.10.9.5
+boto3==1.40.41
+botocore==1.40.41
 
 #--- database ---
 # required
