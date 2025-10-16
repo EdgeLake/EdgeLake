@@ -17601,6 +17601,17 @@ def set_anylog_home(status, io_buff_in, cmd_words, trace):
         ret_val = utils_io.test_dir_writeable(status, anylog_root, True)
         if not ret_val:
             params.set_directory_locations(anylog_root)
+        if ret_val == process_status.Directory_not_writeable:
+            utils_print.output_box(
+                f"The provided AnyLog home path for creating work directories does not exist: `{anylog_root}`")
+            status.add_error(
+                f"The provided AnyLog home path for creating work directories does not exist: `{anylog_root}`")
+    if ret_val == process_status.ERR_command_struct:
+        cmd_words = " ".join(cmd_words)
+        utils_print.output_box(
+            f"The command `set anylog home` command is incorrect and failed: `{cmd_words}`")
+        status.add_error(
+            f"The command `set anylog home` command is incorrect and failed: `{cmd_words}`")
     return ret_val
 
 

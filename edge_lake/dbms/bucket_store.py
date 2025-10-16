@@ -118,7 +118,7 @@ def bucket_connect(status, io_buff_in, cmd_words, trace):
     return [ret_val, reply]
 
 # ============================================================================================
-# bucket provider disconnect where name = my_buckets my_buckets
+# bucket provider disconnect where group = my_buckets
 # ============================================================================================
 def bucket_disconnect(status, io_buff_in, cmd_words, trace):
     global registry_
@@ -159,11 +159,11 @@ def get_connected_groups(status, io_buff_in, cmd_words, trace):
 
     if len(registry_):
         first_entry = registry_[next(iter(registry_))]
-        title = ["Group Name"] + [k for k in first_entry.keys() if k != "pswrd"]      # Password not displayed
+        title = ["Group Name"] + [k for k in first_entry.keys() if k not in ("pswrd", "secret_key", "access_key")]
         struct_info = []
         for bucket_name, bucket_info in registry_.items():
             struct_info.append(
-                [bucket_name] + [v for k, v in bucket_info.items() if k != "pswrd"]
+                [bucket_name] + [v for k, v in bucket_info.items() if k not in ("pswrd", "secret_key", "access_key")]
             )
 
         reply = utils_print.output_nested_lists(struct_info, "", title, True)

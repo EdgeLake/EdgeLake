@@ -1,12 +1,13 @@
 
 import sys
+
 import edge_lake.generic.process_status as process_status
 import os
-
 
 try:
     lib_name_ = "boto3"
     import boto3
+    from botocore.config import Config
 
     lib_name_ = "botocore/exceptions/ClientError"
     from botocore.exceptions import ClientError
@@ -39,7 +40,8 @@ class AkaveConnector:
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
             region_name=region,
-            endpoint_url=endpoint_url
+            endpoint_url=endpoint_url,
+            config = Config(request_checksum_calculation="when_required", response_checksum_validation ="when_required")
         )
 
         self.region = region

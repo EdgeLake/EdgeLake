@@ -119,7 +119,7 @@ class BUCKET(sql_storage):
 
         if dest_type == "file" and not one_file:
             status.add_error(
-                "Akave: Retrieve multiple files requires a folder as a destination - a file name was provided")
+                "Bucket process error: Retrieve multiple files requires a folder as a destination - a file name was provided")
             ret_val = process_status.ERR_command_struct
 
         elif dest_type == "file":
@@ -182,7 +182,7 @@ class BUCKET(sql_storage):
             except:
                 errno, value = sys.exc_info()[:2]
                 status.add_error(
-                    f"Akave: Failed to retrieve documents from DBMS '{dbms_name}' and search by: '{db_filter}', with error {errno} : {value}")
+                    f"Bucket process error: Failed to retrieve documents from DBMS '{dbms_name}' and search by: '{db_filter}', with error {errno} : {value}")
                 ret_val = process_status.DBMS_error
 
         return ret_val
@@ -247,3 +247,18 @@ class BUCKET(sql_storage):
 
         files_name_list = []
         return files_name_list
+
+    # ---------------------------------------------------------------
+    # Close a connection to the logical database
+    # ---------------------------------------------------------------
+    def close_connection(self, status, db_connect):
+        try:
+            cmd_words = ["bucket", "provider", "disconnect", "where", "group", "=", db_connect.bucket_group]
+            ret_val, reply = bucket_store.bucket_disconnect(status, None, cmd_words, None)
+        except:
+            errno, value = sys.exc_info()[:2]
+            status.add_error("Bucket process error: Failed to close connection to a bucket considered as DBMS '%s' with error %s : %s" % (
+            self.dbms_name, str(errno), str(value)))
+            ret_val = False
+
+        return ret_val
