@@ -5,10 +5,14 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 """
 
 from datetime import datetime
+from urllib.parse import quote
 import ipaddress
 import uuid
 import hashlib
 import re
+import sys
+from urllib.parse import urlparse
+
 
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.process_log as process_log
@@ -128,12 +132,31 @@ url_chars_ = {  "20": ' ',
 
 hex_digits_ = "0123456789abcdef"
 
-skip_chars_ = {
-    ' ' :  1,
-    '\t' : 1,
-    '\r' : 1,
-    '\n' : 1,
+skip_chars_ = set([' ', '\t', '\r', '\n', '\x00', '\x01', '\x02', '\x03', '\x04', '\x05',
+                   '\x06', '\x07', '\x08', '\x0b', '\x0c', '\x0e', '\x0f', '\x10', '\x11',
+                   '\x12', '\x13', '\x14', '\x15', '\x16', '\x17', '\x18', '\x19', '\x1a',
+                   '\x1b', '\x1c', '\x1d', '\x1e', '\x1f'])
+
+TYPE_MAP = {
+    "str": str,
+    "int": int,
+    "float": float,
+    "bool": lambda v: v.lower() in ("true", "1", "yes"),
+    "list": lambda v: [x.strip() for x in v.split(",") if x.strip()],
 }
+# -------------------------------------------------------------------------
+#   Data convertor from string to type
+# -------------------------------------------------------------------------
+def convert_value(value_str: str, type_name: str):
+
+    if type_name == "list" and len(value_str) and value_str[0] =='[' and value_str[-1] == ']':
+        # Remove parenthesis
+        value_str = value_str[1:-1]
+
+    converter = TYPE_MAP.get(type_name, None)
+    if not converter:
+        return None
+    return converter(value_str)
 
 # -------------------------------------------------------------------------
 #   Check if a string is hexadecimal
@@ -1105,36 +1128,90 @@ def is_sub_array(source_array, offset, sub_array):
 # Ignore trailing \r\n
 # Returns dict or list or none
 # ======================================================================================================================
-def get_str_obj(tested_str):
+# Example: include ASCII whitespace + common noise bytes; customize as needed
+def get_str_obj(tested_str: str):
+    """
+    Returns (kind, new_str_or_none)
+      kind: 'dict' | 'list' | 'none'
+      new_str_or_none: only provided if we had to trim/extract a substring; otherwise None.
 
-    if tested_str:
-        str_len = len(tested_str)
-        if str_len > 1:
-            first_char = tested_str[0]
-            last_char = tested_str[-1]
-            if first_char == '{' or first_char == '[': # Dictionary or list
-                if first_char == '{' and last_char == '}':
-                    return "dict"
-                elif first_char == '[' and last_char == ']':
-                    return "list"
+    Fast path: if first and last chars are already matching braces, return immediately.
+    Slow path: trim leading/trailing skip chars, then (if needed) extract embedded { ... } or [ ... ].
+    """
+    if not tested_str:
+        return "none", None
 
-            offset_first = 0
-            while first_char in skip_chars_:
-                offset_first += 1
-                if offset_first >= str_len:
-                    return "none"
-                first_char = tested_str[offset_first]
-            offset_last = 1     # -1 is the last char
-            while last_char in skip_chars_:
-                offset_last += 1
-                if (offset_last + offset_first + 1) >= str_len:
-                    return "none"
-                last_char = tested_str[-offset_last]
-            if first_char == '{' and last_char == '}':
-                return "dict"
-            elif first_char == '[' and last_char == ']':
-                return "list"
-    return "none"
+    n = len(tested_str)
+    if n == 1:
+        return "none", None
+
+    fc = tested_str[0]
+    lc = tested_str[-1]
+
+    # ---- Fast path (O(1)) ----
+    if fc == '{' and lc == '}':
+        return "dict", None
+    if fc == '[' and lc == ']':
+        return "list", None
+
+    # ---- Trim leading/trailing skip chars without copying unless needed ----
+    i = 0
+    while i < n and tested_str[i] in skip_chars_:
+        i += 1
+    if i == n:
+        return "none", None
+
+    j = n - 1
+    while j >= i and tested_str[j] in skip_chars_:
+        j -= 1
+
+    if i > 0 or j < n - 1:
+        trimmed = tested_str[i:j+1]
+        if trimmed:
+            tfc = trimmed[0]
+            tlc = trimmed[-1]
+            if tfc == '{' and tlc == '}':
+                return "dict", trimmed
+            if tfc == '[' and tlc == ']':
+                return "list", trimmed
+
+    # ---- Embedded JSON/object/array after a binary/text header ----
+    # Find first '{' or '[' quickly; choose the earlier one.
+    i_brace = tested_str.find('{')
+    i_brack = tested_str.find('[')
+
+    if i_brace == -1 and i_brack == -1:
+        return "none", None
+
+    # pick earliest non-negative index
+    if i_brace == -1:
+        start = i_brack
+        start_char = '['
+        end_char = ']'
+    elif i_brack == -1:
+        start = i_brace
+        start_char = '{'
+        end_char = '}'
+    else:
+        if i_brace < i_brack:
+            start = i_brace
+            start_char = '{'
+            end_char = '}'
+        else:
+            start = i_brack
+            start_char = '['
+            end_char = ']'
+
+    # From the end, grab the last matching closing char
+    end = tested_str.rfind(end_char)
+    if end == -1 or end <= start:
+        return "none", None
+
+    candidate = tested_str[start:end+1]
+    if candidate and candidate[0] == start_char and candidate[-1] == end_char:
+        return ("dict" if start_char == '{' else "list"), candidate
+
+    return "none", None
 
 # ======================================================================================================================
 # Get word length - return length to space or end of line
@@ -1675,3 +1752,29 @@ def is_valid_timestamp(timestamp):
         return True
     except:
         return False
+
+# =======================================================================================================================
+# Create a URL for a camera
+# =======================================================================================================================
+def camera_url_builder(url:str, user:str, password:str, protocol:str=None):
+    """
+    URL builder for video processing protocol
+    """
+    if password:
+        password = quote(password)
+
+
+    if '://' not in url and protocol:
+        rest = url
+    elif '://' in url: # if there's '://' ignore other protocol
+        protocol, rest = url.split("://", 1)
+    else:
+        return None
+
+
+    if user and password:
+        conn_url = f'{protocol}://{user}:{password}@{rest}'
+    else:
+        conn_url = f'{protocol}://{rest}'
+
+    return conn_url
