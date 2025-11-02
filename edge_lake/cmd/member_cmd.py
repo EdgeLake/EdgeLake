@@ -10188,19 +10188,6 @@ def blockchain_insert_all(status, mem_view, policy, is_local, blockchain_file, m
         if trace_level >= 2:
             utils_print.struct_print(policy, True, True)
 
-    if not local_file_updated:
-        # Return an error as both the local file and the shared file were not updated
-        err_msg = f"New policy '{policy_type}' failed to update the {dest_type} at '{dest}' and system is not configured to update the local metadata file"
-        utils_print.output_box(err_msg + f"\n{process_status.get_status_text(reply_val)}")
-        ret_val = reply_val
-    else:
-        # Return warning as the local file was updated
-        err_msg = f"Warning: New policy '{policy_type}' failed to update the {dest_type} at '{dest}'"
-        utils_print.output_box(err_msg + f"\n{process_status.get_status_text(reply_val)}", "magenta")
-        ret_val = process_status.SUCCESS
-
-    status.add_error(err_msg)
-
     return ret_val
 
 # -----------------------------------------------------------------------------------------------------
