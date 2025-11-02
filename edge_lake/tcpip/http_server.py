@@ -771,6 +771,19 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     def do_GET(self):
 
+        # MCP SSE endpoint routing (before profiler to minimize overhead)
+        if self.path == '/mcp/sse':
+            try:
+                from edge_lake.mcp_server.transport import sse_handler
+                sse_handler.handle_sse_endpoint(self)
+                return  # MCP handler manages the response
+            except ImportError:
+                pass  # MCP not available, continue with normal handling
+            except Exception as e:
+                logger.error(f"MCP SSE endpoint error: {e}")
+                self.send_error(500, f"MCP error: {e}")
+                return
+
         ret_val = process_status.SUCCESS
 
         if with_profiler_:
@@ -945,6 +958,19 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # https://docs.python.org/3/library/http.client.html
     # =======================================================================================================================
     def do_POST(self):
+
+        # MCP messages endpoint routing (before profiler to minimize overhead)
+        if self.path.startswith('/mcp/messages/'):
+            try:
+                from edge_lake.mcp_server.transport import sse_handler
+                sse_handler.handle_messages_endpoint(self)
+                return  # MCP handler manages the response
+            except ImportError:
+                pass  # MCP not available, continue with normal handling
+            except Exception as e:
+                logger.error(f"MCP messages endpoint error: {e}")
+                self.send_error(500, f"MCP error: {e}")
+                return
 
         if with_profiler_:
             profiler.manage("post")     # Stop, Start and reset the profiler
