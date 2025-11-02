@@ -18,23 +18,19 @@ ENV PYTHONPATH=/app/EdgeLake/ \
 
 WORKDIR /app
 
-# Copy only requirements.txt first (changes less frequently)
-COPY requirements.txt /app/EdgeLake/requirements.txt
-
-# Install dependencies (cached unless requirements.txt changes)
-RUN apk update && apk upgrade && \
-    apk add bash git gcc openssh-client python3 python3-dev py3-pip musl-dev build-base libffi-dev py3-psutil && \
-    python3 -m pip install --upgrade pip && \
-    python3 -m pip install --upgrade -r /app/EdgeLake/requirements.txt && \
-    git clone https://github.com/EdgeLake/deployment-scripts
-
-# Copy the rest of the code (changes frequently, but doesn't invalidate deps)
 COPY . EdgeLake
 COPY setup.cfg /app
 COPY LICENSE /app
 COPY README.md /app
 
 EXPOSE $ANYLOG_SERVER_PORT $ANYLOG_REST_PORT $ANYLOG_BROKER_PORT
+
+# Install dependencies
+RUN apk update && apk upgrade && \
+    apk add bash git gcc openssh-client python3 python3-dev py3-pip musl-dev build-base libffi-dev py3-psutil && \
+    python3 -m pip install --upgrade pip && \
+    python3 -m pip install --upgrade -r /app/EdgeLake/requirements.txt && \
+    git clone https://github.com/EdgeLake/deployment-scripts
 
 FROM base AS deployment
 

@@ -52,3 +52,9 @@ opcua==0.98.13
 #--- blobs ---
 numpy==2.2.3
 
+#--- mcp (Model Context Protocol) - lightweight built-in implementation ---
+# Note: Using edge_lake/mcp_server/protocol.py instead of heavy 'mcp' package
+# Removed: mcp>=1.0.0 (saves ~10-20MB in compiled binary)
+# Removed: pydantic>=2.0.0 (not needed with lightweight protocol)
+# Removed: jsonpath-ng (replaced with direct dict access for {"Query": [...]} unwrapping)
+

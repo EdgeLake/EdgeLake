@@ -20250,7 +20250,7 @@ def _run_mcp_server(status, io_buff_in, cmd_words, trace):
         status.add_error("REST server must be running first")
         return process_status.ERR_process_failure
     try:
-        from edge_lake.mcp_server.server import MCPServer
+        from edge_lake.mcp_server import MCPServer
         mcp_server_instance_ = MCPServer()
         mcp_server_instance_.start()
         utils_print.output("MCP server started", True)
