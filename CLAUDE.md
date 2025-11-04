@@ -343,9 +343,13 @@ See `edge_lake/mcp/QUICK_START.md` for detailed testing instructions.
 
 **Shared Command Execution Layer** (`edge_lake/cmd/command_execution.py`):
 - Extracted core execution logic from `http_server.al_exec()` into reusable module
-- Both REST API and MCP server now use identical command execution path
-- Provides: `build_run_client_wrapper()`, `should_wait_for_reply()`, `execute_command_with_options()`
-- Ensures consistent wait behavior, file command handling, and job management
+- Directly mirrors `http_server.prepare_commands()` and `execute_al_commands()` logic
+- **Key Functions:**
+  - `build_run_client_wrapper()` - Constructs run client wrapper (from `get_run_client()`)
+  - `should_wait_for_reply()` - Wait decision logic (from `prepare_commands()` line 1330-1336)
+  - `prepare_al_command()` - Simplified `prepare_commands()` without HTTP body parsing
+  - `execute_al_commands_list()` - Functional copy of `execute_al_commands()` (line 1416-1436)
+  - `execute_command_with_options()` - Combines prepare + execute (mirrors `al_exec()` flow)
 
 **MCP Client Refactoring** (`edge_lake/mcp_server/core/direct_client.py`):
 - Now uses shared `command_execution.execute_command_simple()`
@@ -353,11 +357,23 @@ See `edge_lake/mcp/QUICK_START.md` for detailed testing instructions.
 - Implements `status.add_error()` pattern for error logging (CLAUDE.md rule #3)
 - Provides same execution guarantees as REST API
 
+**Architecture:**
+```
+http_server.al_exec()          command_execution.py           MCP direct_client
+├── prepare_commands()    →    prepare_al_command()      →    execute_command_simple()
+│   ├── get_run_client()  →    build_run_client_wrapper()
+│   └── wait logic        →    should_wait_for_reply()
+└── execute_al_commands() →    execute_al_commands_list()
+    ├── exec_al_cmd()
+    └── exec_no_wait()
+```
+
 **Benefits:**
-- ✅ Consolidates on al_exec logic (management requirement)
-- ✅ Fixes potential bugs in MCP wait logic
-- ✅ Single source of truth for command execution
-- ✅ Easier to maintain and test
+- ✅ **Uses al_exec intermediate code** - `prepare_al_command()` and `execute_al_commands_list()` mirror http_server methods
+- ✅ **100% logic consistency** - MCP and REST use identical execution paths
+- ✅ **Maintainability** - Changes to al_exec logic can be mirrored in command_execution.py
+- ✅ **Bug fixes** - File command wait, native_api setup, proper error handling
+- ✅ **Single source of truth** - All command execution flows through native_api
 
 ### TODO - Next Session
 
