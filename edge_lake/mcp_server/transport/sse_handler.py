@@ -348,12 +348,12 @@ class SSETransport:
             }).encode('utf-8'))
 
             # Process message synchronously (no new thread)
-            # Pass connection's handler socket for streaming large results
-            with self.connection_lock:
-                connection_for_socket = self.connections.get(session_id)
-                socket = connection_for_socket.handler.wfile if connection_for_socket else None
+            # Create BytesIO buffer to capture streaming output
+            # (Cannot use real HTTP socket - would corrupt SSE stream)
+            from io import BytesIO
+            socket_buffer = BytesIO()
 
-            self._process_message_sync(session_id, message, socket)
+            self._process_message_sync(session_id, message, socket_buffer)
 
             return True
 
@@ -383,8 +383,24 @@ class SSETransport:
         """
         try:
             # Process message via MCP server (synchronous)
-            # Pass socket for streaming aggregated query results
+            # Pass socket buffer for capturing streamed query results
             response = self.mcp_server.process_message(message, socket)
+
+            # If socket buffer has data (from streamed queries), add it to response
+            if socket and hasattr(socket, 'getvalue'):
+                socket_data = socket.getvalue()
+                if socket_data:
+                    # Decode socket output and add to response content
+                    socket_text = socket_data.decode('utf-8') if isinstance(socket_data, bytes) else str(socket_data)
+                    logger.debug(f"Socket buffer has {len(socket_text)} bytes, adding to response")
+
+                    # Update response content with socket data
+                    if 'result' in response and 'content' in response['result']:
+                        # Append socket data to existing content
+                        response['result']['content'].append({
+                            'type': 'text',
+                            'text': socket_text
+                        })
 
             # Queue response for SSE delivery
             with self.connection_lock:

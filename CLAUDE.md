@@ -330,14 +330,15 @@ See `edge_lake/mcp/QUICK_START.md` for detailed testing instructions.
 - <rules>
 <rule id="1">When the user types "exit" or "/exit", always ask for confirmation (y/n) before actually exiting the session</rule>
 <rule id="2">Display "Rules Processed" at the start of every response</rule>
-<rule id="3">CRITICAL: Never load entire large files (>500 lines) into context without user approval. For large files like member_cmd.py (17,000+ lines), params.py (65,000+ lines), or http_server.py (3,000+ lines):
+<rule id="3">Use Mel all after code change when you want to build and test. Mel all runs build, deploy, start-mcp-server and test-sse-tools</rule>
+<rule id="4">CRITICAL: Never load entire large files (>500 lines) into context without user approval. For large files like member_cmd.py (17,000+ lines), params.py (65,000+ lines), or http_server.py (3,000+ lines):
   - Use Grep to search for specific functions/patterns first
   - Use Read with offset/limit parameters to read targeted sections only
   - Ask user which specific section/function they want to examine
   - Prefer using Task tool with Explore agent for codebase exploration
   - Only read complete large files if explicitly requested by user
 This prevents context exhaustion and enables efficient multi-turn conversations.</rule>
-<rule id="4">CRITICAL: All git commits must include DCO (Developer Certificate of Origin) sign-off. NEVER include references to Claude Code, "Generated with Claude Code", or "Co-Authored-By: Claude". Commit messages must follow this format:
+<rule id="5">CRITICAL: All git commits must include DCO (Developer Certificate of Origin) sign-off. NEVER include references to Claude Code, "Generated with Claude Code", or "Co-Authored-By: Claude". Commit messages must follow this format:
 
 git commit -m "$(cat <<'EOF'
 Brief summary line (50 chars or less)
