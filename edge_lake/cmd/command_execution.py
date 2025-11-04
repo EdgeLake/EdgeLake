@@ -1,10 +1,14 @@
 """
 Shared command execution logic for REST API and MCP server.
 
-This module extracts common execution patterns from http_server.al_exec()
-to provide a unified command execution layer that both REST API and MCP
-server can use. This ensures consistent behavior, proper wait handling,
-and shared maintenance of core execution logic.
+This module extracts http_server.al_exec() logic into reusable functions
+with the ORIGINAL names from http_server.py:
+- prepare_commands() - from http_server.ChunkedHTTPRequestHandler.prepare_commands()
+- execute_al_commands() - from http_server.ChunkedHTTPRequestHandler.execute_al_commands()
+- get_run_client() - from http_server.ChunkedHTTPRequestHandler.get_run_client()
+
+Both REST API (http_server.py) and MCP server (direct_client.py) can use
+these functions, ensuring 100% logic consistency.
 
 License: Mozilla Public License 2.0
 """
@@ -13,12 +17,15 @@ from edge_lake.cmd import member_cmd, native_api
 from edge_lake.generic import process_status, params
 
 
-def build_run_client_wrapper(destination=None, subset=None, timeout=None):
+def get_run_client(destination=None, subset=None, timeout=None):
     """
     Build 'run client ()' wrapper for network commands.
 
-    This function implements the same logic as http_server.get_run_client()
-    to construct the run client wrapper with proper parameters.
+    This is the shared version of http_server.ChunkedHTTPRequestHandler.get_run_client()
+    but as a module function that can be used by both REST API and MCP.
+
+    Original: http_server.py line 1353 - gets destination/subset/timeout from self.al_headers
+    Shared: Takes destination/subset/timeout as parameters
 
     Args:
         destination: Query destination
@@ -34,16 +41,16 @@ def build_run_client_wrapper(destination=None, subset=None, timeout=None):
             - has_run_client: True if network query, False if local
 
     Examples:
-        >>> build_run_client_wrapper('network', True, 20)
+        >>> get_run_client('network', True, 20)
         ('run client (subset=true ,timeout=20)', True)
 
-        >>> build_run_client_wrapper('10.0.0.1:7848', False, 30)
+        >>> get_run_client('10.0.0.1:7848', False, 30)
         ('run client (10.0.0.1:7848 ,timeout=30)', True)
 
-        >>> build_run_client_wrapper('local')
+        >>> get_run_client('local')
         ('', False)
 
-        >>> build_run_client_wrapper(None)
+        >>> get_run_client(None)
         ('', False)
     """
     # Local query - no run client wrapper
@@ -118,12 +125,15 @@ def should_wait_for_reply(command, has_run_client):
     return True
 
 
-def prepare_al_command(status, command, headers_dict=None):
+def prepare_commands(status, command, headers_dict=None):
     """
-    Prepare EdgeLake command for execution (simplified from http_server.prepare_commands).
+    Prepare EdgeLake command for execution (shared version of http_server.prepare_commands).
 
-    This implements the core logic of http_server.prepare_commands() without HTTP-specific
-    features like message body parsing and file uploads. For MCP usage.
+    This implements the core logic of http_server.prepare_commands() (line 1264-1345)
+    without HTTP-specific features like message body parsing and file uploads.
+
+    Original: http_server.prepare_commands(self, status, command, rest_cmd_words, commands_list, into_output)
+    Shared: prepare_commands(status, command, headers_dict) - simplified parameters
 
     Args:
         status: ProcessStat object (for future error handling)
@@ -132,13 +142,13 @@ def prepare_al_command(status, command, headers_dict=None):
 
     Returns:
         list: Commands list in format [(full_command, with_wait), ...]
-              Same format as http_server.prepare_commands uses
+              Same format as http_server.prepare_commands returns
 
     Example:
-        >>> prepare_al_command(status, 'sql mydb "select * from t"', {'destination': 'network'})
+        >>> prepare_commands(status, 'sql mydb "select * from t"', {'destination': 'network'})
         [('run client () sql mydb "select * from t"', True)]
 
-        >>> prepare_al_command(status, 'get status', {'destination': 'local'})
+        >>> prepare_commands(status, 'get status', {'destination': 'local'})
         [('get status', False)]
     """
     # Extract options from headers
@@ -147,7 +157,7 @@ def prepare_al_command(status, command, headers_dict=None):
     timeout = headers_dict.get('timeout') if headers_dict else None
 
     # Build run_client wrapper (same as http_server.get_run_client)
-    run_client_prefix, has_run_client = build_run_client_wrapper(
+    run_client_prefix, has_run_client = get_run_client(
         destination, subset, timeout
     )
 
@@ -166,17 +176,20 @@ def prepare_al_command(status, command, headers_dict=None):
     return commands_list
 
 
-def execute_al_commands_list(status, wfile, commands_list, io_buff=None, into_output=None, file_data=None):
+def execute_al_commands(status, wfile, commands_list, io_buff=None, into_output=None, file_data=None):
     """
-    Execute command list using http_server.execute_al_commands logic.
+    Execute command list (shared version of http_server.execute_al_commands).
 
     This is functionally identical to http_server.execute_al_commands() (line 1416-1436)
     but implemented as a module function so both REST API and MCP can use it.
 
+    Original: http_server.execute_al_commands(self, status, io_buff, commands_list, into_output, file_data)
+    Shared: execute_al_commands(status, wfile, commands_list, io_buff, into_output, file_data)
+
     Args:
         status: ProcessStat object for error tracking
-        wfile: Output socket for streaming results
-        commands_list: List of (command, with_wait) tuples from prepare_al_command()
+        wfile: Output socket for streaming results (was self.wfile)
+        commands_list: List of (command, with_wait) tuples from prepare_commands()
         io_buff: IO buffer (bytearray, created if None)
         into_output: Output format (e.g., 'html', None for default)
         file_data: File data for 'file store' commands
@@ -222,20 +235,23 @@ def execute_al_commands_list(status, wfile, commands_list, io_buff=None, into_ou
     return ret_val
 
 
-def execute_command_with_options(status, command, wfile=None,
-                                  destination=None, subset=False,
-                                  timeout=None, into_output=None,
-                                  io_buff=None, file_data=None):
+def al_exec(status, command, wfile=None,
+            destination=None, subset=False,
+            timeout=None, into_output=None,
+            io_buff=None, file_data=None):
     """
-    Execute EdgeLake command using http_server.prepare_commands + execute_al_commands logic.
+    Execute EdgeLake command (shared version of http_server.al_exec).
 
-    This combines prepare_al_command() and execute_al_commands_list() to provide
+    This combines prepare_commands() and execute_al_commands() to provide
     the same functionality as http_server.al_exec() but as a reusable module function.
+
+    Original: http_server.al_exec(self, status, http_method, command)
+    Shared: al_exec(status, command, wfile, destination, subset, timeout, ...)
 
     Args:
         status: ProcessStat object for error tracking and job management
         command: EdgeLake command string (without run client wrapper)
-        wfile: Output socket for streaming results
+        wfile: Output socket for streaming results (was self.wfile)
         destination: Query destination ('network', 'local', or 'ip:port')
         subset: Allow partial results (bool, default False)
         timeout: Timeout in seconds (int, default 20)
@@ -252,19 +268,19 @@ def execute_command_with_options(status, command, wfile=None,
 
     Examples:
         # REST API usage (network query)
-        ret = execute_command_with_options(
+        ret = al_exec(
             status, 'sql mydb "select * from table"',
             wfile=self.wfile, destination='network', timeout=30
         )
 
         # MCP usage (local query)
-        ret = execute_command_with_options(
+        ret = al_exec(
             status, 'get status',
             wfile=socket, destination='local'
         )
 
         # Network query with subset
-        ret = execute_command_with_options(
+        ret = al_exec(
             status, 'sql mydb "select avg(value) from sensors"',
             wfile=socket, destination='network', subset=True, timeout=60
         )
@@ -272,10 +288,10 @@ def execute_command_with_options(status, command, wfile=None,
     try:
         # Prepare command (same as http_server.prepare_commands)
         headers_dict = {'destination': destination, 'subset': subset, 'timeout': timeout}
-        commands_list = prepare_al_command(status, command, headers_dict)
+        commands_list = prepare_commands(status, command, headers_dict)
 
         # Execute commands (same as http_server.execute_al_commands)
-        ret_val = execute_al_commands_list(
+        ret_val = execute_al_commands(
             status, wfile, commands_list, io_buff, into_output, file_data
         )
 
@@ -285,52 +301,3 @@ def execute_command_with_options(status, command, wfile=None,
         err_msg = f"Command execution failed: {e}"
         status.add_error(err_msg)
         return process_status.ERR_process_failure
-
-
-def execute_command_simple(status, command, wfile=None, headers=None):
-    """
-    Simplified command execution for MCP server (no HTTP parsing).
-
-    This is a convenience wrapper around execute_command_with_options()
-    that extracts execution parameters from a headers dictionary.
-
-    Args:
-        status: ProcessStat object
-        command: EdgeLake command (may include 'run client' wrapper already)
-        wfile: Output socket
-        headers: Optional dict with execution options:
-            - 'destination': 'network', 'local', or 'ip:port'
-            - 'subset': Allow partial results (bool)
-            - 'timeout': Timeout in seconds (int)
-
-    Returns:
-        int: Return code
-
-    Examples:
-        # MCP server usage
-        ret = execute_command_simple(
-            status,
-            'sql mydb "select * from table"',
-            wfile=socket,
-            headers={'destination': 'network', 'timeout': 30}
-        )
-
-        # Simple local command
-        ret = execute_command_simple(status, 'get status', wfile=socket)
-    """
-    # Extract options from headers if provided
-    if headers:
-        destination = headers.get('destination')
-        subset = headers.get('subset', False)
-        timeout = headers.get('timeout')
-    else:
-        destination = None
-        subset = False
-        timeout = None
-
-    return execute_command_with_options(
-        status, command, wfile,
-        destination=destination,
-        subset=subset,
-        timeout=timeout
-    )

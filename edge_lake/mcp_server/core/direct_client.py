@@ -125,9 +125,18 @@ class EdgeLakeDirectClient:
                 status.add_error(err_msg)
 
             # Use shared execution layer (same logic as al_exec)
-            logger.debug(f"Calling shared command_execution layer for: {command}")
-            ret_val = self.command_execution.execute_command_simple(
-                status, command, socket, headers
+            logger.debug(f"Calling shared command_execution.al_exec() for: {command}")
+
+            # Extract execution options from headers
+            destination = headers.get('destination') if headers else None
+            subset = headers.get('subset') if headers else False
+            timeout = headers.get('timeout') if headers else 20
+
+            ret_val = self.command_execution.al_exec(
+                status, command, socket,
+                destination=destination,
+                subset=subset,
+                timeout=timeout
             )
 
             logger.debug(f"Command completed with return value: {ret_val}")

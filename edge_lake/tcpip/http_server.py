@@ -1138,7 +1138,11 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                 ret_val = self.error_wrong_method(status, http_method, command)
 
             else:
-                
+                # NOTE: http_server.prepare_commands() and execute_al_commands() have been
+                # refactored to use shared command_execution module. The HTTP handler still
+                # calls self.prepare_commands() and self.execute_al_commands() for now,
+                # but these could be replaced with direct calls to command_execution functions.
+
                 # Update commands_list with a list of commands (main command and commands placed in the msg body)
                 commands_list = []
                 into_output = get_value_from_headers(self.al_headers, "into")  # Push the output as HTML
@@ -1260,6 +1264,13 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # Update commands_list with a list of commands:
     # 1) the main command in the header
     # 2) Include secondary commands from the body
+    #
+    # NOTE: The core logic of this method has been extracted to command_execution.prepare_commands()
+    # for use by MCP server. This HTTP version includes additional features:
+    # - Message body parsing (self.get_msg_body)
+    # - File upload handling
+    # - Content-type detection
+    # - HTTP-specific error handling
     # =======================================================================================================================
     def prepare_commands(self, status, command, rest_cmd_words, commands_list, into_output):
         '''
@@ -1349,6 +1360,9 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # IP, Port List
     # Blockchain command
     # subset + timeout instructions: subset=true, timeout=10
+    #
+    # NOTE: The core logic has been extracted to command_execution.get_run_client(destination, subset, timeout)
+    # for use by MCP server. This HTTP version gets parameters from self.al_headers.
     # =======================================================================================================================
     def get_run_client(self):
 
@@ -1411,7 +1425,12 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                 offset = index + 1
 
     # =======================================================================================================================
-    # Execute the commands on the command_list and the commandon the header
+    # Execute the commands on the command_list and the command on the header
+    #
+    # NOTE: This logic has been extracted to command_execution.execute_al_commands()
+    # for use by MCP server. The HTTP version is identical except:
+    # - Uses self.wfile instead of wfile parameter
+    # - Uses status.add_keep_error instead of status.add_error
     # =======================================================================================================================
     def execute_al_commands(self, status, io_buff, commands_list, into_output, file_data):
         '''
