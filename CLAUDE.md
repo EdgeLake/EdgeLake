@@ -343,34 +343,43 @@ See `edge_lake/mcp/QUICK_START.md` for detailed testing instructions.
 
 **Shared Command Execution Layer** (`edge_lake/cmd/command_execution.py`):
 - Extracted core execution logic from `http_server.al_exec()` into reusable module
-- Directly mirrors `http_server.prepare_commands()` and `execute_al_commands()` logic
+- Uses **ORIGINAL function names** from http_server.py for clarity
 - **Key Functions:**
-  - `build_run_client_wrapper()` - Constructs run client wrapper (from `get_run_client()`)
-  - `should_wait_for_reply()` - Wait decision logic (from `prepare_commands()` line 1330-1336)
-  - `prepare_al_command()` - Simplified `prepare_commands()` without HTTP body parsing
-  - `execute_al_commands_list()` - Functional copy of `execute_al_commands()` (line 1416-1436)
-  - `execute_command_with_options()` - Combines prepare + execute (mirrors `al_exec()` flow)
+  - `get_run_client(destination, subset, timeout)` - Shared version of http_server.get_run_client()
+  - `should_wait_for_reply(command, has_run_client)` - Wait decision logic (from prepare_commands)
+  - `prepare_commands(status, command, headers_dict)` - Simplified prepare_commands without HTTP body parsing
+  - `execute_al_commands(status, wfile, commands_list, ...)` - Functional copy of http_server.execute_al_commands()
+  - `al_exec(status, command, wfile, destination, ...)` - Combines prepare + execute (mirrors http_server.al_exec)
 
 **MCP Client Refactoring** (`edge_lake/mcp_server/core/direct_client.py`):
-- Now uses shared `command_execution.execute_command_simple()`
+- Now uses shared `command_execution.al_exec()` - **same name as http_server!**
 - Fixes bugs: file command wait handling, missing native_api setup
 - Implements `status.add_error()` pattern for error logging (CLAUDE.md rule #3)
 - Provides same execution guarantees as REST API
 
+**HTTP Server Documentation** (`edge_lake/tcpip/http_server.py`):
+- Added comments documenting relationship to shared command_execution module
+- Notes which features are HTTP-specific (body parsing, file uploads, content-type detection)
+- Preserves all HTTP-specific logic in place
+
 **Architecture:**
 ```
-http_server.al_exec()          command_execution.py           MCP direct_client
-├── prepare_commands()    →    prepare_al_command()      →    execute_command_simple()
-│   ├── get_run_client()  →    build_run_client_wrapper()
-│   └── wait logic        →    should_wait_for_reply()
-└── execute_al_commands() →    execute_al_commands_list()
+http_server.py                command_execution.py          MCP direct_client
+├── al_exec()             →   al_exec()                 →   calls al_exec()
+├── prepare_commands()    →   prepare_commands()
+│   ├── get_run_client()  →   get_run_client()
+│   └── wait logic        →   should_wait_for_reply()
+└── execute_al_commands() →   execute_al_commands()
     ├── exec_al_cmd()
     └── exec_no_wait()
+
+SAME FUNCTION NAMES = MAXIMUM CLARITY
 ```
 
 **Benefits:**
-- ✅ **Uses al_exec intermediate code** - `prepare_al_command()` and `execute_al_commands_list()` mirror http_server methods
+- ✅ **Uses al_exec intermediate code** - Functions have **identical names** to http_server
 - ✅ **100% logic consistency** - MCP and REST use identical execution paths
+- ✅ **Same function names** - `get_run_client()`, `prepare_commands()`, `execute_al_commands()`, `al_exec()`
 - ✅ **Maintainability** - Changes to al_exec logic can be mirrored in command_execution.py
 - ✅ **Bug fixes** - File command wait, native_api setup, proper error handling
 - ✅ **Single source of truth** - All command execution flows through native_api
