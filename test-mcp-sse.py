@@ -479,11 +479,17 @@ class MCPSSETester:
             print(f"✗ query failed: {error_msg}")
             return False
         elif response and "result" in response:
-            print(f"✓ query successful")
             result = response["result"]
             content = result.get("content", [])
             if content:
                 text = content[0].get("text", "")
+
+                # Check if the content contains an error message
+                if text.startswith("Error:") or "failed with code" in text:
+                    print(f"✗ query failed: {text}")
+                    return False
+
+                print(f"✓ query successful")
                 try:
                     rows = json.loads(text)
                     if isinstance(rows, list):
@@ -502,6 +508,90 @@ class MCPSSETester:
             return True
         else:
             print(f"✗ query failed - no response")
+            return False
+
+    def test_query_aggregation(self) -> bool:
+        """Test query tool with aggregation functions (AVG, MIN, MAX, COUNT)"""
+        print(f"\n{'='*60}")
+        print("Test 9: query tool with aggregation")
+        print(f"{'='*60}")
+        print("  Tool: query")
+        print("  EdgeLake Command: run client () sql ... (distributed aggregation query)")
+        print("  Functions: AVG, MIN, MAX, COUNT")
+
+        # Determine which database and table to use
+        database = self.test_database or (self.discovered_databases[0] if self.discovered_databases else None)
+        table = self.test_table or (self.discovered_tables[0] if self.discovered_tables else None)
+
+        if not database or not table:
+            print(f"⚠ Skipping aggregation query - no database/table available")
+            print(f"  (No --database/--table specified and none discovered)")
+            return True
+
+        print(f"  Arguments: database={database}, table={table}")
+        print(f"  Select: avg(value), min(value), max(value), count(*)")
+
+        params = {
+            "name": "query",
+            "arguments": {
+                "database": database,
+                "table": table,
+                "select": [
+                    "avg(value) as average",
+                    "min(value) as minimum",
+                    "max(value) as maximum",
+                    "count(*) as total_rows"
+                ]
+            }
+        }
+
+        response = self.send_mcp_request("tools/call", params, timeout=35.0)
+
+        if response and "error" in response:
+            # Query failed with an error
+            error = response["error"]
+            error_msg = error.get("message", "Unknown error")
+            print(f"✗ aggregation query failed: {error_msg}")
+            return False
+        elif response and "result" in response:
+            result = response["result"]
+            content = result.get("content", [])
+            if content:
+                text = content[0].get("text", "")
+
+                # Check for empty response (the bug we're fixing)
+                if not text or text.strip() == "":
+                    print(f"✗ Got empty response (BUG: aggregation polling timeout)")
+                    return False
+
+                # Check if the content contains an error message
+                if text.startswith("Error:") or "failed with code" in text:
+                    print(f"✗ aggregation query failed: {text}")
+                    return False
+
+                print(f"✓ aggregation query successful")
+                try:
+                    data = json.loads(text)
+                    if isinstance(data, list) and len(data) > 0:
+                        agg_result = data[0]
+                        print(f"  Aggregation results:")
+                        if isinstance(agg_result, dict):
+                            for key, value in agg_result.items():
+                                print(f"    {key}: {value}")
+                        else:
+                            print(f"    {agg_result}")
+                    elif isinstance(data, dict):
+                        print(f"  Aggregation results:")
+                        for key, value in data.items():
+                            print(f"    {key}: {value}")
+                    else:
+                        print(f"  Response: {text[:200]}...")
+                except Exception as e:
+                    print(f"  Response parsing error: {e}")
+                    print(f"  Raw response: {text[:200]}...")
+            return True
+        else:
+            print(f"✗ aggregation query failed - no response")
             return False
 
     def run_all_tests(self) -> bool:
@@ -529,6 +619,7 @@ class MCPSSETester:
             ("5. Tool: list_database_schema", self.test_list_database_schema),
             ("6. Tool: get_schema", self.test_get_schema),
             ("7. Tool: query", self.test_query),
+            ("8. Tool: query with aggregation", self.test_query_aggregation),
         ]
 
         results = []

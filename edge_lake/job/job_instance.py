@@ -681,9 +681,30 @@ class JobInstance:
 
     # =======================================================================================================================
     # Get the prefix to the SQL statement
+    # For MESSAGE commands to operators, force format=json:list instead of format=mcp
+    # Operators need json:list for aggregation compatibility
     # =======================================================================================================================
     def get_sql_mesg_prefix(self):
-        return "sql " + self.job_info.select_parsed.remote_dbms + " "
+        # Get current format from conditions
+        try:
+            conditions = self.get_job_handle().get_conditions()
+            if conditions:
+                from edge_lake.generic import interpreter
+                format_type = interpreter.get_one_value_or_default(conditions, "format", "json")
+
+                # Replace format=mcp with format=json:list for operator queries
+                # Operators need json:list for proper aggregation
+                if format_type == "mcp":
+                    print(f"[DEBUG-FORMAT] Converting format=mcp to format=json:list for operator query")
+                    format_type = "json:list"
+
+                return f"sql {self.job_info.select_parsed.remote_dbms} format = {format_type} "
+            else:
+                print(f"[DEBUG-FORMAT] No conditions found, using default")
+                return "sql " + self.job_info.select_parsed.remote_dbms + " "
+        except Exception as e:
+            print(f"[DEBUG-FORMAT] Error in get_sql_mesg_prefix: {e}")
+            return "sql " + self.job_info.select_parsed.remote_dbms + " "
 
     # =======================================================================================================================
     # Get the Generic Query - this is a proprietary format to use by non-sql servers

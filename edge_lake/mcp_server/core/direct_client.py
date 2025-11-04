@@ -37,10 +37,11 @@ class EdgeLakeDirectClient:
 
         # Import EdgeLake modules
         try:
-            from edge_lake.cmd import member_cmd
+            from edge_lake.cmd import member_cmd, native_api
             from edge_lake.generic import process_status, params
 
             self.member_cmd = member_cmd
+            self.native_api = native_api
             self.process_status = process_status
             self.params = params
 
@@ -50,7 +51,7 @@ class EdgeLakeDirectClient:
             logger.error(f"Failed to import EdgeLake modules: {e}")
             raise
 
-    async def execute_command(self, command: str, headers: Optional[Dict[str, str]] = None, timeout: float = 30.0) -> Any:
+    async def execute_command(self, command: str, headers: Optional[Dict[str, str]] = None, timeout: float = 30.0, socket=None) -> Any:
         """
         Execute an EdgeLake command directly (synchronously).
 
@@ -58,6 +59,7 @@ class EdgeLakeDirectClient:
             command: EdgeLake command string
             headers: Optional headers (for compatibility, mostly ignored in direct mode)
             timeout: Command timeout in seconds (default: 30, currently not enforced)
+            socket: Optional socket for streaming large results (aggregated queries)
 
         Returns:
             Command result (returns empty string during shutdown instead of raising)
@@ -65,8 +67,9 @@ class EdgeLakeDirectClient:
         Note:
             Timeout is not currently enforced since member_cmd.process_cmd() is synchronous.
             In practice, EdgeLake commands either complete quickly or are async (run client).
+            Socket parameter enables streaming for aggregated queries that write to socket.
         """
-        logger.debug(f"Executing command directly: {command}")
+        logger.debug(f"Executing command directly: {command} (socket={'provided' if socket else 'none'})")
 
         # Check if client is shutting down - return empty result instead of raising
         if self._shutdown:
@@ -75,18 +78,19 @@ class EdgeLakeDirectClient:
 
         try:
             # Call synchronously - no ThreadPool needed
-            return self._sync_execute(command, headers)
+            return self._sync_execute(command, headers, socket)
         except Exception as e:
             logger.error(f"Command execution failed: {e}")
             raise
 
-    def _sync_execute(self, command: str, headers: Optional[Dict[str, str]] = None) -> Any:
+    def _sync_execute(self, command: str, headers: Optional[Dict[str, str]] = None, socket=None) -> Any:
         """
         Synchronous execution in thread pool.
 
         Args:
             command: EdgeLake command
             headers: Optional headers
+            socket: Optional socket for streaming large results
 
         Returns:
             Command result
@@ -115,16 +119,23 @@ class EdgeLakeDirectClient:
             # Set REST caller flag so output goes through JSON formatting path
             # instead of struct_print() which outputs Python dict format
             # Result will be available via get_result_set() after command completes
-            status.get_job_handle().set_rest_caller()
-            # Note: No need to set_output_socket() - we'll get result from get_result_set()
+            j_handle = status.get_job_handle()
+            j_handle.set_rest_caller()
 
+            # Set output socket if provided - enables streaming for aggregated queries
+            # query_summary() will write results directly to socket via OutputManager
+            if socket:
+                j_handle.set_output_socket(socket)
+                logger.debug("Output socket set for streaming aggregated query results")
+
+            is_async_command = 'run client' in command.lower()
+
+            print(f"[DEBUG-COMMAND] Command: {command}")
+            print(f"[DEBUG-COMMAND] is_async_command: {is_async_command}")
             logger.debug(f"Calling member_cmd.process_cmd for: {command}")
 
             # Capture stdout as fallback (for commands that still print)
             stdout_capture = io.StringIO()
-
-            # Check if this is an async command (run client)
-            is_async_command = 'run client' in command.lower()
 
             with redirect_stdout(stdout_capture):
                 # Execute command via member_cmd
@@ -137,35 +148,28 @@ class EdgeLakeDirectClient:
                     io_buffer_in=io_buff
                 )
 
-                # For async commands (run client), poll for results with exponential backoff
-                if is_async_command and ret_val == self.process_status.SUCCESS:
-                    import time
-                    logger.debug("Async command detected, polling for results...")
-
-                    max_wait = 5.0  # Maximum 5 seconds
-                    poll_interval = 0.05  # Start with 50ms
-                    elapsed = 0
-
-                    while elapsed < max_wait:
-                        # Check if JSON results have appeared
-                        current_output = stdout_capture.getvalue()
-                        if '{"Query"' in current_output or '{"Statistics"' in current_output:
-                            logger.debug(f"Results appeared after {elapsed:.3f}s")
-                            break
-
-                        time.sleep(poll_interval)
-                        elapsed += poll_interval
-                        # Exponential backoff, max 500ms per poll
-                        poll_interval = min(poll_interval * 1.5, 0.5)
-
-                    if elapsed >= max_wait:
-                        logger.warning(f"Async command timed out after {max_wait}s")
+            # For async commands (run client), wait for reply like REST does
+            if is_async_command and ret_val == self.process_status.SUCCESS:
+                logger.debug("Async command detected, waiting for reply...")
+                subset = status.is_subset()
+                timeout_sec = 20  # Default timeout like REST uses
+                ret_val = self.native_api.wait_for_reply(status, command, subset, timeout_sec)
 
             logger.debug(f"Command completed with return value: {ret_val}")
 
             if ret_val == self.process_status.SUCCESS:
                 # Get result from job handle (set via set_result_set)
                 result_set = status.get_job_handle().get_result_set()
+
+                # Debug logging for aggregation troubleshooting
+                print(f"[DEBUG] Result set type: {type(result_set)}, length: {len(result_set) if result_set else 0}")
+                if result_set:
+                    print(f"[DEBUG] Result set preview: {str(result_set)[:200]}")
+                print(f"[DEBUG] Buffer size: {len(io_buff)}, stdout size: {len(stdout_capture.getvalue())}")
+                logger.debug(f"Result set type: {type(result_set)}, length: {len(result_set) if result_set else 0}")
+                if result_set:
+                    logger.debug(f"Result set preview: {str(result_set)[:200]}")
+                logger.debug(f"Buffer size: {len(io_buff)}, stdout size: {len(stdout_capture.getvalue())}")
 
                 # Extract result from result_set, buffer, or stdout
                 result = self._extract_result(status, io_buff, command, stdout_capture.getvalue(), result_set)

@@ -53,7 +53,7 @@ tools:
       type: "sql"
       method: "query"
       build_sql: true
-      format: "json"  # SQL queries use format=json (not mcp)
+      format: "mcp"  # SQL queries use format=mcp (handled like json:list, works with socket streaming)
       headers:
         destination: "network"
     input_schema:

@@ -32,13 +32,14 @@ class ToolExecutor:
         self.command_builder = command_builder
         self.config = config
     
-    async def execute_tool(self, name: str, arguments: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def execute_tool(self, name: str, arguments: Dict[str, Any], socket=None) -> List[Dict[str, Any]]:
         """
         Execute a tool by name with given arguments.
 
         Args:
             name: Tool name
             arguments: Tool arguments
+            socket: Optional socket for streaming large results (aggregated queries)
 
         Returns:
             List of TextContent dicts for MCP response
@@ -68,7 +69,7 @@ class ToolExecutor:
             else:
                 # All tools (including SQL): use member_cmd.process_cmd() path
                 # This provides consistent behavior for local and network queries
-                result = await self._execute_edgelake_command(tool_config, arguments, self.client)
+                result = await self._execute_edgelake_command(tool_config, arguments, self.client, socket)
 
             # Testing mode: log final response
             if self.config.testing_mode:
@@ -121,7 +122,7 @@ class ToolExecutor:
         return json.dumps(info, indent=2)
 
     async def _execute_edgelake_command(self, tool_config, arguments: Dict[str, Any],
-                                       client) -> str:
+                                       client, socket=None) -> str:
         """
         Execute EdgeLake command.
 
@@ -129,6 +130,7 @@ class ToolExecutor:
             tool_config: Tool configuration
             arguments: Tool arguments
             client: EdgeLake client to use
+            socket: Optional socket for streaming large results
 
         Returns:
             Result string
@@ -169,8 +171,8 @@ class ToolExecutor:
         if self.config.testing_mode:
             logger.info(f"[TESTING] Command sent to member_cmd.process_cmd(): {command}")
 
-        # Execute command
-        result = await client.execute_command(command, headers=headers)
+        # Execute command with socket for streaming large results
+        result = await client.execute_command(command, headers=headers, socket=socket)
 
         # Testing mode: log raw output from member_cmd
         if self.config.testing_mode:

@@ -348,7 +348,12 @@ class SSETransport:
             }).encode('utf-8'))
 
             # Process message synchronously (no new thread)
-            self._process_message_sync(session_id, message)
+            # Pass connection's handler socket for streaming large results
+            with self.connection_lock:
+                connection_for_socket = self.connections.get(session_id)
+                socket = connection_for_socket.handler.wfile if connection_for_socket else None
+
+            self._process_message_sync(session_id, message, socket)
 
             return True
 
@@ -360,7 +365,7 @@ class SSETransport:
                 pass
             return False
 
-    def _process_message_sync(self, session_id: str, message: Dict[str, Any]):
+    def _process_message_sync(self, session_id: str, message: Dict[str, Any], socket=None):
         """
         Process MCP message synchronously (no new thread).
 
@@ -374,10 +379,12 @@ class SSETransport:
         Args:
             session_id: Session identifier
             message: JSON-RPC message
+            socket: Optional handler socket for streaming large results
         """
         try:
             # Process message via MCP server (synchronous)
-            response = self.mcp_server.process_message(message)
+            # Pass socket for streaming aggregated query results
+            response = self.mcp_server.process_message(message, socket)
 
             # Queue response for SSE delivery
             with self.connection_lock:

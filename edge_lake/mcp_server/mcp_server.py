@@ -107,7 +107,7 @@ class MCPServer:
 
         logger.info("MCP Server shutdown complete")
 
-    def process_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
+    def process_message(self, message: Dict[str, Any], socket=None) -> Dict[str, Any]:
         """
         Process incoming MCP message (JSON-RPC).
 
@@ -116,6 +116,7 @@ class MCPServer:
 
         Args:
             message: JSON-RPC message from client
+            socket: Optional handler socket for streaming large results
 
         Returns:
             JSON-RPC response
@@ -162,7 +163,8 @@ class MCPServer:
                 tool_name = params.get('name')
                 arguments = params.get('arguments', {})
 
-                content = asyncio.run(self._call_tool(tool_name, arguments))
+                # Pass socket for streaming aggregated query results
+                content = asyncio.run(self._call_tool(tool_name, arguments, socket))
                 return {
                     "jsonrpc": "2.0",
                     "id": msg_id,
@@ -205,13 +207,14 @@ class MCPServer:
         logger.debug(f"Returning {len(tools)} tools")
         return tools
 
-    async def _call_tool(self, name: str, arguments: dict) -> List[Dict[str, Any]]:
+    async def _call_tool(self, name: str, arguments: dict, socket=None) -> List[Dict[str, Any]]:
         """
         Execute a tool.
 
         Args:
             name: Tool name
             arguments: Tool arguments
+            socket: Optional handler socket for streaming large results
 
         Returns:
             List of content items (text responses)
@@ -219,8 +222,8 @@ class MCPServer:
         logger.debug(f"Calling tool '{name}' with arguments: {arguments}")
 
         try:
-            # Execute tool
-            result = await self.tool_executor.execute_tool(name, arguments)
+            # Execute tool with socket for streaming aggregated query results
+            result = await self.tool_executor.execute_tool(name, arguments, socket)
 
             # result is already in correct format: [{"type": "text", "text": "..."}]
             return result

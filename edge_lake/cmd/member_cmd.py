@@ -132,8 +132,7 @@ format_values = {
                     "json:output" : 0,      # Output as JSON rows
                     "json:list" : 0,        # Output as a JSON list
                     "table" : 0,            # Output as a table
-                    # Note: format=mcp is NOT supported for SQL queries
-                    # Use format=mcp only for metadata commands (blockchain get, get version, etc.)
+                    "mcp" : 0,              # Output for MCP protocol (handled like json:list internally)
 }
 dest_values = {
                     "stdout" : 0,             # Output to stdout
