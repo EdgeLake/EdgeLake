@@ -958,7 +958,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # https://docs.python.org/3/library/http.client.html
     # =======================================================================================================================
     def do_POST(self):
-
+        status = process_status.ProcessStat()
         # MCP messages endpoint routing (before profiler to minimize overhead)
         if self.path.startswith('/mcp/messages/'):
             try:
@@ -968,7 +968,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
             except ImportError:
                 pass  # MCP not available, continue with normal handling
             except Exception as e:
-                logger.error(f"MCP messages endpoint error: {e}")
+                status.add_error(f"MCP messages endpoint error: {e}")
                 self.send_error(500, f"MCP error: {e}")
                 return
 
@@ -977,7 +977,6 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
         self.msg_body = None
         self.al_headers = set_al_headers(self.headers._headers)
-        status = process_status.ProcessStat()
         err_msg = None
         user_agent, version, user_id = self.get_client("post")
 

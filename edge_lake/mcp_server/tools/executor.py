@@ -24,7 +24,7 @@ class ToolExecutor:
         Initialize tool executor.
 
         Args:
-            client: EdgeLakeClient instance
+            client: EdgeLakeDirectClient instance
             command_builder: CommandBuilder instance
             config: Config instance
         """
