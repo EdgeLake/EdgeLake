@@ -14,6 +14,7 @@ This document provides detailed sequence diagrams for all MCP query processing f
 
 ## Table of Contents
 
+0. [**Network Flow with Aggregation (Complete)**](#network-flow-with-aggregation-complete) ⭐ **START HERE**
 1. [Flow 1: MCP on Operator → Local Database](#flow-1-mcp-on-operator--local-database)
    - [1a: Small Result (No Blocking)](#flow-1a-small-result-no-blocking)
    - [1b: Large Result (Streaming)](#flow-1b-large-result-streaming)
@@ -26,6 +27,239 @@ This document provides detailed sequence diagrams for all MCP query processing f
 4. [Flow 4: MCP on Query Node → Network (Consolidation)](#flow-4-mcp-on-query-node--network-consolidation)
    - [4a: Small Result (No Blocking)](#flow-4a-small-result-no-blocking)
    - [4b: Large Result (Blocking)](#flow-4b-large-result-blocking)
+
+---
+
+## Network Flow with Aggregation (Complete)
+
+**⭐ This is the definitive end-to-end flow showing ALL components, threads, and data transformations.**
+
+**Scenario**: MCP client (Claude Desktop) queries Query Node → distributes to 2 Operators → aggregation with GROUP BY
+
+**Key Features Shown**:
+- Threading model (HTTP workers, MCP workers, TCP threads)
+- Format transformations (format=mcp → json:list)
+- Query transformation (AVG → SUM+COUNT)
+- Consolidation in system_query database
+- Socket streaming with BytesIO buffer
+- Complete call stack from client to database
+
+```mermaid
+sequenceDiagram
+    participant Client as MCP Client<br/>(Claude Desktop)
+    participant HTTP as HTTP Server<br/>(port 32049)<br/>⚡ Thread Pool
+    participant SSE as SSE Handler<br/>⚡ Worker Thread
+    participant MCP as MCP Server<br/>⚡ Same Thread
+    participant Exec as Tool Executor<br/>⚡ Same Thread
+    participant DirClient as Direct Client<br/>⚡ Same Thread
+    participant CMD as member_cmd<br/>⚡ Same Thread
+    participant Parser as select_parser<br/>⚡ Same Thread
+    participant TCP as TCP Client<br/>⚡ New Thread per Op
+    participant OP1 as Operator 1<br/>⚡ TCP Handler
+    participant OP2 as Operator 2<br/>⚡ TCP Handler
+    participant SYSDB as system_query DB<br/>(Query Node)
+    participant Socket as BytesIO Buffer<br/>(Captures Output)
+
+    Client->>HTTP: POST /mcp/messages/{session_id}
+    Note over Client,HTTP: JSON-RPC: tools/call<br/>name: "query"<br/>database: "new_company"<br/>table: "rand_data"<br/>select: ["avg(value)", "count(*)"]
+
+    HTTP->>SSE: Route to SSE handler
+    Note over HTTP: HTTP worker picks up request<br/>from thread pool
+
+    SSE->>SSE: Create BytesIO buffer
+    Note over SSE: socket_buffer = BytesIO()<br/>Will capture streaming output
+
+    SSE->>MCP: process_message(message, socket_buffer)
+    Note over SSE: Pass buffer for output capture
+
+    MCP->>MCP: Parse JSON-RPC
+    Note over MCP: Extract: method="tools/call"<br/>params={name, arguments}
+
+    MCP->>Exec: execute_tool("query", arguments)
+
+    Exec->>Exec: build_sql_query(arguments)
+    Note over Exec: SQL = "SELECT avg(value), count(*)<br/>FROM rand_data"<br/>format = "mcp"
+
+    Exec->>Exec: build_command()
+    Note over Exec: Add destination header:<br/>headers = {'destination': 'network'}
+
+    Exec->>Exec: Format command
+    Note over Exec: "run client () sql new_company<br/>format=mcp \"SELECT avg(value)...\""
+
+    Exec->>DirClient: execute_command(cmd, headers, socket_buffer)
+
+    DirClient->>DirClient: Create ProcessStat + io_buff
+    Note over DirClient: status = ProcessStat()<br/>io_buff = bytearray(32768)
+
+    DirClient->>DirClient: Set REST caller flag
+    Note over DirClient: j_handle.set_rest_caller()<br/>(Ensures JSON format, not Python dict)
+
+    DirClient->>DirClient: Set output socket
+    Note over DirClient: j_handle.set_output_socket(socket_buffer)<br/>Query results will stream to buffer
+
+    DirClient->>CMD: process_cmd(status, command, io_buff)
+
+    CMD->>CMD: Parse command words
+    Note over CMD: cmd_words = ["run", "client", "()", "sql",<br/>"new_company", "format", "=", "mcp", "SELECT..."]
+
+    CMD->>CMD: get_sql_processing_info()
+    Note over CMD: Extract: dbms="new_company"<br/>conditions={'format': ['mcp']}<br/>sql="SELECT avg(value)..."
+
+    rect rgb(200, 220, 255)
+        Note over CMD: FORMAT CONVERSION:<br/>Detect format=['mcp']<br/>Convert to ['json:list']<br/>conditions['format'] = ['json:list']
+    end
+
+    CMD->>Parser: select_parser(sql)
+    Note over Parser: Parse SQL:<br/>- Detect AVG() function<br/>- Detect aggregation<br/>- Transform for distribution
+
+    rect rgb(255, 220, 200)
+        Note over Parser: QUERY TRANSFORMATION:<br/>AVG(value) → SUM(value), COUNT(value)<br/>For distributed aggregation
+    end
+
+    Parser-->>CMD: Transformed SQL
+    Note over CMD: Operator query:<br/>"SELECT SUM(value), COUNT(value)<br/>FROM rand_data"
+
+    CMD->>CMD: Resolve target operators
+    Note over CMD: Query metadata/blockchain:<br/>Find operators with rand_data table<br/>→ [Operator1, Operator2]
+
+    par Distribute to Operator 1
+        CMD->>TCP: send_to_operator1()
+        Note over TCP: ⚡ New thread spawned<br/>for async TCP send
+
+        TCP->>OP1: TCP Message
+        Note over TCP,OP1: Header: command length, data length<br/>Command: "sql new_company format=json:list<br/>        SELECT SUM(value), COUNT(value)..."<br/>Data: query_info (metadata)
+
+        OP1->>OP1: Receive TCP message
+        Note over OP1: ⚡ TCP handler thread<br/>Detects: cmd_words[1] == "message"<br/>Sets: replace_avg=True
+
+        OP1->>OP1: member_cmd.process_cmd()
+        Note over OP1: Execute transformed query locally
+
+        OP1->>OP1: Local DBMS query
+        Note over OP1: SELECT SUM(value), COUNT(value)<br/>FROM rand_data
+
+        OP1-->>TCP: {"Query": [{"sum": 1000, "count": 10}]}
+        Note over OP1: Format = json:list<br/>Returns {"Query": [...]} wrapper
+
+        TCP-->>CMD: Store result in queue
+    and Distribute to Operator 2
+        CMD->>TCP: send_to_operator2()
+        Note over TCP: ⚡ New thread spawned
+
+        TCP->>OP2: TCP Message
+        Note over TCP,OP2: Same format as Operator 1
+
+        OP2->>OP2: Receive TCP message
+        Note over OP2: ⚡ TCP handler thread
+
+        OP2->>OP2: member_cmd.process_cmd()
+
+        OP2->>OP2: Local DBMS query
+        Note over OP2: SELECT SUM(value), COUNT(value)<br/>FROM rand_data
+
+        OP2-->>TCP: {"Query": [{"sum": 1500, "count": 15}]}
+
+        TCP-->>CMD: Store result in queue
+    end
+
+    CMD->>CMD: Wait for all operators
+    Note over CMD: Poll results queue<br/>Until all operators replied<br/>or timeout
+
+    CMD->>CMD: Check query type
+    Note over CMD: is_consolidation_required() → TRUE<br/>code_status = 4<br/>(Requires aggregation)
+
+    rect rgb(220, 255, 220)
+        Note over CMD: CONSOLIDATION PHASE:<br/>Store operator results in system_query
+    end
+
+    CMD->>CMD: insert_query_rows()
+    Note over CMD: map_results_to_insert()<br/>Parse {"Query": [...]} format
+
+    CMD->>SYSDB: INSERT INTO temp_table
+    Note over SYSDB: Row 1: {sum: 1000, count: 10}<br/>Row 2: {sum: 1500, count: 15}
+
+    SYSDB-->>CMD: OK (2 rows inserted)
+
+    CMD->>CMD: Build final aggregation query
+    Note over CMD: "SELECT SUM(sum)/SUM(count) AS avg_value,<br/>       SUM(count) AS total_count<br/>FROM temp_table"
+
+    CMD->>CMD: query_local_dbms("system_query", final_sql)
+
+    CMD->>SYSDB: Execute final query
+
+    SYSDB-->>CMD: {"Query": [{"avg_value": 104.17, "total_count": 25}]}
+
+    rect rgb(255, 255, 200)
+        Note over CMD: SOCKET STREAMING:<br/>Results written to socket_buffer<br/>via OutputManager
+    end
+
+    CMD->>Socket: Write result to BytesIO
+    Note over Socket: OutputManager formats output<br/>Writes to socket_buffer
+
+    CMD-->>DirClient: Return ""
+    Note over CMD: Query results already in socket,<br/>return empty string
+
+    DirClient->>DirClient: Check result_set
+    Note over DirClient: result_set is empty<br/>(Results streamed to socket)
+
+    DirClient-->>Exec: Return ""
+
+    Exec->>Exec: Extract socket data
+    Note over Exec: socket_text = socket_buffer.getvalue()<br/>Read streamed output
+
+    Exec->>Exec: Parse response
+    Note over Exec: result = json.loads(socket_text)<br/>Extract array from {"Query": [...]}
+
+    Exec-->>MCP: [{"type": "text", "text": "[{result}]"}]
+
+    MCP->>MCP: Format JSON-RPC response
+    Note over MCP: {"jsonrpc": "2.0",<br/> "result": {"content": [...]}}
+
+    MCP-->>SSE: Return response
+
+    SSE->>SSE: Format as SSE event
+    Note over SSE: "data: {json_rpc_response}\n\n"
+
+    SSE-->>HTTP: Write to HTTP response stream
+
+    HTTP-->>Client: SSE event
+    Note over Client: Receives aggregated result:<br/>[{"avg_value": 104.17, "total_count": 25}]
+```
+
+### Key Observations
+
+**Threading Model**:
+1. **HTTP Worker Thread**: Handles initial POST request from thread pool
+2. **SSE Handler**: Runs on same HTTP worker thread (no new thread)
+3. **MCP Server**: Synchronous processing on same thread
+4. **Direct Client**: Synchronous call to member_cmd on same thread
+5. **TCP Clients**: NEW threads spawned for each operator (async distribution)
+6. **Operator TCP Handlers**: Separate threads on operator nodes
+
+**Format Transformations**:
+1. **Client → Query Node**: format=mcp specified in tool arguments
+2. **Query Node Processing**: mcp → json:list conversion (line 3670 in member_cmd.py)
+3. **Query → Operators**: format=json:list sent via TCP
+4. **Operators → Query**: {"Query": [...]} wrapper required for consolidation
+5. **Query → Client**: Unwrapped to plain array `[...]`
+
+**Query Transformations**:
+1. **Original**: `SELECT avg(value), count(*) FROM rand_data`
+2. **Transformed for Operators**: `SELECT SUM(value), COUNT(value) FROM rand_data`
+3. **Final Consolidation**: `SELECT SUM(sum)/SUM(count), SUM(count) FROM temp_table`
+
+**Critical Components**:
+- **BytesIO Buffer**: Captures streaming output without STDOUT pollution
+- **system_query DB**: Temporary storage for consolidation
+- **OutputManager**: Handles format unwrapping ({"Query": [...]} → [...])
+- **member_cmd.process_cmd()**: Unified path for all query types
+
+**Why This Works**:
+1. Socket streaming avoids STDOUT capture (no debug pollution)
+2. format=mcp → json:list conversion ensures operator compatibility
+3. {"Query": [...]} wrapper required by map_results_to_insert()
+4. Consolidation via system_query enables distributed aggregation
+5. BytesIO buffer captures results without corrupting HTTP response
 
 ---
 

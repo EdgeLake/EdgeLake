@@ -314,7 +314,16 @@ class MCPSSETester:
                 try:
                     status_data = json.loads(text)
                     if isinstance(status_data, dict):
-                        print(f"  Status fields: {', '.join(list(status_data.keys())[:5])}")
+                        print(f"  Node Status:")
+                        # Show all fields with their values
+                        for key, value in status_data.items():
+                            # Format value for display
+                            if isinstance(value, dict):
+                                print(f"    {key}: {json.dumps(value, indent=6)}")
+                            elif isinstance(value, list):
+                                print(f"    {key}: [{len(value)} items]")
+                            else:
+                                print(f"    {key}: {value}")
                     print(f"  Response size: {len(text)} bytes")
                 except:
                     print(f"  Response preview: {text[:150]}...")
