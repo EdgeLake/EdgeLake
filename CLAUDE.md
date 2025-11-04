@@ -339,6 +339,26 @@ See `edge_lake/mcp/QUICK_START.md` for detailed testing instructions.
 - **Code Review**: All http_server.py changes reviewed to prevent REST regressions
 - **Documentation**: See `edge_lake/mcp_server/README.md` for complete guide
 
+### Recent Refactoring (2025-01-04)
+
+**Shared Command Execution Layer** (`edge_lake/cmd/command_execution.py`):
+- Extracted core execution logic from `http_server.al_exec()` into reusable module
+- Both REST API and MCP server now use identical command execution path
+- Provides: `build_run_client_wrapper()`, `should_wait_for_reply()`, `execute_command_with_options()`
+- Ensures consistent wait behavior, file command handling, and job management
+
+**MCP Client Refactoring** (`edge_lake/mcp_server/core/direct_client.py`):
+- Now uses shared `command_execution.execute_command_simple()`
+- Fixes bugs: file command wait handling, missing native_api setup
+- Implements `status.add_error()` pattern for error logging (CLAUDE.md rule #3)
+- Provides same execution guarantees as REST API
+
+**Benefits:**
+- ✅ Consolidates on al_exec logic (management requirement)
+- ✅ Fixes potential bugs in MCP wait logic
+- ✅ Single source of truth for command execution
+- ✅ Easier to maintain and test
+
 ### TODO - Next Session
 
 1. **Deploy to Operator Nodes** (HIGH PRIORITY)
@@ -354,7 +374,12 @@ See `edge_lake/mcp/QUICK_START.md` for detailed testing instructions.
    - Confirm format=mcp → json:list conversion works across all nodes
    - Test simple SELECT and aggregation queries (AVG, MIN, MAX, COUNT)
 
-3. **Phase 2: Block Transport** (LOWER PRIORITY)
+3. **Optional: Refactor http_server.al_exec() to use shared layer**
+   - Low priority - current implementation works
+   - Would further consolidate code and ensure 100% consistency
+   - Requires full REST API regression testing
+
+4. **Phase 2: Block Transport** (LOWER PRIORITY)
    - Implement chunked delivery for large query results (>10MB)
    - Integrate with message_server.py
    - See `edge_lake/mcp_server/IMPLEMENTATION_PLAN.md` for details
