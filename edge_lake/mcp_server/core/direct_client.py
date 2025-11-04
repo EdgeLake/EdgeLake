@@ -1,8 +1,8 @@
 """
 EdgeLake Direct Client
 
-Direct integration client for embedded MCP server - calls member_cmd.process_cmd()
-directly without HTTP overhead. Uses socket streaming like HTTP REST.
+Direct integration client for embedded MCP server - uses shared command_execution
+layer for consistency with REST API. Handles status management and error logging.
 
 License: Mozilla Public License 2.0
 """
@@ -19,8 +19,8 @@ class EdgeLakeDirectClient:
     """
     Direct integration client for EdgeLake MCP server.
 
-    Calls member_cmd.process_cmd() directly (synchronously) with socket streaming.
-    Architecture matches HTTP REST server - no stdout capture, results stream to socket.
+    Uses shared command_execution layer for consistency with REST API al_exec().
+    Manages status objects for proper error tracking and socket management.
     """
 
     def __init__(self, max_workers: int = None):
@@ -34,18 +34,21 @@ class EdgeLakeDirectClient:
 
         # Import EdgeLake modules
         try:
-            from edge_lake.cmd import member_cmd, native_api
+            from edge_lake.cmd import member_cmd, native_api, command_execution
             from edge_lake.generic import process_status, params
 
             self.member_cmd = member_cmd
             self.native_api = native_api
+            self.command_execution = command_execution
             self.process_status = process_status
             self.params = params
 
             logger.debug("EdgeLake direct client initialized")
 
         except ImportError as e:
-            logger.error(f"Failed to import EdgeLake modules: {e}")
+            # Can't use status.add_error here - no status object yet
+            err_msg = f"Failed to import EdgeLake modules: {e}"
+            logger.error(err_msg)
             raise
 
     async def execute_command(self, command: str, headers: Optional[Dict[str, str]] = None, timeout: float = 30.0, socket=None) -> Any:
@@ -86,89 +89,74 @@ class EdgeLakeDirectClient:
 
     def _sync_execute(self, command: str, headers: Optional[Dict[str, str]] = None, socket=None) -> Any:
         """
-        Execute command synchronously with socket streaming (like HTTP REST).
+        Execute command using SHARED command_execution layer (same as al_exec).
 
         Args:
             command: EdgeLake command
-            headers: Optional headers
+            headers: Optional headers with 'destination', 'subset', 'timeout'
             socket: Socket for streaming results
 
         Returns:
             Command result (from result_set for non-query commands, empty for socket-streamed queries)
+
+        Note:
+            Now uses shared command_execution.execute_command_simple() which provides:
+            - Identical wait logic as http_server.al_exec()
+            - Proper file command handling (no wait)
+            - Correct native_api wrapper usage (exec_al_cmd vs exec_no_wait)
+            - Proper job management (end_job, status reset)
         """
         logger.debug(f"Starting sync execution of: {command}")
 
+        # Create status object
+        status = self.process_status.ProcessStat()
+
         try:
-            # Create status and buffer objects
-            status = self.process_status.ProcessStat()
-
-            # Get buffer size (use default if not initialized yet)
-            buff_size_str = self.params.get_param("io_buff_size")
-            if not buff_size_str or buff_size_str == '':
-                buff_size = 32768  # Default 32KB buffer
-                logger.warning("io_buff_size not initialized, using default: 32768")
-            else:
-                buff_size = int(buff_size_str)
-            io_buff = bytearray(buff_size)
-
-            # Set REST caller flag for JSON formatting (not struct_print Python dict format)
+            # Set REST caller flag for JSON formatting
             j_handle = status.get_job_handle()
             j_handle.set_rest_caller()
 
-            # Set output socket - enables direct streaming like HTTP REST
-            # Query results write to socket via OutputManager, bypassing result_set
+            # Set output socket for streaming results
             if socket:
                 j_handle.set_output_socket(socket)
                 logger.debug("Output socket set for streaming results")
+            else:
+                err_msg = f"No socket provided for command: {command}, results may be lost"
+                status.add_error(err_msg)
 
-            is_async_command = 'run client' in command.lower()
-            logger.debug(f"Calling member_cmd.process_cmd for: {command} (async={is_async_command})")
-
-            # Execute command via member_cmd (no stdout capture - socket gets output)
-            ret_val = self.member_cmd.process_cmd(
-                status,
-                command=command,
-                print_cmd=False,
-                source_ip=None,
-                source_port=None,
-                io_buffer_in=io_buff
+            # Use shared execution layer (same logic as al_exec)
+            logger.debug(f"Calling shared command_execution layer for: {command}")
+            ret_val = self.command_execution.execute_command_simple(
+                status, command, socket, headers
             )
-
-            # For async commands (run client), wait for reply like HTTP REST does
-            if is_async_command and ret_val == self.process_status.SUCCESS:
-                logger.debug("Async command detected, waiting for reply...")
-                subset = status.is_subset()
-                timeout_sec = 20  # Default timeout
-                ret_val = self.native_api.wait_for_reply(status, command, subset, timeout_sec)
 
             logger.debug(f"Command completed with return value: {ret_val}")
 
+            # Handle results
             if ret_val == self.process_status.SUCCESS:
-                # For queries with socket: results already streamed to socket, return empty
-                # For non-query commands: results in result_set
                 result_set = status.get_job_handle().get_result_set()
 
                 if result_set:
                     logger.debug(f"Result set available: {len(result_set)} bytes")
-                    # Parse and return result_set (non-query commands)
                     return self._parse_result_set(result_set)
                 else:
                     logger.debug("No result_set (results streamed to socket)")
-                    # Query results streamed to socket, return empty string
                     return ""
 
             elif ret_val == 141:
                 # Error code 141: EdgeLake not ready yet
-                logger.warning(f"EdgeLake not ready for command '{command}' (code 141)")
+                err_msg = f"EdgeLake not ready for command '{command}' (code 141)"
+                status.add_error(err_msg)
                 return ""
             else:
-                # Command failed
+                # Command failed - get error from status
                 error_msg = status.get_saved_error() or f"Command failed with code {ret_val}"
-                logger.error(f"Command execution failed: {error_msg}")
+                status.add_error(error_msg)
                 raise Exception(error_msg)
 
         except Exception as e:
-            logger.error(f"Error executing command '{command}': {e}", exc_info=True)
+            err_msg = f"Error executing command '{command}': {e}"
+            status.add_error(err_msg)
             raise
 
     def _parse_result_set(self, result_set: str) -> Any:
