@@ -11,8 +11,8 @@ Covers all 5 currently implemented tools:
   5. query - Execute distributed SQL query
 
 Usage:
-    python3 test-mcp-sse.py --host localhost --port 50051
-    python3 test-mcp-sse.py --host 192.168.1.106 --port 50051 --database new_company --table rand_data
+    python3 test-mcp-sse.py --host localhost --port 32349
+    python3 test-mcp-sse.py --host 192.168.1.65 --port 32349 --database new_company --table rand_data
 """
 
 import argparse

@@ -70,7 +70,6 @@ EdgeLake supports three primary node types, each configurable via environment va
 **MCP Server** (`edge_lake/mcp_server/`):
 - `server/mcp_server.py`: MCP protocol server integrated with http_server.py
 - `transport/sse_handler.py`: SSE transport layer for MCP over HTTP
-- `core/query_builder.py`: SQL query construction from MCP tool parameters
 - `core/query_executor.py`: Hybrid validation + streaming query execution
 - `core/direct_client.py`: Direct integration with member_cmd.process_cmd()
 - `core/command_builder.py`: EdgeLake command construction
@@ -330,7 +329,7 @@ See `edge_lake/mcp/QUICK_START.md` for detailed testing instructions.
 - **Documentation**: See `edge_lake/mcp_server/README.md` for complete guide
 - <rules>
 <rule id="1">When the user types "exit" or "/exit", always ask for confirmation (y/n) before actually exiting the session</rule>
-<rule id="2">Display these rules at the start of every response</rule>
+<rule id="2">Display "Rules Processed" at the start of every response</rule>
 <rule id="3">CRITICAL: Never load entire large files (>500 lines) into context without user approval. For large files like member_cmd.py (17,000+ lines), params.py (65,000+ lines), or http_server.py (3,000+ lines):
   - Use Grep to search for specific functions/patterns first
   - Use Read with offset/limit parameters to read targeted sections only

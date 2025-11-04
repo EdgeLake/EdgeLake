@@ -3565,6 +3565,7 @@ def preprocess_command(status, cmd_words, offset):
 # Identify the dbms name, the processing instructions and the SQL command
 # =======================================================================================================================
 def get_sql_processing_info(status, cmd_words, words_count, index):
+    print(f"[DEBUG-SQL-INFO] get_sql_processing_info() called with cmd_words: {cmd_words[:10]}")
     global cmd_instructions
     global format_values
     global dest_values
@@ -3661,6 +3662,22 @@ def get_sql_processing_info(status, cmd_words, words_count, index):
 
 
             if not ret_val:
+                print(f"[DEBUG-CONDITIONS] conditions dict: {conditions}")
+                # Convert format=mcp to format=json:list for operator processing
+                # This allows operators to accept format=mcp from query nodes
+                # while processing it as json:list for proper aggregation
+                # Note: conditions["format"] is a list, not a string
+                if "format" in conditions:
+                    format_list = conditions["format"]
+                    print(f"[DEBUG-CONVERT] Format list: {format_list}")
+                    if "mcp" in format_list:
+                        print(f"[DEBUG-CONVERT] Converting format=mcp to json:list")
+                        # Replace "mcp" with "json:list" in the list
+                        conditions["format"] = ["json:list" if f == "mcp" else f for f in format_list]
+                        print(f"[DEBUG-CONVERT] New format list: {conditions['format']}")
+                else:
+                    print(f"[DEBUG-CONVERT] No format in conditions")
+
                 ret_val = interpreter.test_values(status, conditions, "format", format_values)
                 if not ret_val:
                     ret_val = interpreter.test_values(status, conditions, "dest", dest_values)
