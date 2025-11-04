@@ -118,19 +118,119 @@ def should_wait_for_reply(command, has_run_client):
     return True
 
 
+def prepare_al_command(status, command, headers_dict=None):
+    """
+    Prepare EdgeLake command for execution (simplified from http_server.prepare_commands).
+
+    This implements the core logic of http_server.prepare_commands() without HTTP-specific
+    features like message body parsing and file uploads. For MCP usage.
+
+    Args:
+        status: ProcessStat object (for future error handling)
+        command: EdgeLake command string (without run client wrapper)
+        headers_dict: Optional dict with 'destination', 'subset', 'timeout'
+
+    Returns:
+        list: Commands list in format [(full_command, with_wait), ...]
+              Same format as http_server.prepare_commands uses
+
+    Example:
+        >>> prepare_al_command(status, 'sql mydb "select * from t"', {'destination': 'network'})
+        [('run client () sql mydb "select * from t"', True)]
+
+        >>> prepare_al_command(status, 'get status', {'destination': 'local'})
+        [('get status', False)]
+    """
+    # Extract options from headers
+    destination = headers_dict.get('destination') if headers_dict else None
+    subset = headers_dict.get('subset') if headers_dict else False
+    timeout = headers_dict.get('timeout') if headers_dict else None
+
+    # Build run_client wrapper (same as http_server.get_run_client)
+    run_client_prefix, has_run_client = build_run_client_wrapper(
+        destination, subset, timeout
+    )
+
+    # Wrap command if network query
+    if run_client_prefix:
+        full_command = f"{run_client_prefix} {command}"
+    else:
+        full_command = command
+
+    # Determine wait behavior (same logic as http_server.prepare_commands line 1330-1336)
+    with_wait = should_wait_for_reply(full_command, has_run_client)
+
+    # Return in commands_list format (same as http_server)
+    commands_list = [(full_command, with_wait)]
+
+    return commands_list
+
+
+def execute_al_commands_list(status, wfile, commands_list, io_buff=None, into_output=None, file_data=None):
+    """
+    Execute command list using http_server.execute_al_commands logic.
+
+    This is functionally identical to http_server.execute_al_commands() (line 1416-1436)
+    but implemented as a module function so both REST API and MCP can use it.
+
+    Args:
+        status: ProcessStat object for error tracking
+        wfile: Output socket for streaming results
+        commands_list: List of (command, with_wait) tuples from prepare_al_command()
+        io_buff: IO buffer (bytearray, created if None)
+        into_output: Output format (e.g., 'html', None for default)
+        file_data: File data for 'file store' commands
+
+    Returns:
+        int: Return code (process_status.SUCCESS or error code)
+
+    Note:
+        This is the EXACT same logic as http_server.execute_al_commands():
+        - Iterates through commands_list
+        - Calls native_api.exec_al_cmd() if with_wait=True
+        - Calls native_api.exec_no_wait() if with_wait=False
+        - Stops on first error
+    """
+    # Create io_buff if not provided
+    if io_buff is None:
+        buff_size = int(params.get_param("io_buff_size"))
+        io_buff = bytearray(buff_size)
+
+    ret_val = process_status.SUCCESS
+
+    # Execute each command (same as http_server.execute_al_commands)
+    for index, entry in enumerate(commands_list):
+        command = entry[0]
+        with_reply = entry[1]  # Indicate if thread needs to wait for reply
+
+        if with_reply:
+            # Network query - wait for reply (same as line 1427)
+            timeout_sec = 20  # Default timeout for command lists
+            ret_val = native_api.exec_al_cmd(status, command, wfile, into_output, timeout_sec)
+        else:
+            # Local query or file command - no wait (same as line 1429)
+            ret_val = native_api.exec_no_wait(status, command, io_buff, file_data, wfile)
+
+        if ret_val:
+            # Error occurred
+            if index != (len(commands_list) - 1):
+                # Not the last command - add error context (same as line 1433)
+                err_msg = f"Error with command #{index+1} in command list: '{command}'"
+                status.add_error(err_msg)
+            break
+
+    return ret_val
+
+
 def execute_command_with_options(status, command, wfile=None,
                                   destination=None, subset=False,
                                   timeout=None, into_output=None,
                                   io_buff=None, file_data=None):
     """
-    Execute EdgeLake command with options (shared by REST API and MCP).
+    Execute EdgeLake command using http_server.prepare_commands + execute_al_commands logic.
 
-    This is the unified command execution layer that both http_server.al_exec
-    and MCP direct_client use. It handles:
-    - Building run client wrapper
-    - Determining wait behavior
-    - Calling appropriate native_api function
-    - Proper error handling via status object
+    This combines prepare_al_command() and execute_al_commands_list() to provide
+    the same functionality as http_server.al_exec() but as a reusable module function.
 
     Args:
         status: ProcessStat object for error tracking and job management
@@ -169,48 +269,22 @@ def execute_command_with_options(status, command, wfile=None,
             wfile=socket, destination='network', subset=True, timeout=60
         )
     """
-    ret_val = process_status.SUCCESS
-
     try:
-        # Create io_buff if not provided
-        if io_buff is None:
-            buff_size = int(params.get_param("io_buff_size"))
-            io_buff = bytearray(buff_size)
+        # Prepare command (same as http_server.prepare_commands)
+        headers_dict = {'destination': destination, 'subset': subset, 'timeout': timeout}
+        commands_list = prepare_al_command(status, command, headers_dict)
 
-        # Build run_client wrapper
-        run_client_prefix, has_run_client = build_run_client_wrapper(
-            destination, subset, timeout
+        # Execute commands (same as http_server.execute_al_commands)
+        ret_val = execute_al_commands_list(
+            status, wfile, commands_list, io_buff, into_output, file_data
         )
 
-        # Wrap command with 'run client ()' if network query
-        if run_client_prefix:
-            full_command = f"{run_client_prefix} {command}"
-        else:
-            full_command = command
-
-        # Determine if we need to wait (using al_exec logic)
-        with_wait = should_wait_for_reply(full_command, has_run_client)
-
-        # Execute using appropriate native_api path
-        # This ensures proper job management, status reset, and wait handling
-        if with_wait:
-            # Network query - use exec_al_cmd (includes wait_for_reply)
-            timeout_sec = timeout if timeout else 20
-            ret_val = native_api.exec_al_cmd(
-                status, full_command, wfile, into_output, timeout_sec
-            )
-        else:
-            # Local query or file command - use exec_no_wait
-            ret_val = native_api.exec_no_wait(
-                status, full_command, io_buff, file_data, wfile
-            )
+        return ret_val
 
     except Exception as e:
         err_msg = f"Command execution failed: {e}"
         status.add_error(err_msg)
-        ret_val = process_status.ERR_process_failure
-
-    return ret_val
+        return process_status.ERR_process_failure
 
 
 def execute_command_simple(status, command, wfile=None, headers=None):
