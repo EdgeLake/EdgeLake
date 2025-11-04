@@ -290,14 +290,24 @@ See `edge_lake/mcp/QUICK_START.md` for detailed testing instructions.
 
 ### Implementation Status
 
-**Phase 1**: ✅ **COMPLETE** (Completed in 3 hours instead of planned 1 week)
-- SSE transport layer implemented (650 lines)
-- HTTP server integration (minimal changes to http_server.py)
-- MCP server refactored without Starlette/Uvicorn (350 lines)
-- Commands added to member_cmd.py
-- Comprehensive documentation (100+ pages)
+**Phase 1**: ✅ **COMPLETE** - Core MCP Integration
+- ✅ SSE transport layer implemented (650 lines)
+- ✅ HTTP server integration (minimal changes to http_server.py)
+- ✅ MCP server refactored without Starlette/Uvicorn (350 lines)
+- ✅ Commands added to member_cmd.py
+- ✅ Comprehensive documentation (100+ pages)
+- ✅ Refactored direct_client.py to use socket streaming like HTTP REST (-160 lines)
+- ✅ Format=mcp support added for distributed queries (mcp→json:list conversion)
+- ✅ Debug statements removed (9 print statements cleaned up)
 
-**Phase 2**: 🔜 **Next** - Block Transport (optional, for results >10MB)
+**Current Status**: 🔧 **Testing Phase** - 8/8 tests passing on query node
+- ✅ All MCP protocol tests passing
+- ✅ Non-query commands working (server_info, node_status, list_database_schema, get_schema)
+- ⚠️ Query commands need operator node deployment
+- **Issue**: Only query node has updated code - operators still missing format=mcp support
+- **Next**: Deploy updated code to operator nodes
+
+**Phase 2**: 🔜 **Planned** - Block Transport (optional, for results >10MB)
 - Integrate with message_server.py for chunked delivery
 - See `edge_lake/mcp/IMPLEMENTATION_PLAN.md` for details
 
@@ -307,10 +317,11 @@ See `edge_lake/mcp/QUICK_START.md` for detailed testing instructions.
 
 - ✅ MCP protocol fully functional
 - ✅ SSE transport working
-- ✅ Direct member_cmd integration
-- ✅ Query execution with streaming
+- ✅ Direct member_cmd integration (socket-based, no STDOUT capture)
+- ✅ Query execution with streaming via BytesIO buffer
 - ✅ Configuration-driven tool system
 - ✅ Production-ready architecture
+- ⚠️ Distributed queries need operator deployment
 - ⏳ Block transport for large results (Phase 2)
 
 ### Performance
@@ -327,6 +338,26 @@ See `edge_lake/mcp/QUICK_START.md` for detailed testing instructions.
 - **Testing**: Follow `edge_lake/mcp_server/QUICK_START.md` for manual testing
 - **Code Review**: All http_server.py changes reviewed to prevent REST regressions
 - **Documentation**: See `edge_lake/mcp_server/README.md` for complete guide
+
+### TODO - Next Session
+
+1. **Deploy to Operator Nodes** (HIGH PRIORITY)
+   - Current issue: Only query node has updated code with format=mcp support
+   - Operator nodes still on old code, rejecting format=mcp with error 175
+   - Need to set up operator deployment workflow (similar to query node deployment)
+   - Files that need deployment to operators:
+     - `edge_lake/cmd/member_cmd.py` (format=mcp validation + conversion logic)
+     - `edge_lake/job/job_instance.py` (format conversion for operator queries)
+
+2. **Verify End-to-End Query Flow**
+   - After operator deployment, test distributed queries
+   - Confirm format=mcp → json:list conversion works across all nodes
+   - Test simple SELECT and aggregation queries (AVG, MIN, MAX, COUNT)
+
+3. **Phase 2: Block Transport** (LOWER PRIORITY)
+   - Implement chunked delivery for large query results (>10MB)
+   - Integrate with message_server.py
+   - See `edge_lake/mcp_server/IMPLEMENTATION_PLAN.md` for details
 - <rules>
 <rule id="1">When the user types "exit" or "/exit", always ask for confirmation (y/n) before actually exiting the session</rule>
 <rule id="2">Display "Rules Processed" at the start of every response</rule>

@@ -695,15 +695,12 @@ class JobInstance:
                 # Replace format=mcp with format=json:list for operator queries
                 # Operators need json:list for proper aggregation
                 if format_type == "mcp":
-                    print(f"[DEBUG-FORMAT] Converting format=mcp to format=json:list for operator query")
                     format_type = "json:list"
 
                 return f"sql {self.job_info.select_parsed.remote_dbms} format = {format_type} "
             else:
-                print(f"[DEBUG-FORMAT] No conditions found, using default")
                 return "sql " + self.job_info.select_parsed.remote_dbms + " "
         except Exception as e:
-            print(f"[DEBUG-FORMAT] Error in get_sql_mesg_prefix: {e}")
             return "sql " + self.job_info.select_parsed.remote_dbms + " "
 
     # =======================================================================================================================
