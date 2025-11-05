@@ -126,22 +126,23 @@ class EdgeLakeDirectClient:
             # Use shared execution layer (same logic as al_exec)
             logger.debug(f"Using shared command_execution module for: {command}")
 
+            # Parse command into words (http_server line 1133)
+            from edge_lake.generic import utils_data
+            cmd_words = utils_data.str_to_list(command, 3)
+
             # Extract execution options from headers
             destination = headers.get('destination') if headers else None
             subset = headers.get('subset') if headers else False
             sec_timeout = headers.get('timeout') if headers else 20
 
-            # Build run_client wrapper (extracted from http_server line 1367)
+            # Build run_client wrapper (http_server line 1367)
             run_client = self.command_execution.get_run_client(destination, subset, sec_timeout)
 
-            # Prepare commands list (extracted from http_server line 1275)
-            from edge_lake.generic import utils_data
+            # Prepare commands list (http_server line 1275)
             commands_list = []
-            rest_cmd_words = utils_data.str_to_list(command, 3)
-
             ret_val, with_wait, content_type, is_select, is_stream, file_data = \
                 self.command_execution.prepare_commands(
-                    status, command, rest_cmd_words, commands_list, None,
+                    status, command, cmd_words, commands_list, None,
                     run_client, None, None, False, None
                 )
 
