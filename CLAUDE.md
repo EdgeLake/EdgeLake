@@ -339,50 +339,75 @@ See `edge_lake/mcp/QUICK_START.md` for detailed testing instructions.
 - **Code Review**: All http_server.py changes reviewed to prevent REST regressions
 - **Documentation**: See `edge_lake/mcp_server/README.md` for complete guide
 
-### Recent Refactoring (2025-01-04)
+### Recent Refactoring (2025-01-04) - FINAL
 
-**Shared Command Execution Layer** (`edge_lake/cmd/command_execution.py`):
-- Extracted core execution logic from `http_server.al_exec()` into reusable module
-- Uses **ORIGINAL function names** from http_server.py for clarity
-- **Key Functions:**
-  - `get_run_client(destination, subset, timeout)` - Shared version of http_server.get_run_client()
-  - `should_wait_for_reply(command, has_run_client)` - Wait decision logic (from prepare_commands)
-  - `prepare_commands(status, command, headers_dict)` - Simplified prepare_commands without HTTP body parsing
-  - `execute_al_commands(status, wfile, commands_list, ...)` - Functional copy of http_server.execute_al_commands()
-  - `al_exec(status, command, wfile, destination, ...)` - Combines prepare + execute (mirrors http_server.al_exec)
+**✅ COMPLETE CODE EXTRACTION** - http_server methods now delegate to command_execution
 
-**MCP Client Refactoring** (`edge_lake/mcp_server/core/direct_client.py`):
-- Now uses shared `command_execution.al_exec()` - **same name as http_server!**
-- Fixes bugs: file command wait handling, missing native_api setup
-- Implements `status.add_error()` pattern for error logging (CLAUDE.md rule #3)
-- Provides same execution guarantees as REST API
+**command_execution.py** - Contains ACTUAL extracted code (not duplicates):
+- `get_run_client(destination, subset, timeout)` - EXTRACTED from ChunkedHTTPRequestHandler.get_run_client() line 1367
+- `prepare_commands(status, command, ...)` - EXTRACTED from ChunkedHTTPRequestHandler.prepare_commands() line 1275
+- `execute_al_commands(status, io_buff, ...)` - EXTRACTED from ChunkedHTTPRequestHandler.execute_al_commands() line 1435
+- Same names, same logic, just converted from instance methods (self.) to module functions
 
-**HTTP Server Documentation** (`edge_lake/tcpip/http_server.py`):
-- Added comments documenting relationship to shared command_execution module
-- Notes which features are HTTP-specific (body parsing, file uploads, content-type detection)
-- Preserves all HTTP-specific logic in place
+**http_server.py** - Now thin wrappers that DELEGATE to command_execution:
+- `ChunkedHTTPRequestHandler.get_run_client()` → calls `command_execution.get_run_client(destination, subset, sec_timeout)`
+- `ChunkedHTTPRequestHandler.prepare_commands()` → calls `command_execution.prepare_commands(...)`
+- `ChunkedHTTPRequestHandler.execute_al_commands()` → calls `command_execution.execute_al_commands(..., self.wfile)`
+- **Removed 178 lines of duplicate code** - now just extract params and delegate
 
-**Architecture:**
+**MCP direct_client.py** - Also uses command_execution module functions:
+- Calls same `command_execution.prepare_commands()` and `execute_al_commands()`
+- No HTTP overhead, direct socket streaming
+- Identical execution guarantees as REST API
+
+**Architecture (Zero Duplication):**
 ```
-http_server.py                command_execution.py          MCP direct_client
-├── al_exec()             →   al_exec()                 →   calls al_exec()
-├── prepare_commands()    →   prepare_commands()
-│   ├── get_run_client()  →   get_run_client()
-│   └── wait logic        →   should_wait_for_reply()
-└── execute_al_commands() →   execute_al_commands()
-    ├── exec_al_cmd()
-    └── exec_no_wait()
-
-SAME FUNCTION NAMES = MAXIMUM CLARITY
+┌──────────────────────────────────────────┐
+│  http_server.ChunkedHTTPRequestHandler   │
+│  ┌────────────────────────────────────┐  │
+│  │ get_run_client(self):              │  │
+│  │   dest = self.al_headers           │  │
+│  │   return cmd_exec.get_run_client() │──┼──┐
+│  └────────────────────────────────────┘  │  │
+│  ┌────────────────────────────────────┐  │  │
+│  │ prepare_commands(self, ...):       │  │  │
+│  │   run_client = self.get_run_client │  │  │
+│  │   return cmd_exec.prepare_cmds()   │──┼──┤
+│  └────────────────────────────────────┘  │  │
+│  ┌────────────────────────────────────┐  │  │
+│  │ execute_al_commands(self, ...):    │  │  │
+│  │   return cmd_exec.execute_cmds(    │  │  │
+│  │       ..., wfile=self.wfile)       │──┼──┤
+│  └────────────────────────────────────┘  │  │
+└──────────────────────────────────────────┘  │
+                 DELEGATES TO ↓               │
+┌──────────────────────────────────────────┐  │
+│     command_execution.py (EXTRACTED)     │←─┘
+│  ┌────────────────────────────────────┐  │
+│  │ get_run_client(dest, subset, tmo)  │←─────── USED BY MCP
+│  │   [Original code from line 1367]   │  │
+│  └────────────────────────────────────┘  │
+│  ┌────────────────────────────────────┐  │
+│  │ prepare_commands(status, cmd, ...) │←─────── USED BY MCP
+│  │   [Original code from line 1275]   │  │
+│  └────────────────────────────────────┘  │
+│  ┌────────────────────────────────────┐  │
+│  │ execute_al_commands(st, buff, ...) │←─────── USED BY MCP
+│  │   [Original code from line 1435]   │  │
+│  └────────────────────────────────────┘  │
+└──────────────────────────────────────────┘
 ```
+
+**Commits:**
+- `580feb3` - Extract http_server methods to command_execution module (-178 lines duplicate code)
+- Previous commits created module functions, this one completes extraction
 
 **Benefits:**
-- ✅ **Uses al_exec intermediate code** - Functions have **identical names** to http_server
-- ✅ **100% logic consistency** - MCP and REST use identical execution paths
-- ✅ **Same function names** - `get_run_client()`, `prepare_commands()`, `execute_al_commands()`, `al_exec()`
-- ✅ **Maintainability** - Changes to al_exec logic can be mirrored in command_execution.py
-- ✅ **Bug fixes** - File command wait, native_api setup, proper error handling
-- ✅ **Single source of truth** - All command execution flows through native_api
+- ✅ **ZERO duplication** - http_server delegates to module, MCP uses module directly
+- ✅ **ACTUAL al_exec code** - Not copied, actually extracted and reused
+- ✅ **Same function names** - `get_run_client()`, `prepare_commands()`, `execute_al_commands()`
+- ✅ **Single maintenance point** - Change command_execution, both REST and MCP updated
+- ✅ **Management requirement MET** - Uses actual intermediate code from al_exec, not duplicates
 
 ### TODO - Next Session
 
