@@ -1138,10 +1138,8 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                 ret_val = self.error_wrong_method(status, http_method, command)
 
             else:
-                # NOTE: http_server.prepare_commands() and execute_al_commands() have been
-                # refactored to use shared command_execution module. The HTTP handler still
-                # calls self.prepare_commands() and self.execute_al_commands() for now,
-                # but these could be replaced with direct calls to command_execution functions.
+                # NOTE: Using shared command_execution module directly
+                from edge_lake.cmd import command_execution
 
                 # Update commands_list with a list of commands (main command and commands placed in the msg body)
                 commands_list = []
@@ -1157,8 +1155,8 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                     buff_size = int(params.get_param("io_buff_size"))
                     io_buff = bytearray(buff_size)
 
-
-                    ret_val = self.execute_al_commands(status, io_buff, commands_list, into_output, file_data)
+                    # Call command_execution directly (no wrapper needed)
+                    ret_val = command_execution.execute_al_commands(status, io_buff, commands_list, into_output, file_data, self.wfile)
 
 
                 j_handle = status.get_active_job_handle()  # Need to be done after the execution of the commands
@@ -1358,26 +1356,8 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                 offset = index + 1
 
     # =======================================================================================================================
-    # Execute the commands on the command_list and the command on the header
-    #
-    # NOTE: This logic has been extracted to command_execution.execute_al_commands()
-    # for use by MCP server. The HTTP version is identical except:
-    # - Uses self.wfile instead of wfile parameter
-    # - Uses status.add_keep_error instead of status.add_error
-    # =======================================================================================================================
-    def execute_al_commands(self, status, io_buff, commands_list, into_output, file_data):
-        """
-        Execute commands - REFACTORED to use command_execution.execute_al_commands()
-
-        HTTP wrapper that delegates to module function with self.wfile
-        """
-        from edge_lake.cmd import command_execution
-
-        # Call module function (EXACT same logic as original)
-        return command_execution.execute_al_commands(
-            status, io_buff, commands_list, into_output, file_data, self.wfile
-        )
-
+    # NOTE: execute_al_commands() has been extracted to command_execution module.
+    # al_exec() now calls command_execution.execute_al_commands() directly.
     # =======================================================================================================================
     # Get the timeout in case of a wait
     # Timeout is based on the default defined in - run rest server command, or, provided in the header
