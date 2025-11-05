@@ -1,303 +1,201 @@
 """
-Shared command execution logic for REST API and MCP server.
+Shared command execution logic - EXTRACTED from http_server.al_exec()
 
-This module extracts http_server.al_exec() logic into reusable functions
-with the ORIGINAL names from http_server.py:
-- prepare_commands() - from http_server.ChunkedHTTPRequestHandler.prepare_commands()
-- execute_al_commands() - from http_server.ChunkedHTTPRequestHandler.execute_al_commands()
-- get_run_client() - from http_server.ChunkedHTTPRequestHandler.get_run_client()
+This module contains the ACTUAL methods from http_server.ChunkedHTTPRequestHandler,
+converted from instance methods (self.) to module functions. This eliminates code
+duplication and ensures 100% identical logic between REST API and MCP.
 
-Both REST API (http_server.py) and MCP server (direct_client.py) can use
-these functions, ensuring 100% logic consistency.
+Methods extracted:
+- get_run_client() - from ChunkedHTTPRequestHandler.get_run_client()
+- execute_al_commands() - from ChunkedHTTPRequestHandler.execute_al_commands()
+- prepare_commands() - from ChunkedHTTPRequestHandler.prepare_commands()
 
 License: Mozilla Public License 2.0
 """
 
-from edge_lake.cmd import member_cmd, native_api
-from edge_lake.generic import process_status, params
+from edge_lake.cmd import native_api
+from edge_lake.generic import process_status, params, utils_data
 
 
-def get_run_client(destination=None, subset=None, timeout=None):
+def get_run_client(destination, subset, sec_timeout):
     """
-    Build 'run client ()' wrapper for network commands.
+    Build 'run client ()' wrapper - EXTRACTED from http_server.get_run_client()
 
-    This is the shared version of http_server.ChunkedHTTPRequestHandler.get_run_client()
-    but as a module function that can be used by both REST API and MCP.
+    Original location: http_server.py ChunkedHTTPRequestHandler.get_run_client() line 1367
 
-    Original: http_server.py line 1353 - gets destination/subset/timeout from self.al_headers
-    Shared: Takes destination/subset/timeout as parameters
+    Changes from original:
+    - Removed self parameter
+    - Takes destination, subset, sec_timeout as parameters (not from self.al_headers)
+    - Returns only run_client string (ret_val always SUCCESS with params)
 
     Args:
-        destination: Query destination
-            - None or 'local': Local query only (no run client)
-            - 'network': Broadcast to all network nodes
-            - 'ip:port': Specific node(s)
-        subset: Allow partial results (bool)
-        timeout: Timeout in seconds (int)
+        destination: 'network', 'local', or 'ip:port' string
+        subset: Bool - allow partial results
+        sec_timeout: Timeout in seconds (int)
 
     Returns:
-        tuple: (run_client_str, has_run_client) where:
-            - run_client_str: 'run client (...)' or empty string
-            - has_run_client: True if network query, False if local
-
-    Examples:
-        >>> get_run_client('network', True, 20)
-        ('run client (subset=true ,timeout=20)', True)
-
-        >>> get_run_client('10.0.0.1:7848', False, 30)
-        ('run client (10.0.0.1:7848 ,timeout=30)', True)
-
-        >>> get_run_client('local')
-        ('', False)
-
-        >>> get_run_client(None)
-        ('', False)
+        str: run_client wrapper like 'run client (subset=true ,timeout=20)' or ''
     """
-    # Local query - no run client wrapper
-    if not destination or destination == 'local':
-        return ('', False)
-
-    # Build run client wrapper
-    parts = []
-
-    # Add specific destination (if not 'network')
-    if destination != 'network':
-        parts.append(destination)
-
-    # Add subset parameter
-    if subset:
-        parts.append(f"subset={str(subset).lower()}")
-
-    # Add timeout parameter
-    if timeout:
-        parts.append(f"timeout={timeout}")
-
-    # Construct wrapper
-    if parts:
-        wrapper = f"run client ({' ,'.join(parts)})"
+    if not destination or destination == "local":
+        run_client = ""  # Not a network call - apply on the query node
     else:
-        wrapper = "run client ()"
+        run_client = "run client ("
+        if destination != "network":
+            run_client += destination
 
-    return (wrapper, True)
+        if subset:
+            if run_client[-1] == '(':
+                run_client += f"subset={str(subset).lower()}"
+            else:
+                run_client += f" ,subset={str(subset).lower()}"
+
+        if sec_timeout:
+            # max timeout in seconds for execution completion
+            if run_client[-1] == '(':
+                run_client += f"timeout={sec_timeout}"
+            else:
+                run_client += f" ,timeout={sec_timeout}"
+        run_client += ')'
+
+    return run_client
 
 
-def should_wait_for_reply(command, has_run_client):
+def execute_al_commands(status, io_buff, commands_list, into_output, file_data, wfile):
     """
-    Determine if command needs to wait for reply.
+    Execute command list - EXTRACTED from http_server.execute_al_commands()
 
-    This implements the same logic as http_server.prepare_commands()
-    to determine when to wait for command execution to complete.
+    Original location: http_server.py ChunkedHTTPRequestHandler.execute_al_commands() line 1435
+
+    Changes from original:
+    - Removed self parameter
+    - Takes wfile as parameter (not from self.wfile)
+    - Changed status.add_keep_error() to status.add_error() for consistency
 
     Args:
-        command: Full command string (may include 'run client' wrapper)
-        has_run_client: True if command includes 'run client' wrapper
-
-    Returns:
-        bool: True if should wait for reply
-
-    Logic (from http_server.al_exec):
-    - Wait if: Network query (has_run_client) AND not a file command
-    - Don't wait: Local query OR file command
-
-    Rationale:
-    - File commands are async (copy happens in background)
-    - SQL and other network queries need to wait for results
-    - Local commands execute synchronously (no wait needed)
-    """
-    # Local queries don't need wait
-    if not has_run_client:
-        return False
-
-    # Extract actual command (after 'run client' wrapper)
-    actual_command = command
-    if 'run client' in command.lower():
-        idx = command.lower().find('run client')
-        remaining = command[idx:].strip()
-        close_paren = remaining.find(')')
-        if close_paren > 0:
-            actual_command = remaining[close_paren+1:].strip()
-
-    # File commands should NOT wait (async file transfer)
-    if actual_command.startswith('file '):
-        return False
-
-    # All other network commands should wait
-    return True
-
-
-def prepare_commands(status, command, headers_dict=None):
-    """
-    Prepare EdgeLake command for execution (shared version of http_server.prepare_commands).
-
-    This implements the core logic of http_server.prepare_commands() (line 1264-1345)
-    without HTTP-specific features like message body parsing and file uploads.
-
-    Original: http_server.prepare_commands(self, status, command, rest_cmd_words, commands_list, into_output)
-    Shared: prepare_commands(status, command, headers_dict) - simplified parameters
-
-    Args:
-        status: ProcessStat object (for future error handling)
-        command: EdgeLake command string (without run client wrapper)
-        headers_dict: Optional dict with 'destination', 'subset', 'timeout'
-
-    Returns:
-        list: Commands list in format [(full_command, with_wait), ...]
-              Same format as http_server.prepare_commands returns
-
-    Example:
-        >>> prepare_commands(status, 'sql mydb "select * from t"', {'destination': 'network'})
-        [('run client () sql mydb "select * from t"', True)]
-
-        >>> prepare_commands(status, 'get status', {'destination': 'local'})
-        [('get status', False)]
-    """
-    # Extract options from headers
-    destination = headers_dict.get('destination') if headers_dict else None
-    subset = headers_dict.get('subset') if headers_dict else False
-    timeout = headers_dict.get('timeout') if headers_dict else None
-
-    # Build run_client wrapper (same as http_server.get_run_client)
-    run_client_prefix, has_run_client = get_run_client(
-        destination, subset, timeout
-    )
-
-    # Wrap command if network query
-    if run_client_prefix:
-        full_command = f"{run_client_prefix} {command}"
-    else:
-        full_command = command
-
-    # Determine wait behavior (same logic as http_server.prepare_commands line 1330-1336)
-    with_wait = should_wait_for_reply(full_command, has_run_client)
-
-    # Return in commands_list format (same as http_server)
-    commands_list = [(full_command, with_wait)]
-
-    return commands_list
-
-
-def execute_al_commands(status, wfile, commands_list, io_buff=None, into_output=None, file_data=None):
-    """
-    Execute command list (shared version of http_server.execute_al_commands).
-
-    This is functionally identical to http_server.execute_al_commands() (line 1416-1436)
-    but implemented as a module function so both REST API and MCP can use it.
-
-    Original: http_server.execute_al_commands(self, status, io_buff, commands_list, into_output, file_data)
-    Shared: execute_al_commands(status, wfile, commands_list, io_buff, into_output, file_data)
-
-    Args:
-        status: ProcessStat object for error tracking
-        wfile: Output socket for streaming results (was self.wfile)
-        commands_list: List of (command, with_wait) tuples from prepare_commands()
-        io_buff: IO buffer (bytearray, created if None)
-        into_output: Output format (e.g., 'html', None for default)
+        status: ProcessStat object
+        io_buff: IO buffer (bytearray)
+        commands_list: List of (command, with_reply) tuples
+        into_output: Output format (e.g., 'html' or None)
         file_data: File data for 'file store' commands
+        wfile: Output socket for streaming
 
     Returns:
         int: Return code (process_status.SUCCESS or error code)
-
-    Note:
-        This is the EXACT same logic as http_server.execute_al_commands():
-        - Iterates through commands_list
-        - Calls native_api.exec_al_cmd() if with_wait=True
-        - Calls native_api.exec_no_wait() if with_wait=False
-        - Stops on first error
     """
-    # Create io_buff if not provided
-    if io_buff is None:
-        buff_size = int(params.get_param("io_buff_size"))
-        io_buff = bytearray(buff_size)
-
     ret_val = process_status.SUCCESS
 
-    # Execute each command (same as http_server.execute_al_commands)
     for index, entry in enumerate(commands_list):
         command = entry[0]
-        with_reply = entry[1]  # Indicate if thread needs to wait for reply
-
+        with_reply = entry[1]  # Indicate if the thread needs to wait for a reply (i.e. SQL query)
         if with_reply:
-            # Network query - wait for reply (same as line 1427)
-            timeout_sec = 20  # Default timeout for command lists
-            ret_val = native_api.exec_al_cmd(status, command, wfile, into_output, timeout_sec)
+            ret_val = native_api.exec_al_cmd(status, command, wfile, into_output, 20)  # Timeout for a list of commands is the default
         else:
-            # Local query or file command - no wait (same as line 1429)
             ret_val = native_api.exec_no_wait(status, command, io_buff, file_data, wfile)
-
         if ret_val:
-            # Error occurred
             if index != (len(commands_list) - 1):
-                # Not the last command - add error context (same as line 1433)
-                err_msg = f"Error with command #{index+1} in command list: '{command}'"
+                # the command that failed is in the message body (not the header)
+                err_msg = f"Error with command #{index+1} in the message body: '{command}'"
                 status.add_error(err_msg)
             break
 
     return ret_val
 
 
-def al_exec(status, command, wfile=None,
-            destination=None, subset=False,
-            timeout=None, into_output=None,
-            io_buff=None, file_data=None):
+def prepare_commands(status, command, rest_cmd_words, commands_list, into_output,
+                     run_client, msg_body, msg_body_commands_callback, is_binary_data,
+                     file_data_callback):
     """
-    Execute EdgeLake command (shared version of http_server.al_exec).
+    Prepare commands for execution - EXTRACTED from http_server.prepare_commands()
 
-    This combines prepare_commands() and execute_al_commands() to provide
-    the same functionality as http_server.al_exec() but as a reusable module function.
+    Original location: http_server.py ChunkedHTTPRequestHandler.prepare_commands() line 1275
 
-    Original: http_server.al_exec(self, status, http_method, command)
-    Shared: al_exec(status, command, wfile, destination, subset, timeout, ...)
+    Changes from original:
+    - Removed self parameter
+    - Takes run_client as parameter (not from self.get_run_client())
+    - Takes msg_body as parameter (not from self.get_msg_body())
+    - Takes callbacks for HTTP-specific operations:
+        - msg_body_commands_callback(status, commands_list, msg_body) for parsing body commands
+        - file_data_callback(status, msg_body) for parsing file data from body
 
     Args:
-        status: ProcessStat object for error tracking and job management
-        command: EdgeLake command string (without run client wrapper)
-        wfile: Output socket for streaming results (was self.wfile)
-        destination: Query destination ('network', 'local', or 'ip:port')
-        subset: Allow partial results (bool, default False)
-        timeout: Timeout in seconds (int, default 20)
-        into_output: Output format (e.g., 'html', None for default)
-        io_buff: IO buffer (bytearray, created if None)
-        file_data: File data for 'file store' commands
+        status: ProcessStat object
+        command: Command string from header
+        rest_cmd_words: Command split into words (list)
+        commands_list: List to populate with (command, with_wait) tuples
+        into_output: Output format (e.g., 'html' or None)
+        run_client: run client wrapper string (from get_run_client())
+        msg_body: Message body content (str or bytes, None if no body)
+        msg_body_commands_callback: Function(status, commands_list, msg_body) to parse body commands
+        is_binary_data: Bool - is message body binary
+        file_data_callback: Function(status, msg_body) -> (ret_val, content_type, file_data)
 
     Returns:
-        int: Return code (process_status.SUCCESS or error code)
-
-    Error Handling:
-        All errors are logged to status object using status.add_error()
-        format as specified in CLAUDE.md rule #3
-
-    Examples:
-        # REST API usage (network query)
-        ret = al_exec(
-            status, 'sql mydb "select * from table"',
-            wfile=self.wfile, destination='network', timeout=30
-        )
-
-        # MCP usage (local query)
-        ret = al_exec(
-            status, 'get status',
-            wfile=socket, destination='local'
-        )
-
-        # Network query with subset
-        ret = al_exec(
-            status, 'sql mydb "select avg(value) from sensors"',
-            wfile=socket, destination='network', subset=True, timeout=60
-        )
+        list: [ret_val, with_wait, content_type, is_select, is_stream, file_data]
     """
-    try:
-        # Prepare command (same as http_server.prepare_commands)
-        headers_dict = {'destination': destination, 'subset': subset, 'timeout': timeout}
-        commands_list = prepare_commands(status, command, headers_dict)
+    with_wait = False  # No wait for a reply from a different node
+    is_select = False
+    is_stream = False
+    content_type = 'text/json'
+    file_data = None
+    ret_val = process_status.SUCCESS
 
-        # Execute commands (same as http_server.execute_al_commands)
-        ret_val = execute_al_commands(
-            status, wfile, commands_list, io_buff, into_output, file_data
-        )
+    if rest_cmd_words[0] == "body":
+        # The command is passed in the message body
+        command = msg_body
+        msg_body = None
+        cmd_words = utils_data.str_to_list(command, 3)
+    else:
+        cmd_words = rest_cmd_words
 
-        return ret_val
+    # Detect SELECT queries
+    if cmd_words[0] == "sql":
+        cmd_lower = command[4:].lower()
+        index = cmd_lower.find("select ", 4)
+        if index > 0:
+            char_before = cmd_lower[index - 1]
+            if char_before == ' ' or char_before == '"':
+                is_select = True
+                # A select stmt - find output format to determine content-type
+                out_format = utils_data.find_next_word(cmd_lower, 4, index, ["format", "="])
+                if out_format == "table":
+                    content_type = "text"
 
-    except Exception as e:
-        err_msg = f"Command execution failed: {e}"
-        status.add_error(err_msg)
-        return process_status.ERR_process_failure
+    elif len(cmd_words) >= 3:
+        if utils_data.test_words(cmd_words, 0, ["file", "retrieve", "where"]):
+            # If streaming - Need to deliver headers first:
+            index = command.find(" stream", 19)
+            if index > -1:
+                # Test if command includes stream = true
+                stream_text = command[index + 1:].replace(" ", "").lower()  # remove spaces
+                if stream_text[:11] == "stream=true":
+                    content_type = "video/mp4"
+                    is_stream = True
+
+        elif cmd_words[0] == "file" and (cmd_words[1] == "store" or cmd_words[1] == "to"):
+            # The file can be provided in 2 ways:
+            # 1) By identifying a source file
+            # 2) by a buffer in the message body
+            if msg_body:
+                if is_binary_data:
+                    file_data = msg_body  # Transfer binary data as is
+                else:
+                    # The path is provided from the msg body
+                    if file_data_callback:
+                        ret_val, content_type, file_data = file_data_callback(status, msg_body)
+                    msg_body = None  # Message was pushed to the status object
+
+    # Determine if wait is needed
+    if run_client:
+        # For SQL command
+        if command[:5] != "file ":
+            # No wait for file copy
+            with_wait = True  # Place thread on wait for reply
+
+    # Execute the command (or commands in message body)
+    if msg_body and not is_binary_data and msg_body_commands_callback:
+        # These are assignments of values or pre-processed commands
+        msg_body_commands_callback(status, commands_list, msg_body)
+
+    commands_list.append((run_client + command, with_wait))  # Add a flag if needed to wait for a reply
+
+    return [ret_val, with_wait, content_type, is_select, is_stream, file_data]
