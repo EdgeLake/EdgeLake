@@ -159,17 +159,15 @@ class ToolExecutor:
                 arguments
             )
 
-        # For network queries, wrap with 'run client ()' to distribute across network
-        if headers and headers.get('destination') == 'network':
-            command = f'run client () {command}'
-            if self.config.testing_mode:
-                logger.info(f"[TESTING] Network query - wrapped with run client")
-            else:
-                logger.debug(f"Network query - wrapped with run client: {command}")
+        # NOTE: Do NOT manually wrap with 'run client ()' here!
+        # The command_execution layer (via direct_client) will handle run_client wrapping
+        # based on the 'destination' header using get_run_client()
 
-        # Testing mode: log command sent to member_cmd
+        # Testing mode: log command sent to direct_client (before run_client wrapping)
         if self.config.testing_mode:
-            logger.info(f"[TESTING] Command sent to member_cmd.process_cmd(): {command}")
+            logger.info(f"[TESTING] Command sent to direct_client: {command}")
+            if headers and headers.get('destination') == 'network':
+                logger.info(f"[TESTING] Will be wrapped with run_client by command_execution layer")
 
         # Execute command with socket for streaming large results
         result = await client.execute_command(command, headers=headers, socket=socket)
