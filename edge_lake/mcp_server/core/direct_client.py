@@ -100,11 +100,10 @@ class EdgeLakeDirectClient:
             Command result (from result_set for non-query commands, empty for socket-streamed queries)
 
         Note:
-            Now uses shared command_execution.execute_command_simple() which provides:
-            - Identical wait logic as http_server.al_exec()
-            - Proper file command handling (no wait)
-            - Correct native_api wrapper usage (exec_al_cmd vs exec_no_wait)
-            - Proper job management (end_job, status reset)
+            Uses shared command_execution module functions:
+            - get_run_client() - Build 'run client ()' wrapper
+            - prepare_commands() - Prepare command list with wait logic
+            - execute_al_commands() - Execute via native_api (exec_al_cmd or exec_no_wait)
         """
         logger.debug(f"Starting sync execution of: {command}")
 
@@ -125,18 +124,39 @@ class EdgeLakeDirectClient:
                 status.add_error(err_msg)
 
             # Use shared execution layer (same logic as al_exec)
-            logger.debug(f"Calling shared command_execution.al_exec() for: {command}")
+            logger.debug(f"Using shared command_execution module for: {command}")
 
             # Extract execution options from headers
             destination = headers.get('destination') if headers else None
             subset = headers.get('subset') if headers else False
-            timeout = headers.get('timeout') if headers else 20
+            sec_timeout = headers.get('timeout') if headers else 20
 
-            ret_val = self.command_execution.al_exec(
-                status, command, socket,
-                destination=destination,
-                subset=subset,
-                timeout=timeout
+            # Build run_client wrapper (extracted from http_server line 1367)
+            run_client = self.command_execution.get_run_client(destination, subset, sec_timeout)
+
+            # Prepare commands list (extracted from http_server line 1275)
+            from edge_lake.generic import utils_data
+            commands_list = []
+            rest_cmd_words = utils_data.str_to_list(command, 3)
+
+            ret_val, with_wait, content_type, is_select, is_stream, file_data = \
+                self.command_execution.prepare_commands(
+                    status, command, rest_cmd_words, commands_list, None,
+                    run_client, None, None, False, None
+                )
+
+            if ret_val:
+                # Command preparation failed
+                error_msg = status.get_saved_error() or f"Command preparation failed with code {ret_val}"
+                status.add_error(error_msg)
+                raise Exception(error_msg)
+
+            # Execute commands (extracted from http_server line 1435)
+            buff_size = int(self.params.get_param("io_buff_size"))
+            io_buff = bytearray(buff_size)
+
+            ret_val = self.command_execution.execute_al_commands(
+                status, io_buff, commands_list, None, file_data, socket
             )
 
             logger.debug(f"Command completed with return value: {ret_val}")
