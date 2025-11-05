@@ -55,7 +55,7 @@ def get_run_client(destination, subset, sec_timeout):
                 run_client += f"timeout={sec_timeout}"
             else:
                 run_client += f" ,timeout={sec_timeout}"
-        run_client += ')'
+        run_client += ') '  # Add space for concatenation with command
 
     return run_client
 
