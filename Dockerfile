@@ -26,7 +26,7 @@ RUN apk update && apk upgrade && \
     apk add bash git gcc openssh-client python3 python3-dev py3-pip musl-dev build-base libffi-dev py3-psutil && \
     python3 -m pip install --upgrade pip && \
     python3 -m pip install --upgrade -r /app/EdgeLake/requirements.txt && \
-    git clone https://github.com/EdgeLake/deployment-scripts
+    git clone https://github.com/tom342178/deployment-scripts
 
 # Copy the rest of the code (changes frequently, but doesn't invalidate deps)
 COPY . EdgeLake
