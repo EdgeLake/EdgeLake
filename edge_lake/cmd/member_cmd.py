@@ -210,6 +210,7 @@ test_active_ = {
     #                    Process name | Get is acrive | Comment
     "tcp": ("TCP", net_utils.is_tcp_connected, tcpip_server.get_info),
     "rest": ("REST", net_utils.is_rest_connected, http_server.get_info),
+    "mcp": ("MCP", is_mcp_running, get_mcp_info),
     "operator": ("Operator", aloperator.is_active, aloperator.get_info),
     "blockchain sync": ("Blockchain Sync", bsync.is_running, bsync.get_info),
     "scheduler": ("Scheduler", task_scheduler.is_running, task_scheduler.get_info),
@@ -20287,6 +20288,25 @@ def _exit_mcp_server(status, io_buff_in, cmd_words, trace):
     except Exception as e:
         status.add_error(f"Failed to stop MCP: {e}")
         return process_status.ERR_process_failure
+
+# =======================================================================================================================
+# Check if MCP server is running
+# =======================================================================================================================
+def is_mcp_running():
+    """Check if MCP server is active"""
+    return mcp_server_instance_ is not None
+
+# =======================================================================================================================
+# Get MCP server info for 'get processes' command
+# =======================================================================================================================
+def get_mcp_info(status=None):
+    """Return MCP server connection info"""
+    if not is_mcp_running():
+        return ""
+    # MCP uses SSE over REST server, so show REST endpoint
+    info_str = net_utils.get_connection_info(1)  # Get REST connection info
+    info_str += " (SSE endpoint: /mcp/sse)"
+    return info_str
 
 # ------------------------------------------------------------------------
 # Command Dictionaries
