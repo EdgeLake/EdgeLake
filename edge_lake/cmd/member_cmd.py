@@ -98,6 +98,7 @@ query_mode = {  # default query parameters like timeout
 code_debug = {}  # a dictionary that represents code sections to debug
 script_mutex = threading.Lock()  # mutex to avoid same id to multiple scripts
 statistics_ = {}        # Statistics in get status command
+mcp_server_instance_ = None  # MCP Server instance (used in is_mcp_running and get_mcp_info)
 
 #                                      Must     Add      Is
 #                                      exists   Counter  Unique
@@ -204,6 +205,22 @@ def get_query_pool_info(status):
         info_str = "Threads Pool: %u" % workers_pool.get_number_of_threds()
     else:
         info_str = ""
+    return info_str
+
+# =======================================================================================================================
+# MCP Server Status Functions (defined early for test_active_ dictionary)
+# =======================================================================================================================
+def is_mcp_running():
+    """Check if MCP server is active"""
+    return mcp_server_instance_ is not None
+
+def get_mcp_info(status=None):
+    """Return MCP server connection info"""
+    if not is_mcp_running():
+        return ""
+    # MCP uses SSE over REST server, so show REST endpoint
+    info_str = net_utils.get_connection_info(1)  # Get REST connection info
+    info_str += " (SSE endpoint: /mcp/sse)"
     return info_str
 
 test_active_ = {
@@ -20244,11 +20261,6 @@ _buckets_commands = {
 
 }
 # =======================================================================================================================
-# MCP Server - Global instance
-# =======================================================================================================================
-mcp_server_instance_ = None
-
-# =======================================================================================================================
 # Run MCP Server - Example: run mcp server
 # =======================================================================================================================
 def _run_mcp_server(status, io_buff_in, cmd_words, trace):
@@ -20288,25 +20300,6 @@ def _exit_mcp_server(status, io_buff_in, cmd_words, trace):
     except Exception as e:
         status.add_error(f"Failed to stop MCP: {e}")
         return process_status.ERR_process_failure
-
-# =======================================================================================================================
-# Check if MCP server is running
-# =======================================================================================================================
-def is_mcp_running():
-    """Check if MCP server is active"""
-    return mcp_server_instance_ is not None
-
-# =======================================================================================================================
-# Get MCP server info for 'get processes' command
-# =======================================================================================================================
-def get_mcp_info(status=None):
-    """Return MCP server connection info"""
-    if not is_mcp_running():
-        return ""
-    # MCP uses SSE over REST server, so show REST endpoint
-    info_str = net_utils.get_connection_info(1)  # Get REST connection info
-    info_str += " (SSE endpoint: /mcp/sse)"
-    return info_str
 
 # ------------------------------------------------------------------------
 # Command Dictionaries
