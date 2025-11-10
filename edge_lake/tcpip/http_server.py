@@ -1138,9 +1138,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                 ret_val = self.error_wrong_method(status, http_method, command)
 
             else:
-                # NOTE: Using shared command_execution module directly
-                from edge_lake.cmd import command_execution
-
+                
                 # Update commands_list with a list of commands (main command and commands placed in the msg body)
                 commands_list = []
                 into_output = get_value_from_headers(self.al_headers, "into")  # Push the output as HTML
@@ -1155,8 +1153,8 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                     buff_size = int(params.get_param("io_buff_size"))
                     io_buff = bytearray(buff_size)
 
-                    # Call command_execution directly (no wrapper needed)
-                    ret_val = command_execution.execute_al_commands(status, io_buff, commands_list, into_output, file_data, self.wfile)
+
+                    ret_val = self.execute_al_commands(status, io_buff, commands_list, into_output, file_data)
 
 
                 j_handle = status.get_active_job_handle()  # Need to be done after the execution of the commands
@@ -1262,70 +1260,127 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # Update commands_list with a list of commands:
     # 1) the main command in the header
     # 2) Include secondary commands from the body
-    #
-    # NOTE: The core logic of this method has been extracted to command_execution.prepare_commands()
-    # for use by MCP server. This HTTP version includes additional features:
-    # - Message body parsing (self.get_msg_body)
-    # - File upload handling
-    # - Content-type detection
-    # - HTTP-specific error handling
     # =======================================================================================================================
     def prepare_commands(self, status, command, rest_cmd_words, commands_list, into_output):
-        """
-        Prepare commands - REFACTORED to use command_execution.prepare_commands()
-
-        HTTP wrapper that:
-        - Gets run_client from self.get_run_client()
-        - Gets msg_body from self.get_msg_body()
-        - Provides callbacks for HTTP-specific operations
-        - Delegates core logic to module function
-        """
-        from edge_lake.cmd import command_execution
-
-        # Get HTTP-specific data
+        '''
+        status - status object
+        command - the command from the header
+        rest_cmd_words - split() over command
+        command_list - a list to be updated with all commands
+        into_output - for example into htm - it disables pass_through
+        '''
+        
+        with_wait = False  # No wait for a reply from a different node
+        is_select = False
+        is_stream = False
+        content_type = 'text/json'
+        file_data = None  # File via a call like: curl -X POST -H "command: file store where dest = !prep_dir/file2.txt" -F "file=@testdata.txt" http://10.0.0.78:7849
         is_binary_data = get_value_from_headers(self.al_headers, "Content-Type") == "application/octet-stream"
+
         ret_val, run_client = self.get_run_client()
+        if not ret_val:
 
-        if ret_val:
-            # Error getting run_client
-            return [ret_val, False, 'text/json', False, False, None]
+            ret_val, msg_body, err_msg = self.get_msg_body(status)
+            if not ret_val:
 
-        ret_val, msg_body, err_msg = self.get_msg_body(status)
-        if ret_val:
-            # Error getting msg_body
-            return [ret_val, False, 'text/json', False, False, None]
+                if rest_cmd_words[0] == "body":
+                    # The command is passed in the message body. The example is with the command: set scrippt [file name] [script data]
+                    command = msg_body
+                    msg_body = None
+                    cmd_words = utils_data.str_to_list(command, 3)
+                else:
+                    cmd_words = rest_cmd_words
 
-        # Call module function (EXACT same logic as original)
-        return command_execution.prepare_commands(
-            status, command, rest_cmd_words, commands_list, into_output,
-            run_client, msg_body, self.get_msg_body_cmds, is_binary_data,
-            get_user_file_data
-        )
+
+                is_select = False
+                if cmd_words[0] == "sql":
+                    cmd_lower = command[4:].lower()
+                    index = cmd_lower.find("select ", 4)
+                    if index > 0:
+                        char_before = cmd_lower[index - 1]
+                        if char_before == ' ' or char_before == '"':
+                            is_select = True
+                            # A select stmt - find output format to determine content-type
+                            out_format = utils_data.find_next_word(cmd_lower, 4, index, ["format", "="])
+                            if out_format == "table":
+                                content_type = "text"
+                elif len(cmd_words) >= 3:
+                    if utils_data.test_words(cmd_words, 0, ["file", "retrieve", "where"]):
+                        # If streaming - Need to deliver headers first:
+                        index = command.find(" stream", 19)
+                        if index > -1:
+                            # Test if command includes stream = true
+                            stream_text = command[index + 1:].replace(" ","").lower()       # remove spaces
+                            if stream_text[:11] == "stream=true":
+                                content_type = "video/mp4"
+                                is_stream = True
+                    elif cmd_words[0] == "file" and (cmd_words[1] == "store" or cmd_words[1] == "to"):
+                        # The file can be provided in 2 ways:
+                        # 1) By identifying a source file: 'command': f'file store where dbms = {dbms} and table = {table} and source = {filename}'
+                        # 2) by a buffer in the message body
+                        if msg_body:
+                            if is_binary_data:
+                                file_data = msg_body        # Transfer binary data as is
+                            else:
+                                # If with msg body byu not binary
+                                # The path is provided from the msg body
+                                ret_val, content_type, file_data = get_user_file_data(status, msg_body)   # the message body is set on the status object as it includes the file to write
+                                msg_body = None         # Message was pushed to the status object
+
+                # determine if wait is needed
+                if run_client:
+                    # For SQL command
+                    if command[:5] != "file ":
+                        # No wait for file copy
+                        # if data goes to HTML, it needs to go into a file to be pulled to one HTML doc.
+                        with_wait = True  # Place thread on wait for reply
+
+                # Execute the command (or commands in message body)
+                if msg_body and not is_binary_data:
+                    # These are assignments of values or pre=processed commands
+                    self.get_msg_body_cmds(status, commands_list, msg_body)
+
+                commands_list.append((run_client + command, with_wait))  # Add a flag if needed to wait for a reply
+            
+        return [ret_val, with_wait, content_type, is_select, is_stream, file_data]
 
     # =======================================================================================================================
     # Get the get_run_client info:
     # IP, Port List
     # Blockchain command
     # subset + timeout instructions: subset=true, timeout=10
-    #
-    # REFACTORED: Delegates to command_execution.get_run_client() module function
     # =======================================================================================================================
     def get_run_client(self):
-        """HTTP wrapper around command_execution.get_run_client() - extracts params from self.al_headers"""
-        from edge_lake.cmd import command_execution
 
         destination = get_value_from_headers(self.al_headers, "destination")
-        subset = get_value_from_headers(self.al_headers, "subset")
-        ret_val, sec_timeout = self.get_timeout()
 
-        if ret_val:
-            # Error getting timeout
-            return [ret_val, ""]
+        if not destination or destination == "local":
+            run_client = ""             # Not a network call - apply on the query node
+            ret_val = process_status.SUCCESS
+        else:
+            run_client = "run client ("
+            if destination != "network":
+                run_client += destination
 
-        # Call module function (EXACT same logic as original)
-        run_client = command_execution.get_run_client(destination, subset, sec_timeout)
+            subset = get_value_from_headers(self.al_headers, "subset")  # A bool value that determines if partial results can be returned (subset = True)
+            if subset:
+                if run_client[-1] == '(':
+                    run_client += f"subset={str(subset).lower()}"
+                else:
+                    run_client += f" ,subset={str(subset).lower()}"
 
-        return [process_status.SUCCESS, run_client]
+            ret_val, sec_timeout = self.get_timeout()  # Timeout is based on the default defined in - run rest server command, or, provided in the header
+            if not ret_val:
+                if sec_timeout:
+                    # max timeout in seconds for execution completion
+                    if run_client[-1] == '(':
+                        run_client += f"timeout={sec_timeout}"
+                    else:
+                        run_client += f" ,timeout={sec_timeout}"
+            run_client += ')'
+
+
+        return [ret_val, run_client]
 
     # =======================================================================================================================
     # Get the commands and assignments in the REST Body Part
@@ -1356,8 +1411,30 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                 offset = index + 1
 
     # =======================================================================================================================
-    # NOTE: execute_al_commands() has been extracted to command_execution module.
-    # al_exec() now calls command_execution.execute_al_commands() directly.
+    # Execute the commands on the command_list and the commandon the header
+    # =======================================================================================================================
+    def execute_al_commands(self, status, io_buff, commands_list, into_output, file_data):
+        '''
+        into_output - when output is organized as HTML
+        '''
+
+        ret_val = process_status.SUCCESS
+
+        for index, entry in enumerate (commands_list):
+            command = entry[0]
+            with_reply = entry[1]       # Indicate if the thread needs to wait for a reply (i.e. SQL query)
+            if with_reply:
+                ret_val = native_api.exec_al_cmd(status, command, self.wfile, into_output, 20)   # Timeout for a list of commands is the default
+            else:
+                ret_val = native_api.exec_no_wait(status, command, io_buff, file_data, self.wfile)
+            if ret_val:
+                if index != (len(commands_list) - 1):
+                    # the command that failed is in the message body (not the header)
+                    status.add_keep_error("Error with command #%u in the message body: '%s'" % (index +1, command))
+                break
+
+        return ret_val
+
     # =======================================================================================================================
     # Get the timeout in case of a wait
     # Timeout is based on the default defined in - run rest server command, or, provided in the header
