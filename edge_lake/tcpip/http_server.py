@@ -1156,7 +1156,6 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
                     ret_val = self.execute_al_commands(status, io_buff, commands_list, into_output, file_data)
 
-
                 j_handle = status.get_active_job_handle()  # Need to be done after the execution of the commands
                 if ret_val != process_status.SUCCESS and ret_val < process_status.NON_ERROR_RET_VALUE:
                     # Operator returned an error
@@ -1169,13 +1168,13 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                     # local query on this node.
                     # send_reply_headers is within the called method
 
+                    from edge_lake.cmd import command_execution
                     job_id = status.get_job_id()
                     j_instance = job_scheduler.get_job(job_id)
                     nodes_count = j_instance.get_nodes_participating()
                     nodes_replied = j_instance.get_nodes_replied()
 
-
-                    write_ret_value = self.local_table_query(status, j_handle, with_wait, nodes_count, nodes_replied)
+                    write_ret_value = command_execution.local_table_query(status, j_handle, with_wait, nodes_count, nodes_replied, self.send_reply_headers)
 
                     j_instance.set_not_active()
 
@@ -1191,9 +1190,10 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                         if j_instance.is_job_active() and j_instance.get_unique_job_id() == status.get_unique_job_id():
                             if not j_instance.is_pass_through():
                                 # Otherwise the data was written to the caller
+                                from edge_lake.cmd import command_execution
                                 nodes_count = j_instance.get_nodes_participating()
                                 nodes_replied = j_instance.get_nodes_replied()
-                                write_ret_value = self.local_table_query(status, j_handle, with_wait, nodes_count, nodes_replied)
+                                write_ret_value = command_execution.local_table_query(status, j_handle, with_wait, nodes_count, nodes_replied, self.send_reply_headers)
                                 if into_output and not write_ret_value:
                                     # Write the HTML including header and data
                                     ret_val = self.write_headers_and_msg(status, REST_OK, content_type, j_handle.get_output_buff())

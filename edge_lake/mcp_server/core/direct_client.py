@@ -69,6 +69,10 @@ class EdgeLakeDirectClient:
             Query results stream directly to socket via OutputManager.
             Non-query commands return results via result_set.
         """
+        # TODO: Refactor http_server.al_exec() to use command_execution methods instead of self.methods
+        #       (this may require some debugging as there are likely subtle differences in how
+        #        parameters are passed between the two approaches)
+
         logger.debug(f"Executing command directly: {command} (socket={'provided' if socket else 'none'})")
 
         # Check if client is shutting down - return empty result instead of raising
@@ -162,9 +166,48 @@ class EdgeLakeDirectClient:
 
             logger.debug(f"Command completed with return value: {ret_val}")
 
-            # Handle results
+            # Get active job handle (contains select_parsed for aggregated queries)
+            j_handle = status.get_active_job_handle()
+
+            # Handle aggregated queries (with_wait and is_select)
+            if ret_val == self.process_status.SUCCESS and with_wait and is_select:
+                # Import job_scheduler and command_execution
+                from edge_lake.job import job_scheduler
+                from edge_lake.cmd import command_execution
+
+                job_id = status.get_job_id()
+
+                if job_id != self.process_status.JOB_INSTANCE_NOT_USED:
+                    j_instance = job_scheduler.get_job(job_id)
+                    j_instance.data_mutex_aquire(status, 'W')
+
+                    if j_instance.is_job_active() and j_instance.get_unique_job_id() == status.get_unique_job_id():
+                        if not j_instance.is_pass_through():
+                            # Query the system_query database for aggregated results
+                            nodes_count = j_instance.get_nodes_participating()
+                            nodes_replied = j_instance.get_nodes_replied()
+
+                            # Call shared local_table_query (no send_headers_callback for MCP)
+                            ret_val = command_execution.local_table_query(status, j_handle, with_wait, nodes_count, nodes_replied, None)
+
+                            # Aggregation results are written to socket - read them back
+                            if socket:
+                                socket.seek(0)
+                                buffer_data = socket.read()
+                                if buffer_data:
+                                    j_instance.data_mutex_release(status, 'W')
+                                    j_instance.set_not_active()
+                                    return self._parse_result_set(buffer_data.decode('utf-8') if isinstance(buffer_data, bytes) else buffer_data)
+
+                    j_instance.data_mutex_release(status, 'W')
+                    j_instance.set_not_active()
+
+                # For aggregated queries, results are streamed to socket (should have been handled above)
+                return ""
+
+            # Handle non-aggregated results
             if ret_val == self.process_status.SUCCESS:
-                result_set = status.get_job_handle().get_result_set()
+                result_set = j_handle.get_result_set()
 
                 if result_set:
                     logger.debug(f"Result set available: {len(result_set)} bytes")

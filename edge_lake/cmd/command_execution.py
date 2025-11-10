@@ -9,12 +9,13 @@ Methods extracted:
 - get_run_client() - from ChunkedHTTPRequestHandler.get_run_client()
 - execute_al_commands() - from ChunkedHTTPRequestHandler.execute_al_commands()
 - prepare_commands() - from ChunkedHTTPRequestHandler.prepare_commands()
+- local_table_query() - from ChunkedHTTPRequestHandler.local_table_query()
 
 License: Mozilla Public License 2.0
 """
 
-from edge_lake.cmd import native_api
-from edge_lake.generic import process_status, params, utils_data
+from edge_lake.cmd import native_api, member_cmd
+from edge_lake.generic import process_status, params, utils_data, interpreter
 
 
 def get_run_client(destination, subset, sec_timeout):
@@ -199,3 +200,63 @@ def prepare_commands(status, command, rest_cmd_words, commands_list, into_output
     commands_list.append((run_client + command, with_wait))  # Add a flag if needed to wait for a reply
 
     return [ret_val, with_wait, content_type, is_select, is_stream, file_data]
+
+
+def local_table_query(status, j_handle, with_wait, nodes_count, nodes_replied, send_headers_callback=None):
+    """
+    Query local database for aggregated results - EXTRACTED from http_server.local_table_query()
+
+    Original location: http_server.py ChunkedHTTPRequestHandler.local_table_query() line 1651
+
+    Changes from original:
+    - Removed self parameter
+    - Added send_headers_callback parameter (optional, only used for non-with_wait queries)
+    - Replaced self.send_reply_headers() with send_headers_callback() call
+
+    Args:
+        status: ProcessStat object
+        j_handle: Job handle with query parameters
+        with_wait: Bool - True for aggregated queries (network queries)
+        nodes_count: Number of nodes participating
+        nodes_replied: Number of nodes that replied
+        send_headers_callback: Optional function to send HTTP headers (http_server only)
+
+    Returns:
+        int: Return code (process_status.SUCCESS or error code)
+    """
+    logical_dbms, table_name, conditions, sql_command = j_handle.get_local_query_params()
+
+    if not with_wait:
+        # If with wait is True - headers already delivered (before the call to execute the query - to allow job recivers to deliver data)
+        if interpreter.test_one_value(conditions, "format", "table"):
+            content_type = 'text'
+        else:
+            content_type = 'text/json'
+
+        if send_headers_callback:
+            ret_val = send_headers_callback(status, 200, "", True, content_type, 0, True, None)
+        else:
+            ret_val = process_status.SUCCESS
+    else:
+        ret_val = process_status.SUCCESS
+        if not logical_dbms:
+            # This is the case of subset and not all nodes replied
+            logical_dbms = "system_query"
+            if j_handle.select_parsed:
+                sql_command = j_handle.select_parsed.local_query
+                table_name = j_handle.select_parsed.get_local_table()
+            else:
+                # MCP path - select_parsed not set, error condition
+                err_msg = f"Missing select_parsed for aggregated query"
+                status.add_error(err_msg)
+                return process_status.Failed_query_process
+            conditions["dest"] = ["rest"]
+
+
+    if not ret_val:
+        try:
+            ret_val = member_cmd.query_local_dbms(status, None, logical_dbms, table_name, conditions, sql_command, nodes_count, nodes_replied)
+        except:
+            ret_val = process_status.Failed_query_process
+
+    return ret_val
