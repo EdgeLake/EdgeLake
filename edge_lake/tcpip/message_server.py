@@ -23,7 +23,7 @@ from edge_lake.generic.streaming_data import add_data
 from edge_lake.generic.params import get_param
 
 
-
+quote_to_backtick_ = str.maketrans({"'": "`", '"': "`"})
 
 # The MQTT protocol: https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901041
 
@@ -821,10 +821,14 @@ class GENERIC_MSG(SESSION):
                     formatted_val = format_syslog_date(attr_val)
                     if not formatted_val:
                         self.statistics[2] += 1  # Number of errors
-                        self.statistics[3] = f"Failed to format column '{attr_name}'"
+                        self.statistics[3] = f"Failed to format Syslog Timestamp column '{attr_name}'"
                         continue
                 else:
-                    formatted_val = attr_val
+                    if attr_id == last_id:
+                        # This is the "message" attribute --> replace all single (') and double (") quotes with backticks (```)
+                        formatted_val = attr_val.translate(quote_to_backtick_)
+                    else:
+                        formatted_val = attr_val
 
                 if formatted_val:
                     if len(json_msg) == 1:

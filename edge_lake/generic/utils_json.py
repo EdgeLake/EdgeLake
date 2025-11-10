@@ -824,7 +824,7 @@ def get_key_string(key):
 # where dbms = !dbms_name and table = !table_name --> { "dbms" : !dbms_name }
 # example blockchain get operator where dbms = lsl_demo
 # ======================================================================================================================
-def make_jon_struct_from_where(cmd_words, offset_first):
+def make_json_struct_from_where(status, cmd_words, offset_first, policy):
     offset = offset_first
     words_count = len(cmd_words)
 
@@ -840,6 +840,23 @@ def make_jon_struct_from_where(cmd_words, offset_first):
 
         value = cmd_words[offset + 2]
         if len(value):
+            if cmd_words[offset + 1] == '=' and policy and value[0] == '[' and value[-1] == ']':
+                # take value from the policy
+                join_keys = [k for k in value.replace(']', '').split('[') if k]
+                policy_inner = policy
+                for one_key in join_keys:
+                    if isinstance(policy_inner, dict) and one_key in policy_inner:
+                        policy_inner = policy_inner[one_key]
+                    else:
+                        policy_inner = None
+                        break
+                if not policy_inner:
+                    status.add_error(f"The policy used is missing the attributes '{value}'")
+                    ret_val = process_status.ERR_wrong_json_structure
+                    break
+                else:
+                    value = str(policy_inner)
+
             if value[0] != '!':
                 value = "\"%s\"" % value  # wrap with quotations
 

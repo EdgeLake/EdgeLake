@@ -231,11 +231,35 @@ def output(info, is_newLine, is_mutex = True):
 
 # =======================================================================================================================
 # Output box messages
+'''
+✅ Split by \n
+✅ Ignore \r
+✅ Ensure no resulting string exceeds 150 chars
+'''
 # =======================================================================================================================
-def output_box(info_string, color = "red"):
+def output_box(info_string, color = "red", max_len = 150):
+
 
     # remove '\r' and split by line
-    info_array = info_string.replace("\r","").split('\n')
+    s = info_string.replace('\r', '')
+
+    # Split by newline
+    parts = s.split('\n')
+    info_array = []
+
+    for part in parts:
+        encoded = part.encode('utf-8')
+        if len(encoded) <= max_len:
+            info_array.append(part)
+        else:
+            # Split long parts into chunks of <= max_bytes bytes
+            for part in parts:
+                if len(part) <= max_len:
+                    info_array.append(part)
+                else:
+                    # Split long parts into fixed-size chunks
+                    for i in range(0, len(part), max_len):
+                        info_array.append(part[i:i + max_len])
 
     # Get the longest line
     box_length = 0
@@ -1178,3 +1202,47 @@ def print_dict_as_table(key, dict_list, info_struct, attr_names, get_info_str, l
     reply_data = output_nested_lists(print_list, title, attr_names, get_info_str, line_prefix, capital_title)
 
     return reply_data
+
+# =======================================================================================================================
+# Flat dictionary (key leading to a dictionary with flat attributes) to a table
+# {
+#     "key1": { "inner_key1" : "value1",
+#               "inner_key2" : "value2",
+#               "inner_key3" : "value3",
+#               },
+#     "key2": { "inner_key1" : "value1",
+#               "inner_key2" : "value2",
+#               "inner_key3" : "value3",
+#               },
+# }
+# Return the printable table as a string
+# =======================================================================================================================
+def print_flat_dict_as_table(source_dict, ignore_list, key_name, title, get_info_str):
+    '''
+    ignore_list - the attribute names that are ignored in the output - needs to be [] if to allow all
+    key_name - The title for the root attribute in the dict
+    source_dict - the dictionary to be printed
+    title - the title to be printed
+    get_info_str - True to return as a string (false - will print to stdout)
+    '''
+    if len(source_dict):
+        # With connected cameras
+        output_table = []
+        for index, key_val in enumerate(source_dict.items()):
+            key = key_val[0]
+            info = key_val[1]   # key value pairs
+
+            if not index:
+                # First entry - set the header
+                column_names = [key_name] + [inner_key for inner_key in info.keys() if not inner_key in ignore_list]
+
+
+            new_entry = [key] + [inner_val for inner_key, inner_val in info.items() if not inner_key in ignore_list]
+            output_table.append(new_entry)
+
+        info_str = output_nested_lists(nested_lists=output_table, header=title, column_names = column_names, get_info_str = get_info_str, line_prefix = "", capital_title = True)
+
+    else:
+        info_str = f"Dictionary {key_name} is empty"
+
+    return info_str
