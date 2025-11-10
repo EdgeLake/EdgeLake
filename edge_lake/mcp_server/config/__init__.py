@@ -7,6 +7,7 @@ License: Mozilla Public License 2.0
 """
 
 import os
+import sys
 import yaml
 import logging
 from typing import Dict, List, Any, Optional
@@ -34,13 +35,18 @@ class Config:
     def __init__(self, config_dir: Optional[Path] = None):
         """
         Initialize configuration.
-        
+
         Args:
             config_dir: Path to configuration directory. If None, uses default location.
         """
         if config_dir is None:
-            # Default to config directory relative to this file
-            config_dir = Path(__file__).parent
+            # Handle PyInstaller bundled resources
+            if getattr(sys, '_MEIPASS', None):
+                # PyInstaller mode: use bundled resources from temporary extraction directory
+                config_dir = Path(sys._MEIPASS) / 'edge_lake' / 'mcp_server' / 'config'
+            else:
+                # Development mode: use file location
+                config_dir = Path(__file__).parent
         
         self.config_dir = Path(config_dir)
         self.tools: List[ToolConfig] = []

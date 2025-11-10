@@ -69,9 +69,18 @@ class InstallCommand(install):
         exe_extension = '.exe' if sys.platform == 'win32' else ''
         exe_name = f"edgelake_v{PKG_VERSION}_{CPU_TYPE}{exe_extension}"
 
+        # Bundle MCP server config files with PyInstaller
+        mcp_config_dir = os.path.join(ROOT_PATH, 'edge_lake', 'mcp_server', 'config')
+        data_files = []
+
+        if os.path.isdir(mcp_config_dir):
+            # Add config directory with proper separator for PyInstaller
+            separator = ';' if sys.platform == 'win32' else ':'
+            data_files.append(f"--add-data={mcp_config_dir}{separator}edge_lake/mcp_server/config")
+
         try:
             subprocess.run(
-                ["pyinstaller", "--onefile", f"--name={exe_name}", *hidden_imports, EDGELAKE_PY],
+                ["pyinstaller", "--onefile", f"--name={exe_name}", *hidden_imports, *data_files, EDGELAKE_PY],
                 check=True
             )
         except subprocess.CalledProcessError as e:
