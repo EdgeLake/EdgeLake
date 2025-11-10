@@ -334,13 +334,13 @@ class OutputManager():
                 ret_val = self.output_table_entries(status, is_mutex, False)
         else:
             # use JSON format
-            if self.format_type == "json:output" or self.format_type == "json:list":
-                # Clean JSON rows
+            if self.format_type == "json:output" or self.format_type == "json:list" or self.format_type == "mcp":
+                # Clean JSON rows (mcp format is same as json:list - clean JSON array)
                 if not rows_data:
                     # Data is not organized as a string
                     out_data = utils_sql.make_output_row(1, self.title_list, self.data_types_list, json_data)
                     if not offset_row:
-                        if self.format_type == "json:list":
+                        if self.format_type == "json:list" or self.format_type == "mcp":
                             offset_new = 9      # Keep the [ parenthesis
                         else:
                             # 10 is used because of the transformation from JSON
@@ -352,7 +352,7 @@ class OutputManager():
                 else:
                     if not offset_row:
                         # 11 is used because of the AnyLog format
-                        if self.format_type == "json:list":
+                        if self.format_type == "json:list" or self.format_type == "mcp":
                             offset_new = 10      # Keep the [ parenthesis
                         else:
                             offset_new = 11 # Ignore the "{"Query":[" prefix
@@ -366,6 +366,7 @@ class OutputManager():
                         if self.format_type == "json:output":
                             str_info = "%s%s" % (self.new_line, str_info)
                         else:
+                            # json:list and mcp use comma-separated array format
                             str_info = ",%s%s" % (self.new_line, str_info)
                 else:
                     if self.destination == "stdout" or self.test:
@@ -542,7 +543,7 @@ class OutputManager():
                 else:
                     self.output_info_string(status, "{\"reply\" : \"Empty data set\"}", None, True)
 
-            elif self.format_type[:4] == "json":
+            elif self.format_type[:4] == "json" or self.format_type == "mcp":
                 if self.add_stat:
                     prefix_str = ""
                     double_lines_stat = False  # Place stat on a single line
@@ -554,7 +555,7 @@ class OutputManager():
                         else:
                             prefix_str = "]," + self.new_line
                     else:
-                        if self.format_type == "json:list":
+                        if self.format_type == "json:list" or self.format_type == "mcp":
                             if self.test:
                                 prefix_str = "]"
                             else:
@@ -569,9 +570,9 @@ class OutputManager():
 
                     if self.format_type == "json":
                         end_struct = "]}"
-                    elif self.format_type == "json:list":  # not JSON:output
+                    elif self.format_type == "json:list" or self.format_type == "mcp":
                         end_struct = "]"
-                    elif self.format_type == "json:output":  # not JSON:output
+                    elif self.format_type == "json:output":
                         end_struct = ""
 
                     if self.destination == "rest":
