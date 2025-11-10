@@ -11,7 +11,8 @@ cryptography==44.0.2
 pyjwt===2.10.1
 
 #--- networking ---
-netifaces==0.11.0
+#netifaces==0.11.0
+netifaces2
 pyOpenSSL==25.0.0
 dnspython~=2.7.0
 
