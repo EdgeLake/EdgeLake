@@ -11,7 +11,8 @@ cryptography==44.0.2
 pyjwt===2.10.1
 
 #--- networking ---
-netifaces==0.11.0
+#netifaces==0.11.0
+netifaces2
 pyOpenSSL==25.0.0
 dnspython~=2.7.0
 
@@ -58,4 +59,10 @@ fastapi==0.120.1
 uvicorn==0.38.0
 numpy==2.2.3
 xmltodict==1.0.2
+
+#--- mcp (Model Context Protocol) - lightweight built-in implementation ---
+# Note: Using edge_lake/mcp_server/protocol.py instead of heavy 'mcp' package
+# Removed: mcp>=1.0.0 (saves ~10-20MB in compiled binary)
+# Removed: pydantic>=2.0.0 (not needed with lightweight protocol)
+# Removed: jsonpath-ng (replaced with direct dict access for {"Query": [...]} unwrapping)
 

@@ -697,6 +697,7 @@ def process_message( topic, user_id, user_msg):
 
     ret_val = process_status.SUCCESS
     mutex_taken = False
+    candidate = None
 
     try:
         client_sbscr = subscriptions[user_id]  # The mapping info as f(topic)
@@ -840,7 +841,10 @@ def process_message( topic, user_id, user_msg):
 
     if debug_mode:
         # print message - enabled using the command: set mqtt debug
-        debug_msg = "\r\nMQTT Status: [%02u] Message: [%s]" % (ret_val, user_msg)
+        err_text = process_status.get_status_text(ret_val)
+
+        debug_msg = f"\r\nMQTT Status: '{err_text}' Message: {user_msg}"
+
         utils_print.output(debug_msg, True)
 
     if mutex_taken:
@@ -1172,7 +1176,7 @@ def get_msg_data(status, topic, topic_info, message):
                 if not attr_val:
                     if is_optional:
                         continue        # ignore this value
-                    status.add_error(f"Failed to pull info from message - topic '{topic} pulls '{str(retrieve_info)}' which is missing in message - Add: 'opttional = true'")
+                    status.add_error(f"Failed to pull info from message - topic '{topic} pulls '{str(retrieve_info)}' which is missing in message - Add: 'optional = true'")
                     ret_val = process_status.MQTT_data_err
                     break
 
@@ -2063,7 +2067,7 @@ def get_column_type_value(status, value):
 
     return [ret_val, column_type, column_value, optional]
 # -----------------------------------------------------------------------
-# Set the debug mode - True will print incomming messages
+# Set the debug mode - True will print incoming messages
 # -----------------------------------------------------------------------
 def set_debug( mode ):
     global debug_mode

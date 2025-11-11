@@ -1,0 +1,124 @@
+# EdgeLake MCP Tools Configuration
+# This file defines the MCP tools dynamically based on EdgeLake commands from member_cmd.py
+#
+# Testing Mode:
+#   Set 'testing: true' to enable detailed debug logging for tool execution.
+#   When enabled, logs will show:
+#     - Tool entry with input arguments
+#     - Built command sent to member_cmd.process_cmd()
+#     - Raw output from member_cmd
+#     - Final formatted response sent to MCP client
+#   Default: false (not present = false)
+#   Usage: Add 'testing: true' at the top level to enable globally
+
+version: "1.0"
+
+# Enable testing mode (optional, defaults to false)
+# testing: true
+
+tools:
+  # Database Discovery Tools
+  - name: list_database_schema
+    description: "List all databases and tables in EdgeLake. Returns a list of all database/table combinations available in the network. Use this to discover what data is available before querying."
+    edgelake_command:
+      type: "get"
+      method: "blockchain_table"
+      template: "blockchain get table where format = mcp"
+    input_schema:
+      type: object
+      properties: {}
+      required: []
+  
+  - name: get_schema
+    description: "Get the schema (column definitions) for a specific table. Use this to understand what columns are available before querying."
+    edgelake_command:
+      type: "get"
+      method: "columns"
+      template: 'get columns where dbms="{database}" and table="{table}" and format=mcp'
+    input_schema:
+      type: object
+      properties:
+        database:
+          type: string
+          description: "Database name"
+        table:
+          type: string
+          description: "Table name"
+      required: ["database", "table"]
+  
+  # Query Execution Tool
+  - name: query
+    description: "Execute distributed SQL query across EdgeLake network with advanced filtering, grouping, and ordering options"
+    edgelake_command:
+      type: "sql"
+      method: "query"
+      build_sql: true
+      format: "mcp"  # SQL queries use format=mcp (handled like json:list, works with socket streaming)
+      headers:
+        destination: "network"
+    input_schema:
+      type: object
+      properties:
+        database:
+          type: string
+          description: "Database name to query"
+        table:
+          type: string
+          description: "Table name to query"
+        select:
+          type: array
+          items:
+            type: string
+          description: "Columns to select (default: all columns with *) Does not support stddev()"
+          default: ["*"]
+        where:
+          type: string
+          description: "WHERE clause conditions (e.g., 'is_active = true AND age > 18'). Supports AND/OR operators"
+        group_by:
+          type: array
+          items:
+            type: string
+          description: "Columns to group by (required when using aggregations with non-aggregated columns)"
+        order_by:
+          type: array
+          items:
+            type: object
+            properties:
+              column:
+                type: string
+              direction:
+                type: string
+                enum: ["ASC", "DESC"]
+                default: "ASC"
+            required: ["column"]
+          description: "Order results by columns with optional ASC/DESC direction"
+        limit:
+          type: integer
+          description: "Maximum number of rows to return"
+          minimum: 1
+          default: 100
+      required: ["database", "table"]
+
+  # Node Status Tool
+  - name: node_status
+    description: "Get the status and health information of the EdgeLake node including detailed statistics"
+    edgelake_command:
+      type: "get"
+      method: "status"
+      template: "get status where format = mcp include statistics"
+    input_schema:
+      type: object
+      properties: {}
+      required: []
+  
+  # Server Info Tool
+  - name: server_info
+    description: "Get EdgeLake version and node information"
+    edgelake_command:
+      type: "get"
+      method: "version"
+      template: "get version where format = mcp"
+    input_schema:
+      type: object
+      properties: {}
+      required: []

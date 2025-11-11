@@ -3,15 +3,21 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app/
 
-# Copy source code
-COPY . EdgeLake/
-
-# Install build dependencies
+# Step 1: Install system dependencies (cached unless Dockerfile changes)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends bash git openssh-client gcc python3-dev libffi-dev libopencv-dev && \
-    python3 -m pip install --upgrade pip wheel pyyaml==6.0.2 && \
-    python3 -m pip install --upgrade -r /app/EdgeLake/requirements.txt && \
-    python3 /app/EdgeLake/setup.py install && \
+    apt-get install -y --no-install-recommends bash git openssh-client gcc python3-dev libffi-dev libopencv-dev
+
+# Step 2: Copy only requirements.txt and install Python deps (cached unless requirements.txt changes)
+COPY requirements.txt /app/EdgeLake/requirements.txt
+RUN python3 -m pip install --upgrade pip wheel pyyaml==6.0.2 && \
+    python3 -m pip install --upgrade -r /app/EdgeLake/requirements.txt
+
+# Step 3: Copy source code (invalidates cache on ANY code change, but deps already installed)
+COPY . /app/EdgeLake/
+
+# Step 4: Build executable and cleanup
+RUN cd /app/EdgeLake && \
+    python3 setup.py install && \
     mv dist/* /app/edgelake_agent && \
     rm -rf EdgeLake build *.egg-info dist && \
     apt-get purge -y gcc python3-dev libffi-dev libopencv-dev && \
@@ -26,6 +32,9 @@ WORKDIR /app/
 # Copy only the executable from builder
 COPY --from=builder /app/edgelake_agent /app/edgelake_agent
 
+# Copy MCP server directory from source (includes config files)
+COPY edge_lake/mcp_server /app/EdgeLake/edge_lake/mcp_server
+
 # Install runtime dependencies only
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -39,9 +48,10 @@ RUN apt-get update && \
 
 # Copy only scripts/configs needed at runtime
 RUN mkdir -p /app/EdgeLake && \
+    git clone https://github.com/tom342178/deployment-scripts.git && \
     git clone https://github.com/oshadmon/nebula-anylog /app/nebula
 COPY deploy_edgelake.sh /app/deploy_edgelake.sh
-COPY setup.cfg /app/EdgeLake/setup.
+COPY setup.cfg /app/EdgeLake/setup.cfg
 
 # ==== Part 3: Runtime configuration ====
 ENV EDGELAKE_PATH=/app \
