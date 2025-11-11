@@ -4,7 +4,7 @@ pyyaml==6.0.2
 pyinstaller==6.13.0
 six==1.17.0
 setuptools==65.5.0
-requests==2.32.4
+requests==2.32.5
 psutil==7.0.0
 orjson==3.10.15
 cryptography==44.0.2
@@ -51,6 +51,14 @@ opcua==0.98.13
 
 #--- blobs ---
 numpy==2.2.3
+opencv-python-headless==4.10.0.84
+av>=0.0
+yt-dlp>=0.0
+opencv-python-headless==4.10.0.84
+fastapi==0.120.1
+uvicorn==0.38.0
+numpy==2.2.3
+xmltodict==1.0.2
 
 #--- mcp (Model Context Protocol) - lightweight built-in implementation ---
 # Note: Using edge_lake/mcp_server/protocol.py instead of heavy 'mcp' package

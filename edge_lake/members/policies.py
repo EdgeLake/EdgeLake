@@ -136,6 +136,12 @@ permissions_attr = [
     ("signature",   str,         None,               None,           True,        False,    None),
 ]
 
+bucket_attr = [
+    # attr name * attr type * child attributes * default value * must exists *  is unique
+    ("name",        str,            None,           None,           True,       True, None),
+    ("operator",    str,            None,           None,           True,       False, None),
+]
+
 assignment_attr = [
     # Connect member to permissions
     # attr name * attr type * child attributes * default value * must exists *  is-unique
@@ -591,6 +597,15 @@ def new_member_policy(status, policy_type, policy_obj, blockchain_file):
 
 # =======================================================================================================================
 # Test that the policy has all components and complete missing values
+# Bucket policies are tested for unique name
+# =======================================================================================================================
+def new_bucket_policy(status, policy_type, policy_obj, blockchain_file):
+
+    ret_val = test_key_val(status, policy_type, policy_obj, bucket_attr, blockchain_file)
+
+    return ret_val
+# =======================================================================================================================
+# Test that the policy has all components and complete missing values
 # Permission policy determines commands and databases allowed
 # =======================================================================================================================
 def new_permission_policy(status, policy_type, policy_obj, blockchain_file):
@@ -715,6 +730,7 @@ new_policies = {          # The process to execute when a new policy is added
     "assignment" :  new_assignment_policy,      # Connect member to permissions
     "license" :  new_license_policy,      # Connect member to permissions
     "tag" :  new_tag_policy,      # Connect member to permissions
+    "bucket" : new_bucket_policy,       # Adding a new bucket
 }
 
 # =======================================================================================================================

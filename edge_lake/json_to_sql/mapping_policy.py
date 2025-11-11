@@ -458,7 +458,7 @@ def process_event(status, readings, policy_inner, policy_id, dbms_name, table_na
                     if ret_val:
                         break
 
-                    policy_inner["bwatch_dir"] = True
+                    policy_inner["bwatch_dir"] = True  # This determines that the JSON is written to the bwatch_dir
 
                 else:
                     if "apply" in column_info:

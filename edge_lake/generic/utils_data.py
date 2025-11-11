@@ -3,7 +3,7 @@ This Source Code Form is subject to the terms of the Mozilla Public
 License, v. 2.0. If a copy of the MPL was not distributed with this
 file, You can obtain one at http://mozilla.org/MPL/2.0/
 """
-
+import os.path
 from datetime import datetime
 from urllib.parse import quote
 import ipaddress
@@ -12,7 +12,14 @@ import hashlib
 import re
 import sys
 from urllib.parse import urlparse
+from pathlib import Path
 
+try:
+    import yt_dlp
+except:
+    lib_yt_dlp_ = False
+else:
+    lib_yt_dlp_ = True
 
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.process_log as process_log
@@ -132,10 +139,6 @@ url_chars_ = {  "20": ' ',
 
 hex_digits_ = "0123456789abcdef"
 
-skip_chars_ = set([' ', '\t', '\r', '\n', '\x00', '\x01', '\x02', '\x03', '\x04', '\x05',
-                   '\x06', '\x07', '\x08', '\x0b', '\x0c', '\x0e', '\x0f', '\x10', '\x11',
-                   '\x12', '\x13', '\x14', '\x15', '\x16', '\x17', '\x18', '\x19', '\x1a',
-                   '\x1b', '\x1c', '\x1d', '\x1e', '\x1f'])
 
 TYPE_MAP = {
     "str": str,
@@ -144,6 +147,7 @@ TYPE_MAP = {
     "bool": lambda v: v.lower() in ("true", "1", "yes"),
     "list": lambda v: [x.strip() for x in v.split(",") if x.strip()],
 }
+
 # -------------------------------------------------------------------------
 #   Data convertor from string to type
 # -------------------------------------------------------------------------
@@ -1126,7 +1130,7 @@ def is_sub_array(source_array, offset, sub_array):
 # For a given string, determine if enclosed in the specified parenthesis.
 # Used to determine the type of structure represented by the string: { } represents a dictionary and [ ] for a list.
 # Ignore trailing \r\n
-# Returns dict or list or none
+# Returns dict or list or none and the value
 # ======================================================================================================================
 # Example: include ASCII whitespace + common noise bytes; customize as needed
 def get_str_obj(tested_str: str):
@@ -1138,11 +1142,7 @@ def get_str_obj(tested_str: str):
     Fast path: if first and last chars are already matching braces, return immediately.
     Slow path: trim leading/trailing skip chars, then (if needed) extract embedded { ... } or [ ... ].
     """
-    if not tested_str:
-        return "none", None
-
-    n = len(tested_str)
-    if n == 1:
+    if not tested_str or len(tested_str) == 1:
         return "none", None
 
     fc = tested_str[0]
@@ -1154,64 +1154,18 @@ def get_str_obj(tested_str: str):
     if fc == '[' and lc == ']':
         return "list", None
 
-    # ---- Trim leading/trailing skip chars without copying unless needed ----
-    i = 0
-    while i < n and tested_str[i] in skip_chars_:
-        i += 1
-    if i == n:
+    i = tested_str.find('{')
+    j = tested_str.find('[')
+    if i == -1 and j == -1:
         return "none", None
-
-    j = n - 1
-    while j >= i and tested_str[j] in skip_chars_:
-        j -= 1
-
-    if i > 0 or j < n - 1:
-        trimmed = tested_str[i:j+1]
-        if trimmed:
-            tfc = trimmed[0]
-            tlc = trimmed[-1]
-            if tfc == '{' and tlc == '}':
-                return "dict", trimmed
-            if tfc == '[' and tlc == ']':
-                return "list", trimmed
-
-    # ---- Embedded JSON/object/array after a binary/text header ----
-    # Find first '{' or '[' quickly; choose the earlier one.
-    i_brace = tested_str.find('{')
-    i_brack = tested_str.find('[')
-
-    if i_brace == -1 and i_brack == -1:
-        return "none", None
-
-    # pick earliest non-negative index
-    if i_brace == -1:
-        start = i_brack
-        start_char = '['
-        end_char = ']'
-    elif i_brack == -1:
-        start = i_brace
-        start_char = '{'
-        end_char = '}'
+    if i == -1 or (j != -1 and j < i):
+        start, end, kind = j, tested_str.rfind(']') + 1, 'list'
     else:
-        if i_brace < i_brack:
-            start = i_brace
-            start_char = '{'
-            end_char = '}'
-        else:
-            start = i_brack
-            start_char = '['
-            end_char = ']'
-
-    # From the end, grab the last matching closing char
-    end = tested_str.rfind(end_char)
-    if end == -1 or end <= start:
+        start, end, kind = i, tested_str.rfind('}') + 1, 'dict'
+    if start == -1 or end <= start:
         return "none", None
+    return kind, tested_str[start:end]
 
-    candidate = tested_str[start:end+1]
-    if candidate and candidate[0] == start_char and candidate[-1] == end_char:
-        return ("dict" if start_char == '{' else "list"), candidate
-
-    return "none", None
 
 # ======================================================================================================================
 # Get word length - return length to space or end of line
@@ -1778,3 +1732,127 @@ def camera_url_builder(url:str, user:str, password:str, protocol:str=None):
         conn_url = f'{protocol}://{rest}'
 
     return conn_url
+
+
+# =======================================================================================================================
+# Uses yt-dlp to extract the best live stream or video HLS URL
+# =======================================================================================================================
+
+"""
+Check if platform is supported 
+"""
+def _check_platform(domain:str)->str:
+    platform = "unknown"
+    if "youtube.com" in domain or "youtu.be" in domain:
+        platform = "youtube"
+    elif "twitch.tv" in domain:
+        platform = "twitch"
+    elif "facebook.com" in domain:
+        platform = "facebook"
+    elif "instagram.com" in domain:
+        platform = "instagram"
+    elif "tiktok.com" in domain:
+        platform = "tiktok"
+    elif "vimeo.com" in domain:
+        platform = "vimeo"
+    elif "linkedin.com" in domain:
+        platform = "linkedin"
+    return platform
+
+"""
+Download cookies
+"""
+def _get_cookies(status, url, cookies_file:str):
+    ydl_opts = {
+        "cookiesfrombrowser": ("edge",),
+        "skip_download": True,
+        "writeinfojson": False,
+        "writesubtitles": False,
+        "writethumbnail": False,
+        "write_cookies": cookies_file  # <--- this actually saves cookies
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+    except:
+        errno, value = sys.exc_info()[:2]
+        status.add_error(f'Failed to generate cookies: {value}')
+        ret_val = process_status.Connection_error
+    else:
+        ret_val = process_status.SUCCESS
+
+    return ret_val
+
+"""
+Generate URL 
+"""
+def _get_hls_url(status, url:str, cookies_file:str):
+    rtsp_url = ""
+
+    ydl_opts = {
+        # "cookiesfrombrowser": ("edge",),
+        'format': 'best',  # get best quality video
+        'quiet': True,
+        'skip_download': True,
+        "cookiefile": cookies_file
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            # For live streams, 'url' is usually HLS (.m3u8)
+            if 'url' in info:
+                rtsp_url = info['url']
+            # Fallback: get first format's URL
+            formats = info.get('formats', [])
+            if formats:
+                rtsp_url = formats[-1]['url']
+    except:
+        errno, value = sys.exc_info()[:2]
+        status.add_error(f'Failed to get URL for live video feed: {value}')
+        ret_val = process_status.Connection_error
+    else:
+        ret_val = process_status.SUCCESS
+
+    return [ret_val, rtsp_url]
+
+"""
+Main for URL conversion
+"""
+# 'C:\\Users\\oshad\\AnyLog-code\\EdgeLake\\external_lib\\video_processing\\cookies\\youtube.txt'
+def hls_url(status, url: str):
+    global lib_yt_dlp_
+    dest_cookies = os.path.dirname(__file__).split('generic')[0].replace('edge_lake', 'external_lib')
+    dest_cookies = os.path.join(dest_cookies, 'video_processing', 'cookies')
+
+    domain = urlparse(url).netloc.lower()
+    platform = _check_platform(domain=domain)
+
+    #--------------------------#
+    # Check package and source #
+    #--------------------------#
+    if not lib_yt_dlp_:
+        status.add_error("Failed to import 'yt_dlp'")
+        return process_status.Failed_to_import_lib, None
+    elif platform not in ["youtube", "twitch", "vimeo", "tiktok", "facebook"]:
+        status.add_error(f"Unsupported URL with {domain}")
+        return process_status.URL_not_supported, None
+
+    #--------------------------#
+    # prepare cooke file       #
+    #--------------------------#
+    dest_cookies_path = os.path.join(os.path.expanduser(os.path.expandvars(dest_cookies)), f'{platform}.txt')
+
+    if not os.path.isfile(dest_cookies_path):
+        os.makedirs(dest_cookies_path, exist_ok=True)  # create dir if missing
+        # Path to store platform-specific cookies
+        full_dest_cookies = os.path.join(dest_cookies_path, f"{platform}.txt")
+        cookie_status = _get_cookies(status=status, url=url, cookies_file=full_dest_cookies)
+    else:
+        full_dest_cookies = dest_cookies_path
+
+    # Generate HLS/RTSP URL using cookies
+    ret_val, stream_url = _get_hls_url(status=status, url=url, cookies_file=full_dest_cookies)
+
+    return ret_val, stream_url
