@@ -251,6 +251,10 @@ def data_archiver(dummy: str, conditions: dict):
 
 
 # ------------------------------------------------------------------------------
+# The video file is written to the blobs dir
+# A JSON entry (like the below) is written to the bwatch_dir, this entry would push the video into the storage
+# This process is done in mqtt_client.process_policy() and video_recorder._close_segment()
+
 # Test the structure of the JSON object representing the blobs
 # Example file:
 '''
@@ -302,7 +306,7 @@ def load_and_test_json(status, file_info, blobs_dir, file_column, file_name_pref
 
             if not file_column in json_entry:
                 # This attributes includes the hash value of the image
-                status.add_keep_error("Archiver error: Missing '%s' attribute in line %u with file: '%s.bin'" % (file_column, index + 1, json_file_name))
+                status.add_keep_error("Archiver error: Missing '%s' attribute in line %u with file: '%s'" % (file_column, index + 1, json_file_name))
                 ret_val = process_status.ERR_wrong_json_structure
                 break
 

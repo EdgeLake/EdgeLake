@@ -71,6 +71,8 @@ import edge_lake.generic.trace_methods as trace_methods
 import edge_lake.pull.pull_server as pull_server
 import edge_lake.generic.dynamic_stats as dynamic_stats
 import edge_lake.dbms.bucket_store as bucket_store
+import edge_lake.video.video_calls as video_calls
+import edge_lake.generic.func_references as func_references
 
 from edge_lake.json_to_sql.suggest_create_table import *
 from edge_lake.dbms.dbms import connect_dbms, get_real_dbms_name
@@ -212,7 +214,7 @@ test_active_ = {
     "operator": ("Operator", aloperator.is_active, aloperator.get_info),
     "blockchain sync": ("Blockchain Sync", bsync.is_running, bsync.get_info),
     "scheduler": ("Scheduler", task_scheduler.is_running, task_scheduler.get_info),
-    "blobs archiver": ("Blobs Archiver", alarchiver.is_arch_running, None),
+    "blobs archiver": ("Blobs Archiver", alarchiver.is_arch_running, alarchiver.get_info),
     "msg client": ("MQTT", mqtt_client.is_running, None),
     "message broker": ("Message Broker", net_utils.is_msg_connected, message_server.get_info),
     "smtp": ("SMTP", utils_output.is_smtp_running, utils_output.get_smtp_info),
@@ -222,6 +224,7 @@ test_active_ = {
     "gRPC": ("gRPC", grpc_client.is_running, grpc_client.get_status_string),
     "plc": ("PLC Client", plc_client.is_running, plc_client.get_status_string),
     "pull processes": ("Pull Processes", pull_server.is_active, pull_server.get_info),
+    "Video processes": ("Video Processes", video_calls.is_running, video_calls.get_info),
 }
 
 
@@ -1564,7 +1567,11 @@ def blockchain_test_metadata(status, io_buff_in, cmd_words, trace, func_params):
 # blockchain get operator where dbms = lsl_demo bring.recent
 # blockchain get operator where cluster with ["123","456"]  --> one of the values in the list
 # =======================================================================================================================
-def blockchain_get(status, cmd_words, blockchain_file, return_data):
+def blockchain_get(status, cmd_words, blockchain_file, return_data, policy = None):
+    '''
+    return_data - If returned data is True - the returned value is the object, no string conversion, i.e: the JSON policy is returned
+    policy - the source policy in JOIN and Merge
+    '''
 
     if not blockchain_file:
         b_file = params.get_value_if_available("!blockchain_file")
@@ -1576,6 +1583,8 @@ def blockchain_get(status, cmd_words, blockchain_file, return_data):
 
     words_count = len(cmd_words)
     ret_val = process_status.SUCCESS
+    join_str = ""
+    with_bring = False
 
     if words_count > 3 and (cmd_words[3] == "get" or cmd_words[3] == "read"):
         assign = True  # assign data retrieved to a name
@@ -1602,7 +1611,7 @@ def blockchain_get(status, cmd_words, blockchain_file, return_data):
     json_str = ""
     if words_count > offset:
         if cmd_words[offset] == "where":
-            ret_val, offset, value_pairs = utils_json.make_jon_struct_from_where(cmd_words, offset + 1)
+            ret_val, offset, value_pairs = utils_json.make_json_struct_from_where(status, cmd_words, offset + 1, policy)
             if ret_val:
                 # No key values pairs - take the where condition as a string
                 with_bring = False
@@ -1621,38 +1630,91 @@ def blockchain_get(status, cmd_words, blockchain_file, return_data):
             value_pairs = cmd_words[offset]  # value pairs are provided in JSON struct. i.e. - { "dbms" : !dbms_name }
             offset += 1
 
-    if words_count >= (offset + 1):
-        with_bring = True
-        bring_type, sort_fields = utils_json.get_bring_type(status, cmd_words[offset])
-        if bring_type == -1:
+    if words_count > (offset + 1) and (cmd_words[offset] == "join" or cmd_words[offset] == "merge"):
+        join_type = cmd_words[offset]       # Join (add a policy), merge (add the attributes of the policy)
+        join_str = cmd_words[offset + 1]
+        if len(join_str) <= 2 or join_str[0] != '(' and join_str[-1] != ')':
+            status.add_error("Wrong JOIN statement in 'blockchain get' command: missing join command enclosed in parenthesis")
             ret_val = process_status.ERR_command_struct
-        elif words_count == offset + 1:
-            if bring_type <= 1:
-                # need more info after the "bring". Unless count is requested
-                status.add_error("Missing Info after 'bring' directive in 'blockchain get' command ")
+        else:
+            join_str = join_str[1:-1]       # Remove parenthesis
+            offset += 2
+
+    if not ret_val:
+        if words_count >= (offset + 1):
+            with_bring = True
+            bring_type, sort_fields = utils_json.get_bring_type(status, cmd_words[offset])
+            if bring_type == -1:
                 ret_val = process_status.ERR_command_struct
-    else:
-        bring_type = 0
-        sort_fields = None
-        with_bring = False
+            elif words_count == offset + 1:
+                if bring_type <= 1:
+                    # need more info after the "bring". Unless count is requested
+                    status.add_error("Missing Info after 'bring' directive in 'blockchain get' command ")
+                    ret_val = process_status.ERR_command_struct
+        else:
+            bring_type = 0
+            sort_fields = None
+            with_bring = False
 
     if not ret_val:
 
         ret_val, blockchain_out = blockchain_retrieve(status, b_file, operation, key, value_pairs, where_cond)
-        if blockchain_out and offset < words_count and not ret_val:
-            if utils_json.is_bring("first", bring_type):
-                blockchain_out = utils_json.get_first_instance(blockchain_out)  # Get first
-                if words_count == (offset + 1):
-                    with_bring = False  # Only get recent JSON, ignore pulling value from the JSON
-            elif utils_json.is_bring("recent", bring_type):
-                blockchain_out = utils_json.get_recent_instance(blockchain_out)  # Get recent
-                if words_count == (offset + 1):
-                    with_bring = False  # Only get recent JSON, ignore pulling value from the JSON
 
-            if with_bring:
+        if not ret_val and blockchain_out:
+            if offset < words_count:
+                if utils_json.is_bring("first", bring_type):
+                    blockchain_out = utils_json.get_first_instance(blockchain_out)  # Get first
+                    if words_count == (offset + 1):
+                        with_bring = False  # Only get recent JSON, ignore pulling value from the JSON
+                elif utils_json.is_bring("recent", bring_type):
+                    blockchain_out = utils_json.get_recent_instance(blockchain_out)  # Get recent
+                    if words_count == (offset + 1):
+                        with_bring = False  # Only get recent JSON, ignore pulling value from the JSON
+
+
+            # Add Join / Merge
+            if join_str:
+                # Parse the join
+                join_words, left_brackets, right_brackets = utils_data.cmd_line_to_list_with_json(status, join_str, 0, 0)
+                if left_brackets != right_brackets:
+                    status.add_error(f"Missing brackets in the '{join_type}' section of 'blockchain get' command")
+                    ret_val = process_status.ERR_command_struct
+                else:
+                    new_object = []
+                    for policy in blockchain_out:
+                        ret_val, join_object = blockchain_get(status, join_words, blockchain_file, True, policy)
+                        if not ret_val and len(join_object):
+                            if join_type == 'join':
+                                # Add the entry
+                                if isinstance(policy, dict):
+                                    for join_entry in join_object:
+                                        if isinstance(join_entry, dict):
+                                            source_policy = copy.deepcopy(policy)
+                                            new_object.append(policy | join_entry)
+                            else:
+                                # Merge - Add the attribute of the new to the source
+                                source_policy = copy.deepcopy(policy)
+                                new_object.append(source_policy)
+                                inner_policy = utils_json.get_inner(source_policy)
+                                if isinstance(inner_policy, dict):
+                                    for join_entry in join_object:
+                                        merged_policy = copy.deepcopy(join_entry)
+                                        inner_join = utils_json.get_inner(merged_policy)
+                                        if isinstance(inner_join, dict):
+                                            for key, value in inner_join.items():
+                                                if not key in inner_policy:
+                                                    # Add key only if it does not exists
+                                                    inner_policy[key] = value
+                    if len(new_object):
+                        # The joined returned new object
+                        blockchain_out = new_object
+
+
+            if not ret_val and with_bring:
                 ret_val, json_str = process_bring(status, blockchain_out, cmd_words, offset + 1, bring_type)
     else:
         blockchain_out = None
+
 
     # REPLY TO THE GET REQUEST
 
@@ -1662,6 +1724,7 @@ def blockchain_get(status, cmd_words, blockchain_file, return_data):
             # Change the JSON format to table format
             if json_str:
                 output_str = set_json_as_table(json_str, bring_type, sort_fields)
+
 
     if not return_data:
         rest_reply = False
@@ -3276,6 +3339,17 @@ def send_command_message(status, io_buff_in, cmd_words, word_offset, dest_names,
             select_parsed.set_target_names(dbms_name, table_name)
 
             if "extend" in conditions:
+                # Additional info returned from the node
+                # SQL Example:  extend=(+country, +city, @ip, @port, @dbms_name, @table_name::str)
+                extend_list = conditions["extend"]
+                # Test if casting is applied on the extend list
+                for index, entry in enumerate(extend_list):
+                    # Pull out the casting from the command and add the casting of the extended field to the select_parsed
+                    left, sep, right = entry.partition('::')
+                    if sep and len(left) > 1 and right:  # sep is '::' if found, '' otherwise
+                        extend_list[index] = left
+                        select_parsed.add_casting(index, right) # Ignore the @ or ! sign
+
                 # Extend the column values returned in the query with the extended values
                 select_parsed.set_extended_columns(conditions["extend"])
 
@@ -5794,6 +5868,19 @@ def _process_bucket(status, io_buff_in, cmd_words, trace):
 
     return ret_val
 
+# =======================================================================================================================
+# Process camera calls
+# =======================================================================================================================
+def _process_camera(status, io_buff_in, cmd_words, trace):
+
+    words_count = len(cmd_words)
+    if words_count < 3:
+        return process_status.ERR_command_struct
+
+    ret_val, reply = _exec_child_dict(status, commands["video"]["methods"], commands["video"]["max_words"], io_buff_in,
+                                      cmd_words, 1, trace)
+
+    return ret_val
 
 # =======================================================================================================================
 # Send reply to the destination IP and Port (retrieved from the message header)
@@ -6821,6 +6908,11 @@ def _exit(status, io_buff_in, cmd_words, trace):
         # exit scheduled pull
         # exit pull node_events
         pull_server.exit(words_array[2])
+
+    elif words_count == 6 and words_array[1] == "video":
+        # exit scheduled pull
+        # exit pull node_events
+        ret_val = video_calls.exit_video(status, io_buff_in, cmd_words, trace)
 
     else:
         status.add_error("Process name '%s' in 'exit' command is not valid" % ' '.join(words_array))
@@ -8653,7 +8745,7 @@ def _run_grpc_client(status, io_buff_in, cmd_words, trace):
             status.add_error(f"DBMS '{dbms_name}' for grpc client is not declared")
             return process_status.ERR_dbms_not_opened
 
-        
+
     # test that directories are defined
     ret_val = interpreter.add_defualt_dir(status, conditions, ["prep_dir", "watch_dir", "err_dir", "bwatch_dir", "blobs_dir"])
     if ret_val:
@@ -10137,21 +10229,8 @@ def blockchain_insert_all(status, mem_view, policy, is_local, blockchain_file, m
         if trace_level >= 2:
             utils_print.struct_print(policy, True, True)
 
-    if not local_file_updated:
-        # Return an error as both the local file and the shared file were not updated
-        err_msg = f"New policy '{policy_type}' failed to update the {dest_type} at '{dest}' and system is not configured to update the local metadata file"
-        utils_print.output_box(err_msg + f"\n{process_status.get_status_text(reply_val)}")
-        ret_val = reply_val
-    else:
-        # Return warning as the local file was updated
-        err_msg = f"Warning: New policy '{policy_type}' failed to update the {dest_type} at '{dest}'"
-        utils_print.output_box(err_msg + f"\n{process_status.get_status_text(reply_val)}", "magenta")
-        ret_val = process_status.SUCCESS
-
-    status.add_error(err_msg)
 
     return ret_val
-
 # -----------------------------------------------------------------------------------------------------
 # An Error in updating the shared metadata
 # -----------------------------------------------------------------------------------------------------
@@ -10701,12 +10780,6 @@ def file_delete(status, io_buff_in, cmd_words, trace, func_params):
 # =======================================================================================================================
 def file_deliver(status, io_buff_in, cmd_words, trace, func_params):
 
-    if trace_methods.is_traced("tcp in"):
-        details = {
-            "Status": "file_deliver Start",
-        }
-        trace_methods.update_details("tcp in", **details)
-
     ret_val = process_status.SUCCESS
     is_message, offset, file_flag, files_ids, text_opr, file_name = func_params
     command_length = len(cmd_words)
@@ -10728,12 +10801,6 @@ def file_deliver(status, io_buff_in, cmd_words, trace, func_params):
 
     if not ret_val:
         ret_val = deliver_files(status, io_buff_in, ip, port, tsd_table, files_ids, trace)
-
-    if trace_methods.is_traced("tcp in"):
-        details = {
-            "Status": "file_deliver End",
-        }
-        trace_methods.update_details("tcp in", **details)
 
     return ret_val
 # ----------------------------------------------------------------------------
@@ -11342,20 +11409,8 @@ def deliver_files(status, io_buff_in, ip, port, tsd_table, files_ids, trace_leve
                                                (range_id + 1, len(files_list), counter, end_id - start_id, ip, port, tsd_table, file_id_str, str(file_found)), True)
 
                         if file_found:
-                            if trace_methods.is_traced("tcp in"):
-                                details = {
-                                    "Step": 1,
-                                }
-                                trace_methods.update_details("tcp in", **details)
-
                             ret_val = transfer_file(status, [(ip, str(port))], file_source, file_dest, message_header.GENERIC_USE_WATCH_DIR, trace_level, "MSG: Deliver File", True)
                         else:
-                            if trace_methods.is_traced("tcp in"):
-                                details = {
-                                    "Step": 2,
-                                }
-                                trace_methods.update_details("tcp in", **details)
-
                             # Send a special event message that the file is not available or can not be transferred
                             ret_val = ha.send_missing_arcived_file(status, io_buff_in, ip, port, tsd_table, file_name, trace_level)
 
@@ -11604,7 +11659,7 @@ def _run_archiver(status, io_buff_in, cmd_words, trace):
                 "bwatch_dir": ("str", False, False, True),
                 "blobs_dir": ("str", False, False, True),
                 "dbms" : ("bool", False, False, True),      # Use DBMS storage  (Default is False)
-                "folder": ("bool", False, False, True),       # Use Folder Storage as f(date)
+                "folder": ("bool", False, False, True),       # Use Local Folder Storage as f(date)
                 "compress": ("bool", False, False, True),  # Compress the file
                 "reuse_blobs": ("bool", False, False, True),  # Multiple readings can point to the same files
                }
@@ -12387,6 +12442,7 @@ def process_cmd(status, command, print_cmd, source_ip, source_port, io_buffer_in
     first_word = 0
     if (words_count > 2 and sub_str[1] == '='):
         first_word = 2  # assignment to dictionary
+        params.reset_key(sub_str[0])  # Remove old value
 
     if user_input:
         # Add Destination (if destination was set using: run client dest
@@ -17639,19 +17695,15 @@ def set_anylog_home(status, io_buff_in, cmd_words, trace):
         if not ret_val:
             params.set_directory_locations(anylog_root)
         if ret_val == process_status.Directory_not_writeable:
-            utils_print.output_box(
-                f"The provided AnyLog home path for creating work directories does not exist: `{anylog_root}`")
-            status.add_error(
-                f"The provided AnyLog home path for creating work directories does not exist: `{anylog_root}`")
+            err_msg = f"Configuration error: AnyLog home path contains missing or unwritable directories: {anylog_root}"
+            utils_print.output_box(err_msg)
+            status.add_error(err_msg)
     if ret_val == process_status.ERR_command_struct:
         cmd_words = " ".join(cmd_words)
-        utils_print.output_box(
-            f"The command `set anylog home` command is incorrect and failed: `{cmd_words}`")
-        status.add_error(
-            f"The command `set anylog home` command is incorrect and failed: `{cmd_words}`")
+        err_msg = f"Command failure: `set anylog home` failed: `{cmd_words}`"
+        utils_print.output_box(err_msg)
+        status.add_error(err_msg)
     return ret_val
-
-
 # --------------------------------------------------------------
 # "set servers ping" - send a ping message to unresponsive servers
 # --------------------------------------------------------------
@@ -18058,6 +18110,15 @@ _time_file_methods = {
             },
 }
 _reset_methods = {
+        "function params": {'command': func_references.reset_params,
+                        'words_count': 7,
+                        'help': {
+                            'usage': " reset function params where import_name = [param name]",
+                            'example': "reset function params where import_name = yolo_detect",
+                            'text': "Reset function params of dynamically loaded libraries",
+                            'keywords': ["config", "lib"],
+                        }
+                        },
 
         "dynamic stats": {'command': dynamic_stats.reset_dynamic_stats,
               'key_only': True,
@@ -18211,6 +18272,15 @@ _reset_methods = {
 }
 _set_methods = {
 
+        "function params": {'command': func_references.set_func_params,
+                        'words_min': 15,
+                        'help': {
+                            'usage': " set function params where import_name = [param name] and param_name = [param name] and param_value = [param value]",
+                            'example': "set function params where import_name = yolo_detect and param_name = module_path1 and param_value = https://github.com/AlexeyAB/darknet/releases/download/yolov4/yolov4-tiny.weights",
+                            'text': "Dynamically configure imported libraries",
+                            'keywords': ["config", "lib"],
+                        }
+                        },
         "dbms config": {'command': set_dbms_config,
                            'words_min': 11,
                            'help': {
@@ -18870,6 +18940,44 @@ _query_status_methods = {
 }
 
 _get_methods = {
+        "imported functions": {'command': func_references.get_imported_functions,
+                               'key_only': True,
+                               'help': {
+                                   'usage': "get imported functions",
+                                   'example': "get imported functions",
+                                   'text': "Get the list of imported functions",
+                                   'keywords': ["config", "lib"],
+                               }
+                               },
+        "function params": {'command': func_references.get_functions_params,
+                            'key_only': True,
+                            'help': {
+                                'usage': "get function params",
+                                'example': "get function params",
+                                'text': "Get the list of params for each function",
+                                'keywords': ["config", "lib"],
+                            }
+                            },
+
+        "connected video": {'command': video_calls.get_connected_video_streams,
+                                'words_count': 4,
+                                'help': {
+                                    'usage': "get connected video [streams/urls]",
+                                    'example': "get connected video streams\n"
+                                               "get connected video urls",
+                                    'text': "Get the list of connected video streams or urls",
+                                    'keywords': ["video"],
+                                }
+                                },
+        "video streams stats": {'command': video_calls.get_video_streams_stats,
+                                'key_only': True,
+                                'help': {
+                                    'usage': "get video streams stats",
+                                    'example': "get video streams stats",
+                                    'text': "Get statistics on the video streams",
+                                    'keywords': ["video"],
+                                }
+                                },
 
         "bucket groups": {'command': bucket_store.get_connected_groups,
                       'key_only': True,
@@ -20092,6 +20200,40 @@ _id_methods = {
 
 }
 
+_camera_commands = {
+
+    'connect': {
+        'command': video_calls.connect,
+        'min_words': 6,
+        'help': {'usage': "video connect where name = [connection name] and protocol = [protocol name] and interface = [interface type] and address = [video url] and user = [user name] and password = [password] and video_dir = [video output dir] and dbms = [dbms name] and table [table name]]",
+                 'example': 'video connect where name = [connection name] and interface = [interface type]',
+                 'text': 'Create a named connection to a video stream in a camera',
+                 'keywords': ["video"],
+                 },
+        'trace': 0,
+    },
+
+    'stream': {
+        "command": video_calls.video_stream_function,
+        "words_min": 7,
+        'help': {
+            "usage": "video stream [function] where name = [connection name] and module = [module name]",
+            "example": "video stream pause where name = aixs\n"
+                       "video stream resume where name = aixs\n"
+                       "video stream pause where name = aixs and module = storage\n"
+                       "video stream resume where name = aixs and module = storage\n"
+                       "video stream pause where name = aixs and module = display\n"
+                       "video stream resume where name = aixs and module = display",
+            "text": "Pause and resume video stream processes",
+            "keywords": ["video"]
+        },
+        'trace': 0,
+    },
+   
+
+
+}
+
 _buckets_commands = {
 
     'provider connect': {
@@ -20185,6 +20327,13 @@ commands = {
                  'link': 'blob/master/authentication.md#users-authentication'},
         'trace': 0,
     },
+    'video': {
+        'command': _process_camera,
+        'methods': _camera_commands,
+        'help': {'usage': 'id [command options]',
+                 'link': 'blob/master/authentication.md#users-authentication'},
+        'trace': 0,
+    },
 
     'connect dbms': {
         'command': _connect_dbms,
@@ -20211,6 +20360,17 @@ commands = {
         'methods': _id_methods,
         'help': {'usage': 'id [command options]',
                  'link': 'blob/master/authentication.md#users-authentication'},
+        'trace': 0,
+    },
+
+    'import function': {
+        'command': func_references.import_function,
+        'words_min': 13,
+        'help': {
+            'usage': 'import function where name = [unique name] and lib = [lin name to load] and class = [class name] and method = [method name]',
+            'example': "import function where name = yolo_detect and lib = external_lib.frame_modeling.yolo_detection and class = YoloDetection and method = collect_detections",
+            'keywords': ["config", "lib"],
+            },
         'trace': 0,
     },
 
@@ -20585,6 +20745,17 @@ commands = {
                  },
         'trace': 0,
     },
+    'run video stream': {  # this needs to be a thread
+        'command': video_calls.run_video_stream,
+        'words_min': 7,
+        'help': {'usage': 'run video stream where name = [connection name] and import_detect = [detect library name] and import_display = [display library name]',
+                 'example': 'run video  stream where name = axis and import detect = initiate_yolo',
+                 'text': 'Stream video from a camera and enable detection and display',
+                 'keywords': ["video"],
+                 },
+        'trace': 0,
+    },
+
 
     'run rest server': {
         'command': _run_rest_server,
