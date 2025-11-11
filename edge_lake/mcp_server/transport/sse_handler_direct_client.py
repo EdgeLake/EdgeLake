@@ -1,19 +1,18 @@
 """
-SSE Transport for MCP Server (Protocol Exec Integration)
+SSE Transport for MCP Server
 
 Implements Server-Sent Events (SSE) transport integrated with EdgeLake's
-http_server.py infrastructure. Uses protocol_exec with callbacks for
-transport-agnostic command execution.
+http_server.py infrastructure.
 
 The SSE protocol provides a simple way to push server-sent updates to clients
 over HTTP. This implementation bridges between EdgeLake's ChunkedHTTPRequestHandler
-and the MCP protocol server using protocol callbacks.
+and the MCP protocol server.
 
 Protocol Flow:
 1. Client establishes SSE connection: GET /mcp/sse
 2. Server responds with text/event-stream content type
 3. Client posts MCP messages: POST /mcp/messages/{session_id}
-4. Server processes messages via protocol_exec and sends responses via SSE events
+4. Server processes messages and sends responses via SSE events
 5. Connection maintained with periodic keepalive pings
 
 SSE Event Format:
@@ -22,8 +21,6 @@ SSE Event Format:
     id: {message_id}
 
     (blank line)
-
-Execution Path: PROTOCOL_EXEC (uses callbacks and command_execution)
 
 License: Mozilla Public License 2.0
 """
@@ -198,13 +195,6 @@ class SSETransport:
         self.connections: Dict[str, SSEConnection] = {}
         self.connection_lock = threading.Lock()
 
-        # Initialize protocol_exec integration
-        from edge_lake.mcp_server.transport.protocol_integration import MCPProtocolIntegration
-        self.protocol_integration = MCPProtocolIntegration(
-            mcp_server.command_builder,
-            mcp_server.config
-        )
-
         # Configuration
         self.keepalive_interval = 30  # seconds
         self.connection_timeout = 300  # 5 minutes
@@ -218,7 +208,7 @@ class SSETransport:
         )
         self.keepalive_thread.start()
 
-        logger.info("SSE transport initialized with protocol_exec integration")
+        logger.info("SSE transport initialized")
 
     def handle_sse_endpoint(self, handler) -> bool:
         """
@@ -392,103 +382,65 @@ class SSETransport:
 
     def _process_message_sync(self, session_id: str, message: Dict[str, Any], socket=None):
         """
-        Process MCP message using protocol_exec with callbacks.
+        Process MCP message synchronously (no new thread).
 
-        This version uses protocol_exec instead of direct_client, allowing
-        command execution logic to be shared with HTTP REST endpoints.
+        Routes the message to the MCP server for processing and queues
+        the response for the SSE connection manager to send.
+
+        Note: Renamed from _process_message_async to _process_message_sync.
+        No thread spawning needed - this runs in the HTTP worker thread
+        and returns quickly (MCP processing is synchronous, response is queued).
 
         Args:
             session_id: Session identifier
             message: JSON-RPC message
-            socket: Optional socket (not used with protocol_exec - callbacks handle it)
+            socket: Optional handler socket for streaming large results
         """
+        logger.debug(f"[SSE Handler] Using DIRECT_CLIENT execution path")
         try:
-            # Extract method and parameters
-            method = message.get('method')
-            params = message.get('params', {})
-            msg_id = message.get('id')
+            # Process message via MCP server (synchronous)
+            # Pass socket buffer for capturing streamed query results
+            response = self.mcp_server.process_message(message, socket)
 
-            logger.debug(f"[SSE Handler] Using PROTOCOL_EXEC execution path: method={method}")
+            # If socket buffer has data (from streamed queries), add it to response
+            if socket and hasattr(socket, 'getvalue'):
+                socket_data = socket.getvalue()
+                if socket_data:
+                    # Decode socket output and add to response content
+                    socket_text = socket_data.decode('utf-8') if isinstance(socket_data, bytes) else str(socket_data)
+                    logger.debug(f"Socket buffer has {len(socket_text)} bytes, adding to response")
 
-            # Handle non-tool methods (initialize, tools/list) via MCP server
-            if method == 'initialize':
-                # Handle initialize via MCP server (not protocol_exec)
-                response = self.mcp_server.process_message(message, None)
-                with self.connection_lock:
-                    connection = self.connections.get(session_id)
-                if connection:
-                    connection.queue_message('message', response)
-                return
+                    # Update response content with socket data
+                    if 'result' in response and 'content' in response['result']:
+                        # Append socket data to existing content
+                        response['result']['content'].append({
+                            'type': 'text',
+                            'text': socket_text
+                        })
 
-            elif method == 'tools/list':
-                # Handle tools/list via MCP server (not protocol_exec)
-                response = self.mcp_server.process_message(message, None)
-                with self.connection_lock:
-                    connection = self.connections.get(session_id)
-                if connection:
-                    connection.queue_message('message', response)
-                return
+            # Queue response for SSE delivery
+            with self.connection_lock:
+                connection = self.connections.get(session_id)
 
-            elif method == 'tools/call':
-                # Execute tool via protocol_exec
-                tool_name = params.get('name')
-                arguments = params.get('arguments', {})
-
-                logger.debug(f"Executing tool '{tool_name}' via protocol_exec")
-
-                # Get SSE connection
-                with self.connection_lock:
-                    connection = self.connections.get(session_id)
-
-                if not connection:
-                    logger.error(f"Session not found: {session_id}")
-                    return
-
-                # Execute via protocol integration (uses protocol_exec + callbacks)
-                import asyncio
-                asyncio.run(
-                    self.protocol_integration.execute_tool_via_protocol_exec(
-                        connection,
-                        msg_id,
-                        tool_name,
-                        arguments
-                    )
-                )
-
-                logger.debug(f"Tool '{tool_name}' execution completed via protocol_exec")
-
+            if connection:
+                connection.queue_message('message', response)
             else:
-                # Unknown method
-                logger.warning(f"Unknown method: {method}")
-
-                with self.connection_lock:
-                    connection = self.connections.get(session_id)
-
-                if connection:
-                    error_response = {
-                        "jsonrpc": "2.0",
-                        "id": msg_id,
-                        "error": {
-                            "code": -32601,
-                            "message": f"Method not found: {method}"
-                        }
-                    }
-                    connection.queue_message('error', error_response)
+                logger.warning(f"Cannot send response - session closed: {session_id}")
 
         except Exception as e:
-            logger.error(f"Error processing message via protocol_exec: {e}", exc_info=True)
+            logger.error(f"Error processing message for {session_id}: {e}", exc_info=True)
 
-            # Send error response
+            # Queue error response for SSE delivery
             with self.connection_lock:
                 connection = self.connections.get(session_id)
 
             if connection:
                 error_response = {
-                    "jsonrpc": "2.0",
-                    "id": message.get('id'),
-                    "error": {
-                        "code": -32603,
-                        "message": f"Internal error: {str(e)}"
+                    'jsonrpc': '2.0',
+                    'id': message.get('id'),
+                    'error': {
+                        'code': -32603,
+                        'message': f'Internal error: {str(e)}'
                     }
                 }
                 connection.queue_message('error', error_response)

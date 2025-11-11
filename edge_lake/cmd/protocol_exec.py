@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def protocol_exec(status, command: str, protocol_callbacks: ProtocolCallbacks,
-                  http_method: str = "get", into_output=None) -> int:
+                  http_method: str = "get", into_output=None, headers: dict = None) -> int:
     """
     Execute EdgeLake command with protocol-agnostic callbacks.
 
@@ -36,6 +36,7 @@ def protocol_exec(status, command: str, protocol_callbacks: ProtocolCallbacks,
         protocol_callbacks: Protocol-specific callbacks for sending responses
         http_method: HTTP method hint (for validation) - "get", "post", "put"
         into_output: Optional output format (e.g., "html")
+        headers: Optional headers dict (may contain 'destination', 'subset', 'timeout')
 
     Returns:
         Return value (process_status.SUCCESS or error code)
@@ -88,10 +89,25 @@ def protocol_exec(status, command: str, protocol_callbacks: ProtocolCallbacks,
     # 4. PREPARATION: Prepare command list and determine execution mode
     commands_list = []
 
-    # For HTTP compatibility, we need some values from headers
-    # For MCP, these would come from arguments
-    # TODO: Pass these as parameters
-    run_client = None  # Will be set by prepare_commands if needed
+    # Extract execution parameters from headers (if provided)
+    # These control how commands are routed: local vs network
+    if headers:
+        destination = headers.get('destination', 'local')
+        subset = headers.get('subset', False)
+        sec_timeout = headers.get('timeout', None)
+    else:
+        # Default: run locally (no network call)
+        destination = "local"
+        subset = False
+        sec_timeout = None
+
+    # Build run_client wrapper for network/local execution
+    run_client = command_execution.get_run_client(destination, subset, sec_timeout)
+
+    logger.debug(f"[{protocol_callbacks.get_protocol_name()}] Execution mode: destination={destination}, subset={subset}, timeout={sec_timeout}")
+
+    # For HTTP compatibility, these would come from headers
+    # For MCP, these are not used
     msg_body = None
     format_type = None
     pass_through = False

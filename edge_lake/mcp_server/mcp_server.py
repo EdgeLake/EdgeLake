@@ -247,9 +247,17 @@ class MCPServer:
         if self.transport:
             active_connections = self.transport.get_active_connections()
 
+        # Detect which execution path is active
+        execution_path = "direct_client"  # Default
+        if self.transport:
+            # Check if transport has protocol_integration attribute
+            if hasattr(self.transport, 'protocol_integration'):
+                execution_path = "protocol_exec"
+
         return {
             "version": __version__,
             "protocol": "MCP via SSE",
+            "execution_path": execution_path,
             "active_connections": len(active_connections),
             "connection_ids": active_connections,
             "enabled_tools": self.enabled_tools or "all",

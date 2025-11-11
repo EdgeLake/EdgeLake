@@ -94,8 +94,10 @@ class MCPProtocolIntegration:
                 return
 
             # 3. Build EdgeLake command
-            command = self._build_edgelake_command(tool_config, arguments)
+            command, headers = self._build_edgelake_command(tool_config, arguments)
             logger.debug(f"[MCP Protocol] Built command: {command}")
+            if headers:
+                logger.debug(f"[MCP Protocol] Command headers: {headers}")
 
             # 4. Create protocol callbacks
             from edge_lake.generic.protocol_callbacks import create_mcp_callbacks
@@ -109,11 +111,11 @@ class MCPProtocolIntegration:
             j_handle = status.get_job_handle()
             j_handle.set_rest_caller()
 
-            # 6. Execute via protocol_exec
+            # 6. Execute via protocol_exec (pass headers for destination, subset, timeout)
             from edge_lake.cmd.protocol_exec import protocol_exec
 
             logger.debug(f"[MCP Protocol] Calling protocol_exec")
-            ret_val = protocol_exec(status, command, protocol_callbacks)
+            ret_val = protocol_exec(status, command, protocol_callbacks, headers=headers)
 
             logger.debug(f"[MCP Protocol] protocol_exec completed: ret_val={ret_val}")
 
@@ -163,7 +165,7 @@ class MCPProtocolIntegration:
                 }
                 sse_connection.queue_message('error', error_response)
 
-    def _build_edgelake_command(self, tool_config, arguments: Dict[str, Any]) -> str:
+    def _build_edgelake_command(self, tool_config, arguments: Dict[str, Any]) -> tuple:
         """
         Build EdgeLake command from tool configuration and arguments.
 
@@ -172,7 +174,7 @@ class MCPProtocolIntegration:
             arguments: Tool arguments
 
         Returns:
-            EdgeLake command string
+            Tuple of (command_string, headers_dict or None)
         """
 
         edgelake_cmd = tool_config.edgelake_command
@@ -194,15 +196,18 @@ class MCPProtocolIntegration:
                 command = f'sql {database} format = {output_format} "{sql_query}"'
 
             logger.debug(f"Built SQL command: {command}")
+
+            # Extract headers from edgelake_cmd for SQL queries
+            headers = edgelake_cmd.get('headers', None)
+            return command, headers
         else:
             # Use command builder to build from template
             command, headers = self.command_builder.build_command(edgelake_cmd, arguments)
 
-            # TODO: Handle headers if needed (for run client, etc.)
             if headers:
                 logger.debug(f"Command has headers: {headers}")
 
-        return command
+            return command, headers
 
     async def _execute_internal(self, edgelake_cmd: Dict[str, Any], arguments: Dict[str, Any]) -> str:
         """
