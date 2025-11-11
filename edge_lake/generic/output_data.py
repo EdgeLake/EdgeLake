@@ -116,7 +116,7 @@ class OutputManager():
         self.trusted_file = trusted_file     # A file name with complete output results for validation
         self.io_handle = None             # The file output handle - if output to file
         self.rest_socket = rest_socket    # The output socket to the REST caller (if used)
-        self.output_str = "["             # If data is buffered - Format: [{'Query': {'0': '18774'}}, {'Query': {'0': '18774'}}]
+        self.output_str = ""             # maintained buffered data
         self.title_list = None          # the projected columns
         self.data_types_list = None     # The projected data types
         self.dbms_name = None           # The database name
@@ -292,7 +292,7 @@ class OutputManager():
         elif out_dest == "rest":
            ret_val = self.rest_write(status, self.rest_socket, info_str, True, is_last, self.output_into)
         elif out_dest == "buffer":
-            self.output_str += info_str
+            params.extend_value(self.assign_key,  info_str)       # Add the ley to the value
         elif out_dest == "kafka":
             ret_val = al_kafka.send_data(status, self.kafka_producer, self.topic, info_str)
         else:
@@ -461,6 +461,10 @@ class OutputManager():
                     if is_mutex:
                         utils_print.print_unlock()
 
+        if self.destination == "buffer":
+            # assign the output:
+            params.extend_value(self.assign_key, self.output_str)       # Add the ley to the value
+            self.output_str = ""                                        # Delivered
         return ret_val
 
     # =======================================================================================================================
@@ -504,14 +508,7 @@ class OutputManager():
 
         # Complete the output of whatever is left in the buggers
 
-        if self.destination == "buffer":
-            # assign the output:
-            if self.format_type == "Table":
-                params.add_param(self.assign_key, (self.output_str[:-1] + "]"))
-            else:
-                # JSON - End the query info
-                params.add_param(self.assign_key, (self.output_str + "]}]"))
-        elif  self.format_type == "table":
+        if  self.format_type == "table":
             if self.out_list_counter:
                 # Print whatever is left in the table struct
                 is_last = True if (not self.add_stat and rows_counter and is_query_end) else False  # No more printouts after this one
@@ -579,6 +576,9 @@ class OutputManager():
                         ret_val = self.rest_write(status, self.rest_socket, end_struct, True, True, self.output_into)
                     elif self.destination == "stdout":
                         utils_print.output(end_struct, False)
+                    elif self.destination == "buffer":
+                        # assign the output:
+                        params.extend_value(self.assign_key, end_struct)       # Add the ley to the value
 
 
         # Close output file / Kafka connection

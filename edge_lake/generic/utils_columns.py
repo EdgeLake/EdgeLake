@@ -1840,12 +1840,29 @@ def cast_with_format(status, row, casting_str, value):
         casted_value = None
     return casted_value
 
+
+# =======================================================================================================================
+# cast by replace
+# =======================================================================================================================
+def cast_by_replace(status, row, casting_str, value):
+
+    casted_value = value
+    if casting_str.startswith("replace(") and casting_str[-1] == ')':
+        replace_info = casting_str[8:-1]
+        left, sep, right = replace_info.partition(' by ')
+        if left and sep and right:
+            left, sep, right = left.strip(), sep.strip(), right.strip() # Remove spaces
+            if left and sep and right:
+                casted_value = str(value).replace(left, right, 1)
+
+    return casted_value
+
 # =======================================================================================================================
 # cast by function
 # =======================================================================================================================
 def cast_by_function(status, row, casting_str, value):
 
-    if casting_str[:9] == "function(" and casting_str[-1] == ')':
+    if casting_str.startswith("function(") and casting_str[-1] == ')':
         try:
             str_function = casting_str[9:-1]
 
@@ -1929,6 +1946,7 @@ casting_methods_ = {
     'ls' : cast_lstrip,
     'rs' : cast_rstrip,
     'ti' : ret_time_diff,   # return time diff
+    're' : cast_by_replace,   # return time diff
 }
 # =======================================================================================================================
 # Apply casting on a column

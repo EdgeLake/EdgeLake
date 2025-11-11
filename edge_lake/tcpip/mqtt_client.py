@@ -741,14 +741,20 @@ def process_message( topic, user_id, user_msg):
                     process_log.add("Error", f"MQTT missing message data with topic '{topic}'")
                     ret_val = process_status.MQTT_not_in_json
                 else:
-                    struct_type = utils_data.get_str_obj(user_msg)  # Returns "dict" or "list" or "none"
+                    struct_type, candidate = utils_data.get_str_obj(user_msg)  # Returns "dict" or "list" or "none"
+                    if candidate:
+                        # The data structure was fixed to represent a JSON or a LIST
+                        process_msg = candidate
+                    else:
+                        process_msg = user_msg
+
                     if struct_type == "dict":
-                        json_msg = utils_json.str_to_json(user_msg)
+                        json_msg = utils_json.str_to_json(process_msg)
                         if not json_msg:
                             process_log.add("Error", f"MQTT message is not in JSON format (Failed to map string to JSON)")
                             ret_val = process_status.MQTT_not_in_json
                     elif struct_type == "list":
-                        json_list = utils_json.str_to_list(user_msg)
+                        json_list = utils_json.str_to_list(process_msg)
                         if not json_list:
                             process_log.add("Error", f"MQTT format error (Failed to map string to JSON List)")
                             ret_val = process_status.MQTT_not_in_json

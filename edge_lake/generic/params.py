@@ -211,6 +211,17 @@ def key_to_job(assignment, job_id, unique_job_id):
             del user_defined[key]  # Delete current value from User dictionary
 
 # =======================================================================================================================
+# Extend value - Extend the value of an existing key
+# =======================================================================================================================
+def extend_value(key: str, value):
+
+    if key in user_defined:
+        user_defined[key] += value
+    else:
+        user_defined[key] = value
+
+
+# =======================================================================================================================
 # Add value to dictionary
 # =======================================================================================================================
 def add_param(key: str, value):
@@ -268,6 +279,10 @@ def del_param(key: str):
         del job_process_[key]       # Link to data in job instance
     if key in job_process_:
         del job_process_[key]       # Link to data in job instance
+
+def reset_key(key: str):
+    if key in user_defined:
+        del user_defined[key]
 # =======================================================================================================================
 # Test that key is in dictionary and the value provided is the assigned value for the key
 # =======================================================================================================================
