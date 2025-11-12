@@ -33,25 +33,27 @@ WORKDIR /app/
 COPY --from=builder /app/edgelake_agent /app/edgelake_agent
 
 # Copy MCP server directory from source (includes config files)
-COPY edge_lake/mcp_server /app/EdgeLake/edge_lake/mcp_server
+#COPY edge_lake/mcp_server /app/EdgeLake/edge_lake/mcp_server
+COPY deploy_edgelake.sh /app/deploy_edgelake.sh
+COPY setup.cfg /app/EdgeLake/setup.cfg
+
 
 # Install runtime dependencies only
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        bash ca-certificates python3-pip git && \
+        bash ca-certificates python3-pip git dos2unix && \
     python3 -m pip install --no-cache-dir --upgrade \
         pip \
         grpcio-tools==1.70.0 \
         pyyaml==6.0.2 \
         requests==2.32.4 && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    dos2unix /app/deploy_edgelake.sh
 
 # Copy only scripts/configs needed at runtime
 RUN mkdir -p /app/EdgeLake && \
-    git clone https://github.com/tom342178/deployment-scripts.git && \
-    git clone https://github.com/oshadmon/nebula-anylog /app/nebula
-COPY deploy_edgelake.sh /app/deploy_edgelake.sh
-COPY setup.cfg /app/EdgeLake/setup.cfg
+    git clone -b os-dev https://github.com/Anylog-co/deployment-scripts.git
+
 
 # ==== Part 3: Runtime configuration ====
 ENV EDGELAKE_PATH=/app \
