@@ -147,7 +147,6 @@ TYPE_MAP = {
     "bool": lambda v: v.lower() in ("true", "1", "yes"),
     "list": lambda v: [x.strip() for x in v.split(",") if x.strip()],
 }
-
 # -------------------------------------------------------------------------
 #   Data convertor from string to type
 # -------------------------------------------------------------------------

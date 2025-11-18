@@ -274,6 +274,7 @@ class SegmentedVFRRecorder:
                                 "minutes": self.segment_seconds /60,
                                 "file": filename,
                                 "file_size" : file_size,
+                                "is_deleted" : '0',
                                 }
                 file_data = json.dumps(blob_descriptor)
                 hash_value = utils_data.get_string_hash('md5', file_data, self.dbms_name + self.table_name)  # Get the Hash of the data that is written to a file

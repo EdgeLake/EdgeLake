@@ -8,6 +8,7 @@ traced_func_ = {
     "grafana"   :   0,
     "mapping"   :   0,          # Trace Mapping policy - in mapping policy.py
     "period"    :   0,          # period function in unify_result.py
+    "mcp"       :   0,
 }
 
 

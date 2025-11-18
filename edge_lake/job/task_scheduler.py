@@ -21,6 +21,25 @@ scheduler_time = []         # not active, when active, time is set to 0 or the n
 counter_schedulers = 0     # The number of schedulers running
 
 
+# =======================================================
+# Start sys commands
+# =======================================================
+def start_init_commands(status, data_buffer):
+    # start a thread to track the failed nodes in the metadata
+    commands = [
+
+        "schedule time = 1 minute and scheduler = 0 and name = \"Metadata Ping\" task set servers ping",        # start a thread to track non responsive nodes
+
+        "run scheduler 0"       # Start the sys scheduler
+    ]
+    ret_value = process_status.SUCCESS
+    for command in commands:
+        ret_value = member_cmd.process_cmd(status=status, command=command, print_cmd=False, source_ip="",
+                                           source_port="", io_buffer_in=data_buffer)
+        if ret_value:
+            break
+    return ret_value
+
 # --------------------------------------------------------------
 # Return True if running
 # Test the user scheduler at location 1 (not the system scheduler which is at location 0)

@@ -11,7 +11,9 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 import sys
 import ssl
 import os
+import errno
 import traceback
+
 with_profiler_ = True if os.getenv("PROFILER", "False").lower() == "true" else False      # Needs to return True - otherwise will be False
 if with_profiler_:
     import edge_lake.generic.profiler as profiler
@@ -47,6 +49,7 @@ import edge_lake.generic.utils_threads as utils_threads
 import edge_lake.tcpip.mqtt_client as mqtt_client
 import edge_lake.tcpip.html_reply as html_reply
 from edge_lake.generic.utils_columns import get_current_time
+from edge_lake.tcpip.mcp_server import handle_messages_endpoint, handle_sse_endpoint
 
 
 # REST with server and client authentication requests - https://requests.readthedocs.io/en/master/user/advanced/
@@ -194,7 +197,6 @@ class debug_rest_flow():
 # documentation: https://docs.python.org/3.4/library/socketserver.html
 
 # =======================================================================================================================
-
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     """An HTTP Server that handle each request in a new thread"""
     # Example is here - https://docs.aws.amazon.com/polly/latest/dg/example-Python-server-code.html
@@ -241,9 +243,26 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         The default is to print a traceback and continue.
 
         """
+        exc_type, exc, tb = sys.exc_info()
+
+        # Ignore benign disconnects (common for SSE)
+        if isinstance(exc, ConnectionResetError):
+            return
+        if isinstance(exc, BrokenPipeError):
+            return
+        if isinstance(exc, OSError) and exc.errno in (
+                errno.ECONNRESET,
+                errno.ESHUTDOWN,
+                errno.EPIPE,
+                10054, 10058  # Windows errors
+        ):
+            return
+
+        # traceback.print_exc()
         try:
             message1 = "REST server on %s received unrecognized message" % http_server_info.connection
         except:
+
             message1 = "REST server received unrecognized message"
             pass
 
@@ -484,7 +503,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         response_code - REST reply
         message - message to deliver
         echo_message - message to the node echo queue
-        content_length - messages which are nor queries to data and length can be determined
+        content_length - messages which are not queries to data and length can be determined
         is_chunked - bool value to represent reply with data (or with info with undetermined length)
         '''
 
@@ -771,27 +790,21 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     def do_GET(self):
 
-        # MCP SSE endpoint routing (before profiler to minimize overhead)
-        if self.path == '/mcp/sse':
-            try:
-                from edge_lake.mcp_server.transport import sse_handler
-                sse_handler.handle_sse_endpoint(self)
-                return  # MCP handler manages the response
-            except ImportError:
-                pass  # MCP not available, continue with normal handling
-            except Exception as e:
-                logger.error(f"MCP SSE endpoint error: {e}")
-                self.send_error(500, f"MCP error: {e}")
-                return
-
         ret_val = process_status.SUCCESS
 
         if with_profiler_:
             profiler.manage("get")  # Stop, Start and reset the profiler
 
+        status = process_status.ProcessStat()
+
+        if self.path.startswith('/mcp/sse'):
+            # Open sse connection for MCP calls
+            handle_sse_endpoint(self, status)
+            return
+
+
         self.msg_body = None
         self.al_headers = set_al_headers(self.headers._headers)
-        status = process_status.ProcessStat()
 
         user_agent, version, user_id = self.get_client("get")
 
@@ -811,7 +824,6 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                 ret_val = al_grafana.grafana_get(status, self)
 
             elif command and user_agent == "anylog":
-
                 try:
                     ret_val = self.al_exec(status, "get", command)      # Updated version
                 except:
@@ -958,22 +970,17 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # https://docs.python.org/3/library/http.client.html
     # =======================================================================================================================
     def do_POST(self):
-        status = process_status.ProcessStat()
-        # MCP messages endpoint routing (before profiler to minimize overhead)
-        if self.path.startswith('/mcp/messages/'):
-            try:
-                from edge_lake.mcp_server.transport import sse_handler
-                sse_handler.handle_messages_endpoint(self)
-                return  # MCP handler manages the response
-            except ImportError:
-                pass  # MCP not available, continue with normal handling
-            except Exception as e:
-                status.add_error(f"MCP messages endpoint error: {e}")
-                self.send_error(500, f"MCP error: {e}")
-                return
 
         if with_profiler_:
             profiler.manage("post")     # Stop, Start and reset the profiler
+
+        status = process_status.ProcessStat()
+
+        # MCP messages endpoint routing (before profiler to minimize overhead)
+        if self.path.startswith('/mcp/'):
+            # Run mcp process
+            handle_messages_endpoint(self, status)
+            return
 
         self.msg_body = None
         self.al_headers = set_al_headers(self.headers._headers)
@@ -1156,6 +1163,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
                     ret_val = self.execute_al_commands(status, io_buff, commands_list, into_output, file_data)
 
+
                 j_handle = status.get_active_job_handle()  # Need to be done after the execution of the commands
                 if ret_val != process_status.SUCCESS and ret_val < process_status.NON_ERROR_RET_VALUE:
                     # Operator returned an error
@@ -1168,13 +1176,13 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                     # local query on this node.
                     # send_reply_headers is within the called method
 
-                    from edge_lake.cmd import command_execution
                     job_id = status.get_job_id()
                     j_instance = job_scheduler.get_job(job_id)
                     nodes_count = j_instance.get_nodes_participating()
                     nodes_replied = j_instance.get_nodes_replied()
 
-                    write_ret_value = command_execution.local_table_query(status, j_handle, with_wait, nodes_count, nodes_replied, self.send_reply_headers)
+
+                    write_ret_value = self.local_table_query(status, j_handle, with_wait, nodes_count, nodes_replied)
 
                     j_instance.set_not_active()
 
@@ -1190,10 +1198,9 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                         if j_instance.is_job_active() and j_instance.get_unique_job_id() == status.get_unique_job_id():
                             if not j_instance.is_pass_through():
                                 # Otherwise the data was written to the caller
-                                from edge_lake.cmd import command_execution
                                 nodes_count = j_instance.get_nodes_participating()
                                 nodes_replied = j_instance.get_nodes_replied()
-                                write_ret_value = command_execution.local_table_query(status, j_handle, with_wait, nodes_count, nodes_replied, self.send_reply_headers)
+                                write_ret_value = self.local_table_query(status, j_handle, with_wait, nodes_count, nodes_replied)
                                 if into_output and not write_ret_value:
                                     # Write the HTML including header and data
                                     ret_val = self.write_headers_and_msg(status, REST_OK, content_type, j_handle.get_output_buff())
@@ -1422,6 +1429,13 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
         for index, entry in enumerate (commands_list):
             command = entry[0]
+
+            if "assignment" in self.al_headers and index == (len(commands_list) -1):    # Only on las command
+                # Assign the result to a param in the dictionary
+                assignment = self.al_headers["assignment"]
+                params.reset_key(assignment)
+                command = f"{assignment} = {command}"
+
             with_reply = entry[1]       # Indicate if the thread needs to wait for a reply (i.e. SQL query)
             if with_reply:
                 ret_val = native_api.exec_al_cmd(status, command, self.wfile, into_output, 20)   # Timeout for a list of commands is the default

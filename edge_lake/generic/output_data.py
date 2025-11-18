@@ -335,12 +335,12 @@ class OutputManager():
         else:
             # use JSON format
             if self.format_type == "json:output" or self.format_type == "json:list" or self.format_type == "mcp":
-                # Clean JSON rows (mcp format is same as json:list - clean JSON array)
+                # Clean JSON rows - (mcp format is same as json:list - clean JSON array)
                 if not rows_data:
                     # Data is not organized as a string
                     out_data = utils_sql.make_output_row(1, self.title_list, self.data_types_list, json_data)
                     if not offset_row:
-                        if self.format_type == "json:list" or self.format_type == "mcp":
+                        if self.format_type == "json:list"  or self.format_type == "mcp":
                             offset_new = 9      # Keep the [ parenthesis
                         else:
                             # 10 is used because of the transformation from JSON
@@ -567,9 +567,9 @@ class OutputManager():
 
                     if self.format_type == "json":
                         end_struct = "]}"
-                    elif self.format_type == "json:list" or self.format_type == "mcp":
+                    elif self.format_type == "json:list" or self.format_type == "mcp":  # not JSON:output
                         end_struct = "]"
-                    elif self.format_type == "json:output":
+                    elif self.format_type == "json:output":  # not JSON:output
                         end_struct = ""
 
                     if self.destination == "rest":

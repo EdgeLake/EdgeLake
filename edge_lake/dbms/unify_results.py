@@ -1238,7 +1238,7 @@ def make_sql_stmt(status, select_parsed, is_suport_join):
             remote_query += " group by %s" % group_by_no_extended
             generic_query += " group by %s" % group_by_no_extended
 
-        l_group_fields = remote_name_to_local_name(projection_list, group_by_columns, None)
+        l_group_fields = remote_name_to_local_name(projection_list, group_by_columns, extended_list)
 
         with_group_by = True
         pass_through = False
@@ -1360,9 +1360,10 @@ def remove_extended_columns(group_by_columns, extended_list):
     if not len(extended_list):
         reply_columns = group_by_columns
     else:
-        columns_list = group_by_columns.split()
+        columns_list = group_by_columns.split(',')
         reply_columns = ""
-        for column in columns_list:
+        for column_str in columns_list:
+            column = column_str.strip()
             if column in extended_list:
                 continue
             if reply_columns:

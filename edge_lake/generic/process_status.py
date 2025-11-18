@@ -377,6 +377,7 @@ Lib_not_in_registry = 289
 video_failed_to_initialize = 290
 File_close_failed = 291
 Error_external_lib = 292
+Client_call_not_supported = 293
 
 
 # note that message is at location of error value + 1 (exit is set at 0)
@@ -674,6 +675,7 @@ status_text = ["Terminating node processes",
                "Video failed to initialize",            # 290
                "File close failed",                     # 291
                "Error with external library",           # 292
+               "Client call not supported",             # 293
            ]
 
 

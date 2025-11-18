@@ -74,6 +74,8 @@ import edge_lake.dbms.bucket_store as bucket_store
 import edge_lake.video.video_calls as video_calls
 import edge_lake.generic.func_references as func_references
 
+from edge_lake.tcpip.mcp_server import ping_mcp_clients
+
 from edge_lake.json_to_sql.suggest_create_table import *
 from edge_lake.dbms.dbms import connect_dbms, get_real_dbms_name
 import edge_lake.generic.node_info as node_info
@@ -100,7 +102,6 @@ query_mode = {  # default query parameters like timeout
 code_debug = {}  # a dictionary that represents code sections to debug
 script_mutex = threading.Lock()  # mutex to avoid same id to multiple scripts
 statistics_ = {}        # Statistics in get status command
-mcp_server_instance_ = None  # MCP Server instance (used in is_mcp_running and get_mcp_info)
 
 #                                      Must     Add      Is
 #                                      exists   Counter  Unique
@@ -135,7 +136,6 @@ format_values = {
                     "json:output" : 0,      # Output as JSON rows
                     "json:list" : 0,        # Output as a JSON list
                     "table" : 0,            # Output as a table
-                    "mcp" : 0,              # Output for MCP protocol (handled like json:list internally)
 }
 dest_values = {
                     "stdout" : 0,             # Output to stdout
@@ -209,27 +209,10 @@ def get_query_pool_info(status):
         info_str = ""
     return info_str
 
-# =======================================================================================================================
-# MCP Server Status Functions (defined early for test_active_ dictionary)
-# =======================================================================================================================
-def is_mcp_running():
-    """Check if MCP server is active"""
-    return mcp_server_instance_ is not None
-
-def get_mcp_info(status=None):
-    """Return MCP server connection info"""
-    if not is_mcp_running():
-        return ""
-    # MCP uses SSE over REST server, so show REST endpoint
-    info_str = net_utils.get_connection_info(1)  # Get REST connection info
-    info_str += " (SSE endpoint: /mcp/sse)"
-    return info_str
-
 test_active_ = {
     #                    Process name | Get is acrive | Comment
     "tcp": ("TCP", net_utils.is_tcp_connected, tcpip_server.get_info),
     "rest": ("REST", net_utils.is_rest_connected, http_server.get_info),
-    "mcp": ("MCP", is_mcp_running, get_mcp_info),
     "operator": ("Operator", aloperator.is_active, aloperator.get_info),
     "blockchain sync": ("Blockchain Sync", bsync.is_running, bsync.get_info),
     "scheduler": ("Scheduler", task_scheduler.is_running, task_scheduler.get_info),
@@ -1628,9 +1611,6 @@ def blockchain_get(status, cmd_words, blockchain_file, return_data, policy = Non
     value_pairs = None
     where_cond = ""
     json_str = ""
-    mcp_format = False
-    mcp_filter_dbms = None  # For filtering tables by database name
-
     if words_count > offset:
         if cmd_words[offset] == "where":
             ret_val, offset, value_pairs = utils_json.make_json_struct_from_where(status, cmd_words, offset + 1, policy)
@@ -1747,25 +1727,6 @@ def blockchain_get(status, cmd_words, blockchain_file, return_data, policy = Non
             if json_str:
                 output_str = set_json_as_table(json_str, bring_type, sort_fields)
 
-        # Handle MCP format extraction (before REST/CLI split)
-        if mcp_format and blockchain_out:
-            if key == "table" or key == "schema":
-                # Extract all database/table combinations for MCP schema discovery
-                # Note: "schema" is an alias for this operation - both work the same
-                tables_list = []
-                for policy in blockchain_out:
-                    if isinstance(policy, dict) and "table" in policy:
-                        table_info = policy["table"]
-                        if "dbms" in table_info and "name" in table_info:
-                            tables_list.append({
-                                "database": table_info["dbms"],
-                                "table": table_info["name"]
-                            })
-                # Sort by database, then table name
-                tables_list.sort(key=lambda x: (x["database"], x["table"]))
-                output_str = utils_json.to_string(tables_list)
-                # Override blockchain_out with the extracted list for consistent handling
-                blockchain_out = utils_json.str_to_json(output_str)
 
     if not return_data:
         rest_reply = False
@@ -1792,7 +1753,6 @@ def blockchain_get(status, cmd_words, blockchain_file, return_data, policy = Non
                 if blockchain_out:
                     if not with_bring:
                         output_str = utils_json.to_string(blockchain_out)  # change to a string
-
                 if not output_str:
                     output_str = "[]"       # Return empty list
                 status.get_active_job_handle().set_result_set(output_str)
@@ -3727,16 +3687,6 @@ def get_sql_processing_info(status, cmd_words, words_count, index):
 
 
             if not ret_val:
-                # Convert format=mcp to format=json:list for operator processing
-                # This allows operators to accept format=mcp from query nodes
-                # while processing it as json:list for proper aggregation
-                # Note: conditions["format"] is a list, not a string
-                if "format" in conditions:
-                    format_list = conditions["format"]
-                    if "mcp" in format_list:
-                        # Replace "mcp" with "json:list" in the list
-                        conditions["format"] = ["json:list" if f == "mcp" else f for f in format_list]
-
                 ret_val = interpreter.test_values(status, conditions, "format", format_values)
                 if not ret_val:
                     ret_val = interpreter.test_values(status, conditions, "dest", dest_values)
@@ -4433,7 +4383,7 @@ def query_row_by_row(status, dbms_cursor, io_buff_in, conditions, sql_time, sql_
                                                        ["message", "stat",  "timezone"],
                                                        [False,     True,     None])
 
-
+    dbms_name = dbms_cursor.get_dbms_name()
 
     out_list = None
     per_counter_dict = None
@@ -4453,7 +4403,7 @@ def query_row_by_row(status, dbms_cursor, io_buff_in, conditions, sql_time, sql_
         job_id = message_header.get_job_id(mem_view)
 
         if is_debug_method("query"):
-            utils_print.output("\r\nStart: %s.%s.%s.%s" % (job_id, dbms_cursor.get_dbms_name(), dbms_cursor.get_table_name(), message_header.get_partition_id(io_buff_in)), False)
+            utils_print.output("\r\nStart: %s.%s.%s.%s" % (job_id, dbms_name, dbms_cursor.get_table_name(), message_header.get_partition_id(io_buff_in)), False)
 
         if soc == None:
             status.add_error("Query process failed to open socket on: %s:%u" % (ip, port))
@@ -4573,8 +4523,9 @@ def query_row_by_row(status, dbms_cursor, io_buff_in, conditions, sql_time, sql_
         dbms_rows += 1      # Count actual rows retrieved
         rows_to_transfer += 1  # rows_counter does not consider sending one row in 2 blocks
 
-        if extend_columns:
-            extended_data = get_extend_data(source_ip_port, dbms_cursor.get_dbms_name(), dbms_cursor.get_table_name(), extend_columns, title_list, with_title)
+        if extend_columns and dbms_name != "system_query":
+            # Only in the Operators, add the extend values
+            extended_data = get_extend_data(source_ip_port, dbms_name, dbms_cursor.get_table_name(), extend_columns, title_list, with_title)
             rows_data = rows_data[:11] + extended_data + rows_data[11:]
         else:
             data_volume += len(rows_data)
@@ -7224,7 +7175,7 @@ def _process_get(status, io_buff_in, cmd_words, trace):
         reply_list = _exec_child_dict(status, commands["get"]["methods"], commands["get"]["max_words"], io_buff_in, words_array, 1, trace)
         if len(reply_list) == 3:
             # The 3rd entry is a print instruction
-            if reply_list[2] == "json":
+            if reply_list[2] == "json" or reply_list[2] =="mcp":
                 is_policy = True
         ret_val = reply_list[0]
         reply = reply_list[1]
@@ -10281,8 +10232,8 @@ def blockchain_insert_all(status, mem_view, policy, is_local, blockchain_file, m
         if trace_level >= 2:
             utils_print.struct_print(policy, True, True)
 
-    return ret_val
 
+    return ret_val
 # -----------------------------------------------------------------------------------------------------
 # An Error in updating the shared metadata
 # -----------------------------------------------------------------------------------------------------
@@ -15212,6 +15163,10 @@ def _set_trace(status, io_buff_in, cmd_words, trace):
                         # For example: when source data is mapped in mapping_policy.apply_policy_schema()
                         # command: trace level = 1 mapping
                         trace_func.set_trace_level(command, trace_level)
+                    elif command == "mcp":
+                        # enable mcp trace
+                        # Trace level = 1 mcp
+                        trace_func.set_trace_level(command, trace_level)
                     else:
                         # test sub command
                         command_list = command.split(' ',1)
@@ -15517,8 +15472,10 @@ def set_monitored_nodes(status, io_buff_in, cmd_words, trace):
 # Get The Status of the current node
 # Command: get status
 # get status where format = json
-# get status where format = json include !disk_space !temperature
-# get status where format = json include statistics
+# get status where format = json and include = !disk_space and include = !temperature
+# get status where format = json and include = statistics
+# stat = 123
+# get status where include = !stat and include = !b and format = mcp and include = !c
 # Returns ret_code + node status
 # ------------------------------------------
 def get_node_status(status, io_buff_in, cmd_words, trace):
@@ -15536,51 +15493,46 @@ def get_node_status(status, io_buff_in, cmd_words, trace):
         # Only get status
         reply_format = None
     else:
-        reply_struct = {}
-        reply_struct["Status"] = reply
 
-        if words_count >= (offset + 6) and utils_data.test_words(cmd_words, offset + 2, ["where", "format", "="]):
-            reply_format = cmd_words[5]
-            include_offset = offset + 6
-        else:
-            include_offset = offset + 2
-            reply_format = "json"
-        if words_count > include_offset:
-            # A list of variable names to include in the get status reply
-            if cmd_words[include_offset] != "include":
-                if cmd_words[include_offset] == "format":
-                    status.add_error("Missing 'format' details in 'get status' command")
-                ret_val = process_status.ERR_command_struct
-            else:
-                if include_offset + 1 >= words_count:
-                    status.add_error("Missing 'include' details in 'get status' command")
-                    ret_val = process_status.ERR_command_struct
-                else:
-                    for variable in cmd_words[include_offset + 1:]:
-                        var_value = params.get_value_if_available(variable)
-                        if var_value and var_value != variable:
-                            reply_struct[variable[1:]] = var_value      # Provide the value to the caller
-                        elif variable == "statistics":
-                            # Update the statistics
-                            utils_monitor.update_process_statistics(statistics_, False, True)
-                            # Add the statistics
-                            for stat_key, stat_value in statistics_.items():
-                                reply_struct[stat_key] = stat_value
+        keywords = {
+            #                 Must     Add      Is
+            #                 exists   Counter  Unique
 
-        if reply_format == "mcp":
-            # MCP format: clean structure with node information
-            mcp_struct = {
-                "node_name": node_info.get_node_name(),
-                "status": "running",
-                "profiling": profiler.is_active()
-            }
-            # Add any additional included variables
-            for key, value in reply_struct.items():
-                if key != "Status":
-                    mcp_struct[key] = value
-            reply = utils_json.to_string(mcp_struct)
-        else:
-            reply = utils_json.to_string(reply_struct)
+            "format": ("str", False, False, True),
+            "include": ("str", False, False, False),
+        }
+
+        ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, offset + 3, 0, keywords, False)
+        if ret_val:
+            return [ret_val, None]
+
+        reply_format = interpreter.get_one_value_or_default(conditions, "format", "json")
+        if reply_format != "json" and reply_format != "mcp":
+            status.add_error("Wrong format in 'get status' command (use 'json' or 'mcp')")
+            return [process_status.ERR_command_struct, None]
+
+        reply_struct = {
+            "assigned_name": node_info.get_node_name(),
+            "status": "running",
+            "profiling": profiler.is_active()
+        }
+
+        include_list = conditions.get("include")
+        if include_list:
+            include_keys = []       # Get the include keys
+            for i in range(offset + 5, len(cmd_words), 4):
+                if cmd_words[i - 2] == "include":
+                    include_keys.append(cmd_words[i])
+
+            if len (include_list) == len(include_keys):
+                for index, entry in enumerate(include_list):
+                    if include_keys[index][0] == '!':
+                        reply_struct[include_keys[index][1:]] = params.get_value_if_available(entry)
+                    else:
+                        status.add_error("Wrong parameter ('include') in 'get status' command")
+                        return [process_status.ERR_command_struct, None]
+
+        reply = utils_json.to_string(reply_struct)
 
     return [ret_val, reply, reply_format]
 # ------------------------------------------
@@ -16297,8 +16249,10 @@ def get_columns(status, io_buff_in, cmd_words, trace):
 
     reply = None
     out_format = "table"
+    offset = get_command_offset(cmd_words)
 
-    if cmd_words[2] == "where":
+
+    if cmd_words[offset + 2] == "where":
         # get the conditions to execute the JOB
         #                                Must     Add      Is
         #                                exists   Counter  Unique
@@ -16310,7 +16264,7 @@ def get_columns(status, io_buff_in, cmd_words, trace):
                     "type":     ("str", False, False, False),  # Data types to output
                 }
 
-        ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 3, 0, keywords, False)
+        ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, offset + 3, 0, keywords, False)
         if not ret_val:
             dbms_name = interpreter.get_one_value(conditions, "dbms")
             table_name = interpreter.get_one_value(conditions, "table")
@@ -16345,18 +16299,17 @@ def get_columns(status, io_buff_in, cmd_words, trace):
                         output_list.append({"column" : entry[0]})
                     reply = utils_json.to_string(output_list)
 
-                elif out_format == "mcp":
-                    # MCP format: list of objects with column_name and data_type
-                    output_list = []
-                    for entry in new_list:
-                        output_list.append({"column_name": entry[0], "data_type": entry[1]})
-                    reply = utils_json.to_string(output_list)
-
                 elif out_format == "json":
                     columns_dict = {}
                     for entry in new_list:
                         columns_dict[entry[0]] = entry[1]
                     reply = utils_json.to_string(columns_dict)
+                elif out_format == "mcp":
+                    # MCP format: list of objects with name and type
+                    output_list = []
+                    for entry in new_list:
+                        output_list.append({"name": entry[0], "type": entry[1]})
+                    reply = utils_json.to_string(output_list)
                 else:
                     # table format
                     reply = utils_print.output_nested_lists(new_list, "Schema for DBMS: '%s' and Table: '%s'" % (dbms_name, table_name), ["Column Name", "Column Type"], True, "")
@@ -17313,38 +17266,45 @@ def get_pool_status(status, io_buff_in, cmd_words, trace):
     return [process_status.SUCCESS, reply]
 # ------------------------------------------------
 # Get the software version
+# get version
+# get version where format = mcp / json
 # ------------------------------------------------
 def get_version(status, io_buff_in, cmd_words, trace):
 
-    code_version = node_info.get_version(status)
+    return get_code_version(status, cmd_words, "EdgeLake Version")
 
-    # Handle case where cmd_words is None (called during initialization)
-    if cmd_words is None:
-        offset = 0
-        words_count = 0
+def get_code_version(status, cmd_words, code_name):
+
+    info_version = node_info.get_version(status)     # Includes git version and date
+    code_version = f"{code_name}: {info_version}"
+    reply_format = None
+
+    if not cmd_words or len(cmd_words) == 2:
+        reply = code_version   # Includes git version and date
+        ret_val = process_status.SUCCESS
     else:
         offset = get_command_offset(cmd_words)
-        words_count = len(cmd_words)
+        words_count = len(cmd_words) - offset
+        if words_count == 6 and utils_data.test_words(cmd_words, offset + 2, ["where", "format", "="]):
+            reply_format = cmd_words[offset + 5]
+            if reply_format == "json" or reply_format == "mcp":
+                reply_struct = {
+                    "version": code_version,
+                    "node_name": node_info.get_node_name()
+                }
+                reply = utils_json.to_string(reply_struct)
+                ret_val = process_status.SUCCESS
+            elif reply_format == "table":
+                reply = code_version  # Includes git version and date
+                ret_val = process_status.SUCCESS
+            else:
+                reply = None
+                ret_val = process_status.ERR_command_struct
+        else:
+            reply = None
+            ret_val = process_status.ERR_command_struct
 
-    # Check for format specification
-    # Command structure: get version where format = mcp
-    # Positions:         0   1       2     3      4 5
-    if words_count >= (offset + 6) and utils_data.test_words(cmd_words, offset + 2, ["where", "format", "="]):
-        reply_format = cmd_words[offset + 5]
-    else:
-        reply_format = None
-
-    if reply_format == "mcp":
-        # MCP format: structured JSON with version details
-        mcp_struct = {
-            "version": code_version,
-            "node_name": node_info.get_node_name()
-        }
-        reply = utils_json.to_string(mcp_struct)
-    else:
-        reply = f"EdgeLake Version: {code_version}"   # Includes git version and date
-
-    return [process_status.SUCCESS, reply]
+    return [ret_val, reply, reply_format]
 
 # ------------------------------------------------
 # Get the Github version
@@ -18633,6 +18593,7 @@ _set_methods = {
                         'keywords' : ["high availability"],
                         }
                     },
+
         "error traceback": {'command': set_traceback,
                     'words_min' : 4,
                     'help': {
@@ -19422,13 +19383,12 @@ _get_methods = {
                     },
         "status": {'command': get_node_status,
                     'help': {
-                        'usage': "get status where format = [reply format] include [list of dictionary names]",
+                        'usage': "get status where format = [table/json/mcp] and include [a key in the dictionary]",
                         'example': "get status\n"
                                    "get status where format = json\n"
-                                   "get status include !disk_space !utilization !sensor_state\n"
-                                   "get status include statistics",
+                                   "get status where include !disk_space and include = !utilization and include = !sensor_state",
                         'text': "Returns the keyword 'running' if the node is active.\n"
-                                "If the 'include' keyword is specified, the values assigned to the specified variables are returned. The key 'statistics' is a special key adding default statistics.",
+                                "If the 'include' keyword is specified, the values assigned to the specified variables are returned.",
                         'link': "blob/master/monitoring%20nodes.md#the-get-status-command",
                         'keywords' : ["node info"],
                         }
@@ -20102,13 +20062,12 @@ _get_methods = {
                  },
 
         "version": {'command': get_version,
-                 'key_only': True,
-                 'with_format': True,
                  'help': {
-                     'usage': "get version [where format = mcp]",
+                     'usage': "get version where format = [table/json/mcp]",
                      'example': "get version\n"
+                                "get version where format = json\n"
                                 "get version where format = mcp",
-                     'text': "Return the code version. Use format=mcp for structured JSON output.",
+                     'text': "Return the code version.",
                      'keywords' : ["node info"],
                     }
                  },
@@ -20414,47 +20373,6 @@ _buckets_commands = {
 
 
 }
-# =======================================================================================================================
-# Run MCP Server - Example: run mcp server
-# =======================================================================================================================
-def _run_mcp_server(status, io_buff_in, cmd_words, trace):
-    global mcp_server_instance_
-    if mcp_server_instance_ is not None:
-        status.add_error("MCP server is already running")
-        return process_status.ERR_process_failure
-    if not net_utils.is_active_connection(1):
-        status.add_error("REST server must be running first")
-        return process_status.ERR_process_failure
-    try:
-        from edge_lake.mcp_server import MCPServer
-        mcp_server_instance_ = MCPServer()
-        mcp_server_instance_.start()
-        utils_print.output("MCP server started", True)
-        return process_status.SUCCESS
-    except ImportError as e:
-        status.add_error(f"MCP not available: {e}")
-        return process_status.ERR_process_failure
-    except Exception as e:
-        status.add_error(f"Failed to start MCP: {e}")
-        return process_status.ERR_process_failure
-
-# =======================================================================================================================
-# Exit MCP Server - Example: exit mcp server
-# =======================================================================================================================
-def _exit_mcp_server(status, io_buff_in, cmd_words, trace):
-    global mcp_server_instance_
-    if mcp_server_instance_ is None:
-        status.add_error("MCP server is not running")
-        return process_status.ERR_process_failure
-    try:
-        mcp_server_instance_.stop()
-        mcp_server_instance_ = None
-        utils_print.output("MCP server stopped", True)
-        return process_status.SUCCESS
-    except Exception as e:
-        status.add_error(f"Failed to stop MCP: {e}")
-        return process_status.ERR_process_failure
-
 # ------------------------------------------------------------------------
 # Command Dictionaries
 # ------------------------------------------------------------------------
@@ -20895,31 +20813,6 @@ commands = {
         'trace': 0,
     },
 
-
-    'run mcp server': {
-        'command': _run_mcp_server,
-        'words_min': 3,
-        'help': {'usage': 'run mcp server',
-                 'example': 'run mcp server',
-                 'text': 'Start MCP (Model Context Protocol) server for AI agent integration.\n'
-                         'Prerequisites: REST server must be running.\n'
-                         'Endpoints: GET /mcp/sse, POST /mcp/messages/{session_id}',
-                 'link': 'blob/master/northbound%20connectors/using%20mcp.md',
-                 'keywords': ["configuration", "background processes", "api", "mcp"],
-                 },
-        'trace': 0,
-    },
-
-    'exit mcp server': {
-        'command': _exit_mcp_server,
-        'words_min': 3,
-        'help': {'usage': 'exit mcp server',
-                 'example': 'exit mcp server',
-                 'text': 'Stop MCP server and cleanup resources.',
-                 'keywords': ["background processes", "api", "mcp"],
-                 },
-        'trace': 0,
-    },
 
     'run rest server': {
         'command': _run_rest_server,

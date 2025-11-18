@@ -439,7 +439,7 @@ class PSQL(sql_storage):
                 csv_buffer = io.StringIO(sql_buffer)
 
                 db_cursor[1].copy_expert(
-                    f"COPY {table_name} ({column_list}) FROM STDIN WITH (FORMAT csv, HEADER)",
+                    f"COPY {table_name} ({column_list}) FROM STDIN WITH (FORMAT csv, HEADER NULL 'NULL')",
                     csv_buffer
                 )
 
@@ -526,7 +526,7 @@ class PSQL(sql_storage):
             csv_buffer = io.StringIO(file_data)
 
             db_cursor[1].copy_expert(
-                f"COPY {table_name} ({column_list}) FROM STDIN WITH (FORMAT csv, HEADER)",
+                f"COPY {table_name} ({column_list}) FROM STDIN WITH (FORMAT csv, HEADER, NULL 'NULL')",
                 csv_buffer
             )
 
