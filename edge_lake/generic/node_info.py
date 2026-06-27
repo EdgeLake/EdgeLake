@@ -13,7 +13,7 @@ import edge_lake.generic.process_status as process_status
 import edge_lake.tcpip.tcpip_server as tcpip_server
 import edge_lake.tcpip.net_utils as net_utils
 
-from edge_lake.generic.git_id import git_commit_id as git_info
+# from edge_lake.generic.git_id import git_commit_id as git_info
 try:
     CONFIG_FILE = os.path.expandvars(os.path.expanduser(os.path.join('$EDGELAKE_HOME', 'setup.cfg')))
     SOURCE_CONFIG_FILE = os.path.join(os.path.abspath(__file__).split("edge_lake")[0],  'setup.cfg')
@@ -22,7 +22,7 @@ except:
     SOURCE_CONFIG_FILE = None
 
 
-anylog_version_ = 0
+anylog_version_="1.4.2604"
 
 copyright_notice_ =  "\n\r* (c) 2021-2023 AnyLog Inc.\r\n*\n"
 license_eval_notice_ =    \
@@ -252,7 +252,7 @@ def get_version(status):
         if not version:
             status.add_error(f"Failed to retrieve version from file at: '{file_name}' errno: {errno} errval: {errval}")
 
-        anylog_version_ = f"{version} {git_info}"
+        anylog_version_ = f"{version}"
 
     return anylog_version_
 

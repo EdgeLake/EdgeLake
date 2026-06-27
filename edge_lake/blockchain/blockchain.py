@@ -24,6 +24,9 @@ import edge_lake.generic.trace_methods as trace_methods
 from edge_lake.generic.utils_columns import compare
 
 main_ledger_ = []       # The ledger with updated policies
+parent_index_ = {}      # An index by parent - the parent id is an entry leading to a list of all children
+type_index_ = {}        # An index by policy type
+
 
 update_master_ = ["run", "client", None, "blockchain", "push ignore", None]     # Ignore errors when pushing into the dbms
 delete_master_ = ["run", "client", None, "blockchain", "drop", "policy", "where", "id", "=", None]
@@ -119,7 +122,6 @@ def blockchain_write(status: process_status, file_name: str, policy: dict, is_mu
         utils_io.write_lock("blockchain")
 
     trace_methods.print_string("policy write", "Add new policy")
-
     ret_val = utils_io.append_data_to_file(status, file_name, "blockchain", data)
 
     if ret_val:
@@ -185,7 +187,7 @@ def blockchain_get_all(status: process_status, file_name: str, is_mutex:bool):
 # =======================================================================================================================
 def read_ledger_to_mem(status, is_modified, file_name, trace):
     '''
-    If there is no file in RAM or the fule was modified, replace the file
+    If there is no file in RAM or the file was modified, replace the file
     '''
     global main_ledger_
     utils_io.read_lock("blockchain")
@@ -197,6 +199,7 @@ def read_ledger_to_mem(status, is_modified, file_name, trace):
         if trace:
             message = f"Ledger with {len(ledger_list)} policies updated locally (replacing older ledger with {len(main_ledger_)} policies)"
         main_ledger_ = ledger_list  # Update the ledger list - if it is not updated
+        index_ledger()
     elif trace:
         message = f"Current ledger with {len(main_ledger_)} policies is not replaced: Modified flag is {str(is_modified)}, new ledger has {len(ledger_list)} policies"
     utils_io.write_unlock("blockchain")
@@ -479,6 +482,9 @@ def get_search_keys(key):
         # Multiple types
         key_list = key[1:-1].split(',')
         for i in range(len(key_list)):
+            if not key_list[i]:
+                # For example: blockchain get (operator,) bring.first
+                continue
             if key_list[i][0] == ' ' or key_list[i][-1] == ' ':
                 key_list[i] = key_list[i].strip()  # remove leading and trailing spaces from the keys
     else:
@@ -1049,6 +1055,9 @@ def merge_ledgers(status, io_buff_in, new_ledger, existing_ledger, trace):
 
                     local_list = new_local_list
 
+                    if trace_flag:
+                        details[f"Transferred policies:"] = f"{len(new_local_list)}"
+
                     if local_list:      # local_list includes all the policies in the current active blockchain.json
                         # The policies which are not on the new_ledger are:
                         # 1) Added to the new ledger
@@ -1162,11 +1171,10 @@ def merge_ledgers(status, io_buff_in, new_ledger, existing_ledger, trace):
                     new_entries = len(ledger_list) if ledger_list else 0 # The number of new entries
 
                 main_ledger_ = ledger_list          # Update the ledger list
+
+                index_ledger()                      # GO over the ledger and create indexes
         else:
             merge_errors_ += 1
-
-
-
 
     if trace_flag:
         details[f"Process returned code"] = f"{ret_val}"
@@ -1280,4 +1288,80 @@ def  merge_anmp(status, anmp_list, ledger_list, index_by_id):
                     if update_val:
                         src_policy_inner["anmp"][key] = policy_date
                         src_policy_inner[key] = new_value
+
+
+
+# ==================================================================
+# Create indexes over the ledger
+# Indexes are build as entries in a dictionary
+# Policy type is an entry, leading to a list referencing all policies by type
+# Parent_index is a dictionary showing all entries leading to a parent
+# Entry 0 includes the root (root parents - they do not have a parent link, but have children).
+# ==================================================================
+def index_ledger():     # This is inside a write mutex
+
+    global main_ledger_
+    global type_index_   # An index by policy type
+    global parent_index_ # An index by parent - the parent id is an entry leading to a list of all children
+
+    index_by_type = {}
+    index_by_parent = {}
+
+    for index, policy in enumerate(main_ledger_):
+
+        policy_type = next(iter(policy))
+
+        if policy_type == "cluster":
+            continue        # Excluded from the index
+
+        # A dictionary where every entry is a policy type leading to all the policies of that type
+        if not policy_type  in index_by_type:
+            index_by_type[policy_type] = []
+        index_by_type[policy_type].append(index)
+
+        # A dictionary where every entry is a parent id - leading to all the policies of that type
+        if "parent" in policy[policy_type]:
+            parent_id = policy[policy_type]["parent"]
+            if not parent_id in index_by_parent:
+                index_by_parent[parent_id] = []
+            index_by_parent[parent_id].append(index)
+
+    if not "root_policies" in index_by_parent:
+        index_by_parent["root_policies"] = []
+    for index, policy in enumerate(main_ledger_):
+        policy_type = next(iter(policy))
+        if policy_type and not "parent" in policy[policy_type]:
+            # This policy has no parents
+            if "id" in policy[policy_type]:
+                policy_id = policy[policy_type]["id"]
+                if policy_id in index_by_parent:
+                    # This policy has children but no parent -> it is the root
+                    index_by_parent["root_policies"].append(index)
+
+    type_index_ = index_by_type
+    parent_index_ = index_by_parent
+
+
+# ==================================================================
+# Get the immediate children of a parent
+# Or get the root policies. To get the root, parent key is "root_policies"
+# ==================================================================
+def get_root_or_children(parent_key):
+
+    global main_ledger_
+    global parent_index_ # An index by parent - the parent id is an entry leading to a list of all children
+
+    output_list = []
+
+    utils_io.read_lock("blockchain")        # Make sure no changes while the process reads from the ledger
+
+    if parent_key in parent_index_:
+        policies_list = parent_index_[parent_key]
+        for policy_offset in policies_list:
+            output_list.append(copy.deepcopy(main_ledger_[policy_offset]))
+
+    utils_io.read_unlock("blockchain")
+
+    return output_list
+
 

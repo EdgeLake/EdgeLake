@@ -174,7 +174,7 @@ def get_connected_groups(status, io_buff_in, cmd_words, trace):
 
 # ============================================================================================
 # Bucket Create ...
-# Example: bucket create where group = my_group and name = my_bucket
+# Example: bucket create where group = my_group and name = my_bucket and topic = topic
 # ============================================================================================
 def bucket_create(status, io_buff_in, cmd_words, trace):
 
@@ -183,6 +183,7 @@ def bucket_create(status, io_buff_in, cmd_words, trace):
 
     keywords = {"group": ("str", True, False, True),
                 "name":     ("str", True, False, True),
+                "topic": ("str", True, False, False),
                 }
 
     ret_val, counter, conditions = interpreter.get_dict_from_words(status, cmd_words, 3, 0,
@@ -194,7 +195,7 @@ def bucket_create(status, io_buff_in, cmd_words, trace):
     reply = None
     if not bucket_group in registry_:
         status.add_error(f"Bucket Group: {bucket_group} not declared or not connected")
-        ret_val = process_status.Bucket_group_not_declared
+        ret_val = process_status.Failed_bucket_connect
         reply = "Bucket group not connected"
     else:
         bucket_name = interpreter.get_one_value(conditions, "name")
@@ -203,7 +204,7 @@ def bucket_create(status, io_buff_in, cmd_words, trace):
         if obj is None:
             status.add_error(f"Bucket Group Not Connected: ...")
             reply = "Bucket group not connected"
-            ret_val = process_status.Bucket_group_not_declared
+            ret_val = process_status.Failed_bucket_connect
 
         if not ret_val:
 
@@ -236,7 +237,7 @@ def bucket_drop(status, io_buff_in, cmd_words, trace):
     if not bucket_group in registry_:
         status.add_error(f"Bucket Group: {bucket_group} not declared or not connected")
         reply = "Bucket group not connected"
-        ret_val = process_status.Bucket_group_not_declared
+        ret_val = process_status.Failed_bucket_connect
     else:
         bucket_name = interpreter.get_one_value(conditions, "name")
         # drop the bucket in the group and return success or process_status.Failed_bucket_drop with the reason
@@ -244,7 +245,7 @@ def bucket_drop(status, io_buff_in, cmd_words, trace):
         if obj is None:
             reply = "Bucket group not connected"
             status.add_error(f"Bucket Group Not Connected: ...")
-            ret_val = process_status.Bucket_group_not_declared
+            ret_val = process_status.Failed_bucket_connect
         if not ret_val:
 
             delete_all = interpreter.get_one_value(conditions, "delete_all")
@@ -276,14 +277,14 @@ def get_files(status, io_buff_in, cmd_words, trace):
     bucket_group = interpreter.get_one_value(conditions, "group")
     if not bucket_group in registry_:
         status.add_error(f"Bucket Group: {bucket_group} not declared or not connected")
-        ret_val = process_status.Bucket_group_not_declared
+        ret_val = process_status.Failed_bucket_connect
     else:
         bucket_name = interpreter.get_one_value(conditions, "name")
         # Return the list of the buckets or:
         obj = registry_[bucket_group].get("bucket_obj")
         if obj is None:
             status.add_error(f"Bucket Group Not Connected: ...")
-            ret_val = process_status.Bucket_group_not_declared
+            ret_val = process_status.Failed_bucket_connect
         if not ret_val:
             prefix = interpreter.get_one_value(conditions, "prefix")
             ret_val, files_list = obj.list_files(status, bucket_name, prefix=prefix or "")
@@ -324,13 +325,13 @@ def get_names(status, io_buff_in, cmd_words, trace):
     bucket_group = interpreter.get_one_value(conditions, "group")
     if not bucket_group in registry_:
         status.add_error(f"Bucket Group: {bucket_group} not declared or not connected")
-        ret_val = process_status.Bucket_group_not_declared
+        ret_val = process_status.Failed_bucket_connect
     else:
         # Return the list of the buckets or:
         obj = registry_[bucket_group].get("bucket_obj")
         if obj is None:
             status.add_error(f"Bucket Group Not Connected: ...")
-            ret_val = process_status.Bucket_group_not_declared
+            ret_val = process_status.Failed_bucket_connect
         if not ret_val:
             ret_val, bucket_names = obj.list_buckets(status)
 
@@ -369,7 +370,7 @@ def file_upload(status, io_buff_in, cmd_words, trace):
     if not bucket_group in registry_:
         status.add_error(f"Bucket Group: {bucket_group} not declared or not connected")
         reply = "Bucket group not connected"
-        ret_val = process_status.Bucket_group_not_declared
+        ret_val = process_status.Failed_bucket_connect
     else:
         bucket_name = interpreter.get_one_value(conditions, "name")
         # Test that the bucket exists + load the file
@@ -377,7 +378,7 @@ def file_upload(status, io_buff_in, cmd_words, trace):
         if obj is None:
             status.add_error(f"Bucket Group Not Connected: ...")
             reply = "Bucket Group Not Connected"
-            ret_val = process_status.Bucket_group_not_declared
+            ret_val = process_status.Failed_bucket_connect
         if not ret_val:
             filename = interpreter.get_one_value(conditions, "file_name")
             source_dir = interpreter.get_one_value(conditions, "source_dir")
@@ -425,7 +426,7 @@ def file_download(status, io_buff_in, cmd_words, trace):
     reply = None
     if not bucket_group in registry_:
         status.add_error(f"Bucket Group: {bucket_group} not declared or not connected")
-        ret_val = process_status.Bucket_group_not_declared
+        ret_val = process_status.Failed_bucket_connect
         reply = "Bucket Group Not Connected"
     else:
         bucket_name = interpreter.get_one_value(conditions, "name")
@@ -433,7 +434,7 @@ def file_download(status, io_buff_in, cmd_words, trace):
         if obj is None:
             status.add_error(f"Bucket Group Not Connected: ...")
             reply = "Bucket Group Not Connected"
-            ret_val = process_status.Bucket_group_not_declared
+            ret_val = process_status.Failed_bucket_connect
         if not ret_val:
             dest_dir = interpreter.get_one_value(conditions, "dest_dir")
             file_name = interpreter.get_one_value(conditions, "file_name")
@@ -469,7 +470,7 @@ def file_delete(status, io_buff_in, cmd_words, trace):
     reply = None
     if not bucket_group in registry_:
         status.add_error(f"Bucket Group: {bucket_group} not declared or not connected")
-        ret_val = process_status.Bucket_group_not_declared
+        ret_val = process_status.Failed_bucket_connect
         reply = "Bucket Group Not Connected"
     else:
         bucket_name = interpreter.get_one_value(conditions, "name")
@@ -477,7 +478,7 @@ def file_delete(status, io_buff_in, cmd_words, trace):
         if obj is None:
             status.add_error(f"Bucket Group Not Connected: ...")
             reply = "Bucket Group Not Connected"
-            ret_val = process_status.Bucket_group_not_declared
+            ret_val = process_status.Failed_bucket_connect
         if not ret_val:
 
             key = interpreter.get_one_value(conditions, "key")
@@ -520,7 +521,7 @@ def file_info(status, io_buff_in, cmd_words, trace):
     reply = None
     if not bucket_group in registry_:
         status.add_error(f"Bucket Group: {bucket_group} not declared or not connected")
-        ret_val = process_status.Bucket_group_not_declared
+        ret_val = process_status.Failed_bucket_connect
         reply = "Bucket Group Not Connected"
     else:
         bucket_name = interpreter.get_one_value(conditions, "name")
@@ -528,7 +529,7 @@ def file_info(status, io_buff_in, cmd_words, trace):
         if obj is None:
             status.add_error(f"Bucket Group Not Connected: ...")
             reply = "Bucket Group Not Connected"
-            ret_val = process_status.Bucket_group_not_declared
+            ret_val = process_status.Failed_bucket_connect
         if not ret_val:
 
             key = interpreter.get_one_value(conditions, "key")

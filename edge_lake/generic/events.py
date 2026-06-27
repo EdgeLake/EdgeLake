@@ -275,7 +275,7 @@ def use_new_blockchain_file(status, io_buff_in, old_file, blockchain_file, new_f
             if utils_io.is_path_exists(blockchain_file):
                 # move current --> old
                 if not utils_io.rename_file(status, blockchain_file, old_file):
-                    status.add_error("Event blockchain_use_new: Faild to rename file: %s" % old_file)
+                    status.add_error("Event blockchain_use_new: Failed to rename file: %s" % old_file)
                     ret_val = process_status.Failed_to_rename_file
 
             if not ret_val:

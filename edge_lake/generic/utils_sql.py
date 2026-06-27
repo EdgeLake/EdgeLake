@@ -1599,6 +1599,7 @@ def get_table_name_from_sql(status:process_status, sql_str:str, offset_from:int)
     else:
         offset_table_name, offset_end_name = utils_data.find_word_after(sql_str, offset_from + 5)
         if offset_table_name == -1:
+            table_name = ""
             status.add_error("Missing table name in SQL command: '%s'" % sql_str)
             ret_val = process_status.ERR_table_name
         else:
@@ -2278,7 +2279,11 @@ def update_and_stmt(status, and_array, where_str):
         if not end_offset:
             ret_value = process_status.Failed_to_parse_sql
             status.add_keep_error("Process failed with parsing of WHERE condition: '%s'" % where_str)
-            break  # no more data- but missong operands
+            break  # no more data- but missing operands
+        if (operation == '>' or operation == '<' or operation == '!') and where_str[start_offset] == '=':
+            ret_value = process_status.Failed_to_parse_sql
+            status.add_keep_error(f"Extra space in sql: {operation} {where_str[start_offset]} in '{where_str}' statement")
+            break  # no more data- but missing operands
 
         if where_str[start_offset] == '(':
             # Right operand is a function
@@ -2305,12 +2310,24 @@ def update_and_stmt(status, and_array, where_str):
                             start_offset, end_offset = get_sql_unit(where_str, False, end_offset)
                             right_operand =  where_str[start_offset:end_offset]
                             if right_operand != 'null' and right_operand != "null)":
-                                ret_value = process_status.Failed_to_parse_sql
+                                if right_operand == "true" or right_operand == "true)" or right_operand == "false" or right_operand == "false)":
+                                    # Reverse and set to equal
+                                    add_paren = True if right_operand[-1] == ")" else False
+                                    right_operand = "false" if right_operand[0] =='t' else "true"
+                                    if add_paren:
+                                        right_operand += ')'
+                                    operation = '='
+                                else:
+                                    ret_value = process_status.Failed_to_parse_sql
                             else:
                                 # the case of "IS NOT NULL"
                                 operation = "is not"
                         else:
-                            ret_value = process_status.Failed_to_parse_sql
+                            if right_operand == "true" or right_operand == "true)" or right_operand == "false" or right_operand == "false)":
+                                # is true --> replaced with: = true  -- is false --> replaced with: = false
+                                operation = '='
+                            else:
+                                ret_value = process_status.Failed_to_parse_sql
                     if ret_value:
                         status.add_keep_error("SQL parsing of WHERE condition failed (failed to identify \"is null\" or \"is not null\"): '%s'" % where_str)
                         break

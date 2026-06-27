@@ -12,15 +12,26 @@ from socket import gethostname
 
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.utils_print as utils_print
 import edge_lake.generic.utils_columns as utils_columns
 
 try:
     import docker
-    CLIENT = docker.from_env()
-except:
+    docker_err_msg_ = ""
+except ImportError as e:
+    docker_err_msg_= f"docker package not installed: {e}"
     docker_ = False
+    docker_err_ = process_status.Failed_to_import_lib
 else:
-    docker_ = True
+    try:
+        CLIENT = docker.from_env()
+        CLIENT.ping()
+    except Exception as e:
+        docker_err_msg_ = f"Docker connection failed: {e}"
+        docker_ = False
+        docker_err_ = process_status.Failed_library_process
+    else:
+        docker_ = True
 
 HOSTNAME = os.getenv('HOSTNAME', gethostname())
 
@@ -39,14 +50,15 @@ TITLE_MAP = {
 # Prepare the windows Event Log Process
 # ------------------------------------------------------------------------------
 def prep_docker_events(status, prep_params, dispatch_params):
+    global docker_err_msg_
+
     if not docker_:
-        err_msg = "Docker library is not loaded"
-        status.add_error(err_msg)
-        ret_val = process_status.Failed_to_import_lib
+        status.add_error(docker_err_msg_)
+        utils_print.output_box(docker_err_msg_)
+        ret_val = docker_err_       #   process_status.Failed_to_import_lib or  process_status.Failed_library_process
     else:
-        err_msg = ""
         ret_val = process_status.SUCCESS
-    return [ret_val, err_msg]
+    return [ret_val, docker_err_msg_]
 
 # ------------------------------------------------------------------------------
 # Get Docker status

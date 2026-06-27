@@ -355,7 +355,7 @@ Wrong_process_name = 267
 No_trace_data = 268
 Duplicate_process = 269
 Duplicate_bucket_name = 270
-Bucket_group_not_declared = 271
+Failed_bucket_connect = 271
 Failed_bucket_create = 272
 Failed_bucket_drop = 273
 Wrong_bucket_name = 274
@@ -363,7 +363,32 @@ Failed_file_upload = 275
 Failed_file_download = 276
 Failed_to_declare_bucket_group = 277
 Failed_bucket_list = 278
-
+Wrong_connection_name = 279
+Duplicate_connection_name = 280
+NOT_supported_Protocol = 281
+NotImplementedError = 282
+Camera_not_declared = 283
+CAMERA_THREAD_NOT_ACTIVE = 284
+CAMERA_DISPLAY_ACTIVE = 285
+Thread_not_active = 286
+ERR_command_sequence = 287
+URL_not_supported = 288
+Lib_not_in_registry = 289
+video_failed_to_initialize = 290
+File_close_failed = 291
+Error_external_lib = 292
+Client_call_not_supported = 293
+File_Operation_Not_Authorized = 294
+REFINE_ERROR = 295
+Inconsistent_include_table = 296
+Failed_to_parse_user_data = 297
+Inconsistent_row_struct = 298
+Failed_to_identify_app_data = 299
+Failed_library_process = 300
+HTTP_missing_data = 301
+Concatenating_failed = 302
+# Modbus streaming: no map point produced data this poll; not fatal — run_plc_client keeps polling.
+PLC_modbus_empty_poll = 303
 
 # note that message is at location of error value + 1 (exit is set at 0)
 status_text = ["Terminating node processes",
@@ -502,8 +527,8 @@ status_text = ["Terminating node processes",
                "Local table not declared in blockchain", #132
                "Failed to retrieve hostname",           # 133
                "Error in SQL Select statement",         # 134
-               "TCP server is not running",             # 135
-               "Process is already active",             # 136
+               "TCP server not running",             # 135
+               "Process already active",             # 136
                "Failed to generate keys",               # 137
                "Uninitialized variable",                # 138
                "User authentication disabled",          # 139
@@ -638,15 +663,40 @@ status_text = ["Terminating node processes",
                "No trace data",                         # 268
                "Duplicate process",                     # 269
                "Duplicate bucket name",                 # 270
-               "Bucket group not declared",               # 271
+               "Bucket group not declared",             # 271
                "Failed to create a new bucket",         # 272
                "Failed to drop a bucket",               # 273
                "Wrong bucket name",                     # 274
-               "Failed to upload a file",                 # 275
+               "Failed to upload a file",               # 275
                "Failed to download a file",             # 276
-               "Failed to declare bucket group",         #277
-               "Failed bucket list",                    #278
-               ]
+               "Failed to declare bucket group",        # 277
+               "Failed bucket list",                    # 278
+               "Wrong connection name",                 # 279
+               "Duplicate connection name",             # 280
+               "Not supported protocol",                # 281
+               "Not Implemented Error",                 # 282
+               "Camera not declared",                   # 283
+               "Camera thread not active",              # 284
+               "Camera display active",                 # 285
+               "Thread not active",                     # 286
+               "Error Commands Sequence",               # 287
+               "URL not supported",                     # 288
+               "Library not in local registry",         # 289
+               "Video failed to initialize",            # 290
+               "File close failed",                     # 291
+               "Error with external library",           # 292
+               "Client call not supported",             # 293
+               "File operation not authorized",         # 294
+               "Request needs to be refined",           # 295
+               "Inconsistent include table in query",   # 296
+               "Failed to parse user data",             # 297
+               "Inconsistent row struct",               # 298
+               "Failed to identify application data",   # 299
+               "Failed library process",                # 300
+               "Missing data on HTTP call",             # 301
+               "Concatenating strings failed",          # 302
+               "Modbus poll: no successful point reads",  # 303
+           ]
 
 
 WARNING_no_files_in_dir = 1
@@ -686,7 +736,7 @@ global_processes = {
     "streamer": LOCATION_STREAMER,
     "broker": LOCATION_BROKER,
     "kafka": LOCATION_KAFKA,
-    "archiver": LOCATION_KAFKA,
+    "archiver": LOCATION_ARCHIVER,
 }
 global_status = [SUCCESS] * len(global_processes)
 global_signal = [SUCCESS] * len(global_processes)

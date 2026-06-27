@@ -22,6 +22,18 @@ import sys
 import threading
 import copy
 
+TOPIC_DBMS_ = 0     #   dbms - dbms name (if mapping instructions)
+TOPIC_TABLE_ = 1    #   table - table name (if mapping instructions)
+TOPIC_QOS_ = 2      #   qos - Quality of service
+TOPIC_MAPPING_ = 3  #   mapping - mapping instructions
+TOPIC_POLICIES_ = 4 #   policies - a list of policies assigned (optional and replacing name, dbms and mapping)
+TOPIC_PERSIST_ = 5  #   persist - if True, only write to log file
+TOPIC_DYNAMIC_ = 6  #   dynamic - # A true value determines automating table and policy creation
+TOPIC_MUTEX_ = 7    #   mutex - in dynamic mode - a mutex object to prevent race condition with the flush
+TOPIC_DICT_ = 8     #   data_dict - maintains attr value pairs
+TOPIC_ATTR_COUNT_ = 9    # Columns counter that updated the struct - In Dynamic processing
+
+
 try:
     import paho.mqtt.client as mqtt
 except:
@@ -53,6 +65,7 @@ import edge_lake.generic.params as params
 import edge_lake.tcpip.net_utils as net_utils
 import edge_lake.json_to_sql.mapping_policy as mapping_policy
 from edge_lake.generic.node_info import get_node_name
+from edge_lake.generic.utils_io import IoHandle
 
 if paho_installed == True:
     MQTT_ERR_AGAIN = mqtt.MQTT_ERR_AGAIN
@@ -115,6 +128,16 @@ al_state_connected_ = 1
 al_state_not_published_ = 2
 al_state_published_ = 2
 
+
+platform_ = None        # for dynamic mode -  policies are updated dynamically
+master_node_ = None     # for dynamic mode - policies are updated dynamically
+
+is_flush_uns_running_ = False
+flush_uns_counter_ = 0
+flush_uns_frequency_ = 5     # Write every 5 seconds
+exit_uns_flash_ = False     # Turned on with exit
+
+client_pool_ = None         # A pool of threads to process client data
 # ----------------------------------------------------------------------
 # A class that maintains the subscription info
 # ----------------------------------------------------------------------
@@ -131,6 +154,7 @@ class SubscriptionInfo:
         self.err_dir = None
         self.blobs_dir = None
         self.topics = {}
+        self.ignored_topics_ = set()       # Topics to ignore (when topics are inferred automatically, to avoid repeated calculations)
         self.status = None
         self.message_counter = 0
         self.error_counter = 0
@@ -146,6 +170,18 @@ class SubscriptionInfo:
         self.statistics = {}           # as f(topic) maintain: counter messages success, counter messages failed, last error time, last error message
         self.connect_counter = 0
         self.disconnected_flag = False  # Set to True after the call to client.disconnect()
+        self.mem_view = None        # Used in Dynamic mode
+        self.log_only = False       # Flag to enable logging only
+        self.log_file_handle = None        # File object
+        self.log_file_name = None
+
+    def set_mem_view(self):
+        # If policies are updated dynamically
+        data_buffer = bytearray(params.TCP_BUFFER_SIZE)
+        self.mem_view = memoryview(data_buffer)  # not using one instance as it may be overwritten before message send
+
+    def get_mem_view(self):
+        return self.mem_view
 
     def get_client_id(self):
         return self.client_id
@@ -257,6 +293,34 @@ class SubscriptionInfo:
     def set_log_error(self, value:bool):
         self.log_error = value
 
+    def set_log_only(self, status):
+        # Open the log file
+        self.log_file_handle = IoHandle()
+
+        separator = params.get_path_separator()
+        if len(self.prep_dir):
+            if self.prep_dir[-1] == separator:
+                file_name = self.ip_port.replace(':','_')
+                self.log_file_name = f"{self.prep_dir}log_{file_name}.json"
+            else:
+                self.log_file_name = f"{self.prep_dir}{separator}log_{self.ip_port}.dat"
+
+            if not self.log_file_handle.open_file("new", self.log_file_name):
+                status.add_error(f"Client to {self.ip_port} failed to open file: {self.log_file_name}")
+                ret_val = process_status.File_open_failed
+            else:
+                self.log_only = True        # Only log incoming data - no processing
+                ret_val = process_status.SUCCESS
+        else:
+            status.add_error(f"Missing 'prep_dir' value to msg client with broker {self.ip_port}")
+            ret_val = process_status.File_open_failed
+        return ret_val
+
+    def is_log_only(self):
+        return self.log_only      # Only log incoming data - no processing
+    def get_log_file_handle(self):
+        return self.log_file_handle
+
     def is_log_error(self):
         return self.log_error
 
@@ -291,6 +355,89 @@ class SubscriptionInfo:
         else:
             topic_info = None
         return topic_info
+
+    def is_dynamic_process(self, topic):
+        # True if dynamically adding data from the broker
+        return self.topics[topic][6]
+
+    def update_table(self, topic, table_name):
+        # Update the table name
+        if topic in self.topics:
+            self.topics[topic][1] = table_name
+
+    def add_key_value(self, topic, attr_name, attr_val):
+        # In Dynamic mode - update attribute key + value as f(namespace).
+        # A different thread would write to file every interval
+        if topic in self.topics:
+            topic_info = self.topics[topic]
+            lock = topic_info[TOPIC_MUTEX_]        # validate lock so it is not written while updated
+            if not lock:
+                return                  # was not yet initiated
+            with lock:
+                # Note: No .lock(), no .acquire() needed outside
+                # lock is automatically released
+                topic_info[TOPIC_DICT_]["timestamp"] = utils_columns.get_current_utc_time()
+                topic_info[TOPIC_DICT_][attr_name] = attr_val
+
+
+    def get_dbms(self, topic):
+        # Return the dbms name
+        return self.topics[topic][0]
+
+    def get_dbms_table(self, topic):
+        # Return the dbms name
+        return [self.topics[topic][0], self.topics[topic][1]]
+
+    def is_prefix_match(self, topic):
+        # Compare if the topic matches up to #
+        prefix_match = False
+        topic_info = None
+        if not topic in self.ignored_topics_:    # If topic was determined as not relevant - ignore process below
+            for key, topic_info in self.topics.items():
+                if key[-1] == '#':
+                    # Key to consider
+                    prefix = key[:-1]
+                    if (topic+'/').startswith(prefix):
+                        prefix_match = True
+                        break  # No point to continue - will exit with True or False
+        return prefix_match, topic_info
+
+    def add_new_topic(self, topic):
+        '''
+        Test an exiting topic that ends with a Hash (#) that satisfies the needed topic
+        If found - add a new topic with the same properties as the hashed topic
+        '''
+        add_topic, topic_info = self.is_prefix_match(topic)     # Test if the topic satisfied the registration
+
+
+        if add_topic:
+            dynamic = topic_info[TOPIC_DYNAMIC_]
+            if dynamic:         # In Dynamic mode, topics are added dynamicaly
+                # Add the new topic
+                # Add the parent with the option to add data values to the dictionary - each value is a child
+                namespace, table_name = get_namespace_attr_name(topic)      # The last segment serves as the table name
+
+                if topic_info[TOPIC_TABLE_] :
+                    table_name = topic_info[TOPIC_TABLE_]       # Already determined
+
+
+                # Add mutex and dict as a f(namespace)
+                if not namespace in self.topics:
+                    # No Mutex initialized
+                    mutex = threading.Lock()
+                    data_dict = {}  # keeping a dict of the latest attribute names and values
+                    self.add_topic(namespace, topic_info[TOPIC_DBMS_], table_name, topic_info[TOPIC_QOS_], topic_info[TOPIC_MAPPING_], topic_info[TOPIC_POLICIES_], topic_info[TOPIC_PERSIST_], topic_info[TOPIC_DYNAMIC_], mutex, data_dict)
+
+                if not topic in self.topics:
+                    # Add the leaf
+                    self.add_topic(topic, topic_info[TOPIC_DBMS_], table_name, topic_info[TOPIC_QOS_], topic_info[TOPIC_MAPPING_], topic_info[TOPIC_POLICIES_], topic_info[TOPIC_PERSIST_], topic_info[TOPIC_DYNAMIC_], None, None)
+
+            else:
+                add_topic = False
+        else:
+            self.ignored_topics_.add(topic)
+
+        return add_topic
 
     def is_message_flush(self, topic):
         '''
@@ -345,7 +492,7 @@ class SubscriptionInfo:
     # ----------------------------------------------------------------------
     # Add a new topic to the list of topics of this client
     # ----------------------------------------------------------------------
-    def add_topic(self, name, dbms, table, qos, mapping, policies, persist):
+    def add_topic(self, name, dbms, table, qos, mapping, policies, persist, dynamic, mutex, data_dict):
         '''
         name - topic name
         dbms - dbms name (if mapping instructions)
@@ -354,9 +501,16 @@ class SubscriptionInfo:
         mapping - mapping instructions
         policies - a list of policies assigned (optional and replacing name, dbms and mapping)
         persist - if True, only write to log file
+        dynamic - # A true value determines automating table and policy creation
+        mutex - in dynamic mode - a mutex object to prevent race condition with the flush
+        data_dict - maintains attr value pairs
         '''
 
-        self.topics[name] = (dbms, table, qos, mapping, policies, persist)
+
+        table_name = utils_data.reset_str_chars(table) if isinstance(table,str) else table  # Table could be a list to extraxt the table name
+        dbms_name = utils_data.reset_str_chars(dbms) if isinstance(dbms,str) else dbms      # DBMS could be a list to extraxt the table name
+
+        self.topics[name] = [dbms_name, table_name, qos, mapping, policies, persist, dynamic, mutex, data_dict, 0]
 
 # ----------------------------------------------------------------------
 # Test if needed lib in installed
@@ -396,6 +550,8 @@ def show_stat( client_id ):
                 else:
                     # get the dict info
                     out_list = []
+                    total_success = 0
+                    total_error = 0
                     for topic_name, topic_stat in topics_dict.items():
                         # Stat includes: counter success, counter error, last error, last error time
                         success = topic_stat[0]
@@ -408,16 +564,20 @@ def show_stat( client_id ):
                             err_msg = ""
                             last_error_time = ""
 
-                        out_list.append((topic_name, success, failure, last_error_time, err_msg))
+                        total_success += success
+                        total_error += failure
+
+                        out_list.append((topic_name, f"{success:,}", f"{failure:,}", last_error_time, err_msg))
                     reply += utils_print.output_nested_lists(out_list, "\n\r", ["Topic", "Success", "Failure", "Last Error Time", "Last Error"], True, "     ")
 
+                    reply += f"\r\n\nTotal Success: {total_success:,}, Total Error: {total_error:,}\r\n\n"
     return reply
 # ----------------------------------------------------------------------
 # Satisfy command: get msg client
 # Show the list of subscriptions
 # mqtt_map[topic] = [dbms_name, table_name, qos, 0]
 # ----------------------------------------------------------------------
-def show_info( client_id, is_detailed, broker, topic ):
+def show_info( client_id, is_detailed, broker, topic, statistics ):
 
     global clients_counter
     global node_client_id
@@ -430,12 +590,12 @@ def show_info( client_id, is_detailed, broker, topic ):
             if not client_id in subscriptions:
                 reply = "\r\nSubscription %u is not in use" % client_id
             else:
-                reply = get_subscriptions_info(client_id, is_detailed, broker, topic)
+                reply = get_subscriptions_info(client_id, is_detailed, broker, topic, statistics)
         else:
             reply = ""
             for i in range(1, node_client_id + 1):
                 if i in subscriptions:
-                    reply += get_subscriptions_info(i, is_detailed, broker, topic)
+                    reply += get_subscriptions_info(i, is_detailed, broker, topic, statistics)
 
     return reply
 
@@ -516,13 +676,19 @@ def get_subscriptions_stat(client_id):
 # ----------------------------------------------------------------------
 # Return the info on a single subscription
 # ----------------------------------------------------------------------
-def get_subscriptions_info(client_id, is_detailed, broker_ip_port, topic_requested):
+def get_subscriptions_info(client_id, is_detailed, broker_ip_port, topic_requested, statistics):
     global subscriptions
 
     if broker_ip_port:
         ip_port = subscriptions[client_id].get_ip_port()
         if not ip_port or ip_port!= broker_ip_port:
             return ""   # No such broker
+
+    info_str = ""
+    if statistics:
+        info_str = show_stat(client_id)
+        if not is_detailed and not broker_ip_port and not topic_requested:
+            return info_str
 
 
     client_sbscr = subscriptions[client_id]  # The object with the subscription info
@@ -532,7 +698,7 @@ def get_subscriptions_info(client_id, is_detailed, broker_ip_port, topic_request
     if topic_requested and not topic_requested in topics_dict:
         return ""           # no such topic in this broker
 
-    info_str = get_subscriptions_stat(client_id)
+    info_str += get_subscriptions_stat(client_id)
 
     # Get the Topics info
 
@@ -557,15 +723,20 @@ def get_subscriptions_info(client_id, is_detailed, broker_ip_port, topic_request
             table = value[1]
             qos = value[2]
             mapping  = value[3]
-            for entry in mapping:
-                # every column name is an entry
-                subscription_array.append((topic, qos, dbms, table, entry[0], entry[1], str(entry[2]), str(entry[3]),None))
-                dbms = ""
-                table = ""
-                qos = ""
-                topic = ""
+            is_dynamic = value[6]
+            if is_dynamic:
+                # This flag determines that policies and data are created dynamically from the server
+                subscription_array.append((topic, True, qos, dbms, table, None, None, None, None, None))
+            else:
+                for entry in mapping:
+                    # every column name is an entry
+                    subscription_array.append((topic, False, qos, dbms, table, entry[0], entry[1], str(entry[2]), str(entry[3]),None))
+                    dbms = ""
+                    table = ""
+                    qos = ""
+                    topic = ""
 
-    info_str += utils_print.output_nested_lists(subscription_array, "\r\n     Subscribed Topics:", ["Topic", "QOS", "DBMS", "Table", "Column name", "Column Type", "Mapping Function", "Optional", "Policies"], True, "     ")
+    info_str += utils_print.output_nested_lists(subscription_array, "\r\n     Subscribed Topics:", ["Topic", "Dynamic", "QOS", "DBMS", "Table", "Column name", "Column Type", "Mapping Function", "Optional", "Policies"], True, "     ")
 
     if is_detailed:
         # Get directories used
@@ -692,11 +863,8 @@ def process_message( topic, user_id, user_msg):
     user_id - the AnyLog  user ID
     user_msg - the data delivered
     '''
-
     global subscript_mutex
-
-    ret_val = process_status.SUCCESS
-    mutex_taken = False
+    global client_pool_
 
     try:
         client_sbscr = subscriptions[user_id]  # The mapping info as f(topic)
@@ -704,16 +872,83 @@ def process_message( topic, user_id, user_msg):
         user_msg = "MQTT message without subscription for topic: '%s' and client id: %s" % (topic, str(user_id))
         ret_val = process_status.MQTT_wrong_client_id
     else:
-        # Find the subscription info on this message.
-        topic_info = client_sbscr.get_topic_info(topic)
-
-        if not topic_info:
-            user_msg = "Unrecognized topic in MQTT process: %s" % topic
-            ret_val = process_status.Unrecognized_mqtt_topic
+        status = client_sbscr.get_status()
 
 
-    if ret_val:
-        process_log.add("Error", user_msg)
+
+        if client_sbscr.is_log_only():
+            # Only Log data
+            ret_val =  write_log_file(status, client_sbscr, topic, user_msg)
+            client_sbscr.set_statistics(topic, ret_val) # Add stats
+        else:
+            ret_val, topic_info = get_add_topic_info(status,  master_node_, platform_, client_sbscr, topic)   # Topics may be dynamically added - dependent on the config, for example in dynamic process
+
+            # Pull needed data from the JSON
+
+            # Test the user message associated with the topic
+            struct_type, candidate = utils_data.get_str_obj(user_msg)  # Returns "dict" or "list" or "none"
+            if struct_type == "none":
+                process_log.add("Error", f"Missing message data with topic '{topic}'")
+                ret_val = process_status.Failed_to_identify_app_data
+            else:
+                if candidate:
+                    # The data structure was fixed to represent a JSON or a LIST
+                    process_msg = candidate
+                else:
+                    process_msg = user_msg
+
+                if struct_type == "dict":
+                    value_obj = utils_json.str_to_json(process_msg)
+                    if not value_obj:
+                        process_log.add("Error", f"MQTT message is not in JSON format (Failed to map string to JSON) - Message: {user_msg}")
+                        ret_val = process_status.MQTT_not_in_json
+                elif struct_type == "list":
+                    value_obj = utils_json.str_to_list(process_msg)
+                    if not value_obj:
+                        process_log.add("Error",  f"MQTT format error (Failed to map string to JSON List)  - Message: {user_msg}")
+                        ret_val = process_status.MQTT_not_in_json
+                elif struct_type == "str" and topic_info[TOPIC_DYNAMIC_]:
+                    value_obj = process_msg  # The user value - will be updated to a single column table
+                else:
+                    process_log.add("Error", f"Application message is not recognized (data assigned to topic '{topic}') - Message: {user_msg}")
+                    ret_val = process_status.Failed_to_identify_app_data
+
+
+            if not ret_val:
+                if client_pool_:
+                    # Use the threads pool
+                    task = client_pool_.get_free_task()     # will be returned by the executing thread
+                    task.set_cmd(prep_process, [topic, user_msg, value_obj, user_id, client_sbscr, topic_info])
+                    client_pool_.add_new_task(task)  # # Place a task on the free list
+                else:
+                    ret_val = process_user_msg(status, topic, user_msg, value_obj, user_id, client_sbscr, topic_info)
+
+    return ret_val
+# -------------------------------------------------------------------------------------------------------
+# Prep for one of multiple worker threads
+# The ENTRY point for multiple threads
+# -------------------------------------------------------------------------------------------------------
+def prep_process(status, mem_view, *args):
+    '''
+    status is the task status property
+    '''
+    topic, user_msg, value_obj, user_id, client_sbscr, topic_info = args
+    ret_val = process_user_msg(status, topic, user_msg, value_obj, user_id, client_sbscr, topic_info)
+
+    return ret_val
+
+# -------------------------------------------------------------------------------------------------------
+# Main processing of the broker messages - can be done by one thread or multiple threads
+# -------------------------------------------------------------------------------------------------------
+def process_user_msg(status, topic, user_msg, value_obj, user_id, client_sbscr, topic_info):
+
+    global client_pool_
+    mutex_taken = False
+
+    prep_dir, watch_dir, bwatch_dir, err_dir, blobs_dir = client_sbscr.get_work_dirs()
+
+    if client_sbscr.is_dynamic_process(topic):     # True - there is no bring or policies
+        ret_val = process_dynamic_msg(status, client_sbscr, topic, value_obj, prep_dir, watch_dir, err_dir)
     else:
 
         if not isinstance(user_id, int) or len(subscript_mutex) <= user_id:
@@ -726,9 +961,6 @@ def process_message( topic, user_id, user_msg):
             subscript_mutex[user_id].acquire_read()
             mutex_taken = True
 
-            status = client_sbscr.get_status()
-            prep_dir, watch_dir, bwatch_dir, err_dir, blobs_dir = client_sbscr.get_work_dirs()
-
             if client_sbscr.is_message_flush(topic):
                 # Only write messages without processing
                 dbms_name = client_sbscr.get_ip_name()  # A name based on the IP address of the broker
@@ -736,32 +968,8 @@ def process_message( topic, user_id, user_msg):
                 insert_list = [user_msg]
                 ret_val = process_status.SUCCESS
             else:
-                # Pull needed data from the JSON
-                if not user_msg:
-                    process_log.add("Error", f"MQTT missing message data with topic '{topic}'")
-                    ret_val = process_status.MQTT_not_in_json
-                else:
-                    struct_type = utils_data.get_str_obj(user_msg)  # Returns "dict" or "list" or "none"
-                    if struct_type == "dict":
-                        json_msg = utils_json.str_to_json(user_msg)
-                        if not json_msg:
-                            process_log.add("Error", f"MQTT message is not in JSON format (Failed to map string to JSON)")
-                            ret_val = process_status.MQTT_not_in_json
-                    elif struct_type == "list":
-                        json_list = utils_json.str_to_list(user_msg)
-                        if not json_list:
-                            process_log.add("Error", f"MQTT format error (Failed to map string to JSON List)")
-                            ret_val = process_status.MQTT_not_in_json
-                        else:
-                            json_msg = None
-                    else:
-                        process_log.add("Error", f"MQTT message format is not recognized (data assigned to topic '{topic}')")
-                        ret_val = process_status.MQTT_not_in_json
-
 
                 if not ret_val:
-                    # Find the subscription info on this message.
-                    topic_info = client_sbscr.get_topic_info(topic)
 
                     if not topic_info:
                         process_log.add("Error", "Unrecognized topic in MQTT process: %s" % topic)
@@ -770,12 +978,13 @@ def process_message( topic, user_id, user_msg):
 
                         if client_sbscr.is_with_policies(topic):
                             # Use Policies
-                            if json_msg:
+                            if isinstance(value_obj, dict):
                                 # A single entry
-                                ret_val = process_using_policies(status, topic_info, topic, json_msg, prep_dir, watch_dir, bwatch_dir, err_dir, blobs_dir)
+                                ret_val = process_using_policies(status, topic_info, topic, value_obj, prep_dir, watch_dir, bwatch_dir, err_dir, blobs_dir)
                             else:
                                 # List of entries
-                                for entry in json_list:
+                                for entry in value_obj:
+                                    # value_obj is a List
                                     if not isinstance(entry, dict):
                                         process_log.add("Error", f"MQTT message assigned to policy in a list is not in JSON format (List entry is not in JSON format)")
                                         ret_val = process_status.MQTT_not_in_json
@@ -785,11 +994,12 @@ def process_message( topic, user_id, user_msg):
                                             break
                         else:
                             # Use the BRING command
-                            if json_msg:
+                            if isinstance(value_obj, dict):
                                 # A single entry
-                                ret_val = process_using_bring(status, topic_info, topic, json_msg, prep_dir, watch_dir, err_dir)
+                                ret_val = process_using_bring(status, topic_info, topic, value_obj, prep_dir, watch_dir, err_dir)
                             else:
-                                for entry in json_list:
+                                for entry in value_obj:
+                                    # value_obj is a List
                                     if not isinstance(entry, dict):
                                         process_log.add("Error", f"MQTT message assigned to bring command in a list is not in JSON format (List entry is not in JSON format)")
                                         ret_val = process_status.MQTT_not_in_json
@@ -842,7 +1052,65 @@ def process_message( topic, user_id, user_msg):
 
     return ret_val
 
+# ----------------------------------------------------------------------
+# Get the info representing the topic - Note: topics may be dynamically added
+# ----------------------------------------------------------------------
+def get_add_topic_info(status,  master_node, platform, client_sbscr, topic):
+    # Find the subscription info on this message.
+    topic_info = client_sbscr.get_topic_info(topic)
 
+    if not topic_info:
+        if client_sbscr.add_new_topic(topic):  # Add a new topic if needs to be considered
+            # A new topic was added
+            topic_info = client_sbscr.get_topic_info(topic)
+    if not topic_info:
+        # Not a topic to consider
+        status.add_error("Unrecognized topic in Message Client process: %s" % topic)
+        ret_val = process_status.Unrecognized_mqtt_topic
+    else:
+        ret_val = process_status.SUCCESS
+    return ret_val, topic_info
+# ----------------------------------------------------------------------
+# This code only writes to a log file in the prep dir.
+# Example call:
+'''
+reset error log
+BROKER = "virtualfactory.proveit.services"
+PORT = 1883
+USERNAME = "proveitreadonly"
+PASSWORD = "proveitreadonlypassword"
+default_dbms = my_dbms
+
+<run msg client where 
+	broker = !BROKER and port=!PORT and 
+	user = !USERNAME and password = !PASSWORD and 
+	master_node = 10.0.0.185:2548 and
+	only_log = true and 
+	topic = (
+		name="Enterprise B/#" 
+	)>
+'''
+# ----------------------------------------------------------------------
+
+def write_log_file(status, client_sbscr, topic, user_msg):
+
+    user_data = user_msg.translate({ord('\n'): ' ', ord('\r'): None}).strip()
+    if len(user_data):
+        if (user_data[0] == '{' and user_data[-1] == '}') or (user_data[0] == "[" and user_data[-1] == "]"):
+            log_buffer = f"{{\"topic\": \"{topic}\", \"msg\": {user_data}}}\n"
+        else:
+            log_buffer = f"{{\"topic\": \"{topic}\", \"msg\": \"{user_data}\"}}\n"
+        file_handle = client_sbscr.get_log_file_handle()
+        if not file_handle.write_from_buffer(log_buffer):
+            ip_port = client_sbscr.get_ip_port()
+            status.add_error(f"Log data write: Filed to write log data from broker at {ip_port}")
+            ret_val = process_status.File_write_failed
+        else:
+            ret_val = process_status.SUCCESS
+    else:
+        status.add_error(f"Log data write: Failed to recognize user data for topic: {topic}")
+        ret_val = process_status.Failed_to_parse_user_data
+    return ret_val
 # ----------------------------------------------------------------------
 # Get a topic by comparison up to the hashtag (if exists)
 # ----------------------------------------------------------------------
@@ -925,14 +1193,8 @@ def process_using_bring(status, topic_info, topic, json_msg, prep_dir, watch_dir
                     ret_val = process_status.MQTT_info_err
                     break
 
-            try:
-                ret_val, hash_value = streaming_data.add_data(status, "streaming", 1, prep_dir, watch_dir, err_dir,
-                                                              dbms_name, table_name, '0', '0', 'json', msg_data)
-            except:
-                utils_print.output_box(
-                    "Failed to process message at mqtt_client call to streaming_data.add_data(): '%s' with topic: '%s'" % (
-                        utils_json.to_string(json_msg), topic))
-                ret_val = process_status.MQTT_data_err
+
+            ret_val, hash_value = write_to_buffers(status, dbms_name, table_name, topic, msg_data, prep_dir, watch_dir, err_dir)
             if ret_val:
                 break
 
@@ -1244,7 +1506,7 @@ def get_dest_name(status, topic, object_bring, message, object_type):
 
     if not ret_val:
         # To lower case and replace space with underscore
-        object_name = object_name.strip().lower()
+        object_name = object_name.strip()
         object_name = utils_data.reset_str_chars(object_name)
 
 
@@ -1690,7 +1952,11 @@ def register(status, conditions):
     global subscriptions
     global subscript_mutex
 
+    global platform_    # for dynamic mode -  policies are updated dynamically
+    global master_node_ # for dynamic mode - policies are updated dynamically
+
     ret_val = process_status.SUCCESS
+    dynamic = False
 
     client_sbscr = SubscriptionInfo()  # A class that maintains the subscription info
 
@@ -1732,10 +1998,20 @@ def register(status, conditions):
                                 err_dir = interpreter.get_one_value(conditions, "err_dir"), \
                                 blobs_dir = interpreter.get_one_value(conditions, "blobs_dir"))
 
+    # Get info for Dynamic Mode - policies are updated dynamically from the MQTT broker namespace
+    # Get the platform - the default is "local"
+    master_node_ = conditions.get("master_node", None)
+    platform_name = interpreter.get_one_value_or_default(conditions, "blockchain", None)
+    platform_ = [platform_name] if platform_name else None
+
     log_error = interpreter.get_one_value_or_default(conditions, "log_error", False)
     client_sbscr.set_log_error(log_error)   # A true value will log the data if it is not processed correctly
 
     client_topics = conditions["topic"]  # ALl the subscribed topics of this client
+
+    # Only log the incoming data
+    # This is different from the "log" option that enables "on_log" to log the broker calls
+    only_log = interpreter.get_one_value_or_default(conditions, "only_log", False)
 
     topics_dict = {}        # Collect the topics that were configured such that it can be undone in a failure
 
@@ -1776,13 +2052,13 @@ def register(status, conditions):
                 ret_val = process_status.MQTT_info_err
                 break
 
-            ret_val = resister_by_broker(status, ip_port, name, client_sbscr)  # Register the topic as f(broker)
+            ret_val = register_by_broker(status, ip_port, name, client_sbscr)  # Register the topic as f(broker)
             if ret_val:
                 break
             topics_dict[name] = 1  # Keep the (registered) topic name to allow undo
 
             policies_copy = copy.deepcopy(policies_info) # Make a copy of the policy as it may be changed using compile_ in Mapping_policy.apply_policy_schema()
-            client_sbscr.add_topic(name, None, None, qos, None, policies_copy, False)  # Add topics to list
+            client_sbscr.add_topic(name, None, None, qos, None, policies_copy, False, False, None, None)  # Add topics to list
 
         elif message_flush:
             # Only flush the topic data to disk
@@ -1794,17 +2070,18 @@ def register(status, conditions):
                 ret_val = process_status.MQTT_info_err
                 break
 
-            ret_val = resister_by_broker(status, ip_port, name, client_sbscr) # Register the topic as f(broker)
+            ret_val = register_by_broker(status, ip_port, name, client_sbscr) # Register the topic as f(broker)
             if ret_val:
                 break
             topics_dict[name] = 1  # Keep the (registered) topic name to allow undo
 
-            client_sbscr.add_topic(name, None, None, qos, None, None, False)     # Add topics to list
+            client_sbscr.add_topic(name, None, None, qos, None, None, False, False, None, None)     # Add topics to list
         else:
             qos = 0     # Default
             name = None
             dbms = None
             table = None
+            dynamic = False    # A true value determines automating table and policy creation
 
 
             mapping = []
@@ -1839,6 +2116,15 @@ def register(status, conditions):
                         table = table_info
                 elif key == "qos":
                     qos = value[0]              # Quality of service
+                elif key == "dynamic":
+                    # Table names and unified namesapce are determined dynamically
+                    dynamic = True if value[0].lower() == "true" else False       # # A true value determines automating table and policy creation
+                    if dynamic:
+                        if not master_node_ and not platform_:
+                            status.add_error("Missing platform declaration (master_node or blockchain) in command declaration")
+                            ret_val = process_status.ERR_command_struct
+                            break
+
                 elif key.startswith("column."):
                     # First option:  column.[column name].[column type]
                     ret_val, column_name, column_type = get_column_name_type(status, key)
@@ -1894,33 +2180,60 @@ def register(status, conditions):
                 ret_val = process_status.MQTT_info_err
                 break
 
-            if not dbms:
-                status.add_error("Missing mapping instruction for DBMS")
-                ret_val = process_status.MQTT_info_err
-                break
-
-            if not table:
-                status.add_error("Missing mapping instructions for table")
-                ret_val = process_status.MQTT_info_err
-                break
-
-            if not persist:
-                # If persist, data is written to file, mapping is optional
-                if not len(mapping):
-                    status.add_error("Missing mapping instructions for message in topic: '%s" % topic)
+            if not only_log:
+                # Data is logged to file (in prep dir) - no need in dbms and table name
+                if not dbms:
+                    status.add_error("Missing mapping instruction for DBMS")
                     ret_val = process_status.MQTT_info_err
                     break
 
-            ret_val = resister_by_broker(status, ip_port, name, client_sbscr) # Register the topic as f(broker)
+                if not table:
+                    if not dynamic:
+                        # # dynamic set to true determines automating table and policy creation
+                        status.add_error("Missing mapping instructions for table")
+                        ret_val = process_status.MQTT_info_err
+                        break
+            else:
+                # Table was specified
+                if dynamic:
+                    # tables are determined dynamically - not to be specified
+                    status.add_error("Error in mapping instructions - Table name is not expected to be specified in 'dynamic' mode")
+                    ret_val = process_status.MQTT_info_err
+                    break
+
+            if not persist:
+                # If persist, data is written to file, mapping is optional
+                if not only_log:
+                    if not len(mapping) and not dynamic:
+                        # dynamic determines automating table and policy creation
+                        status.add_error("Missing mapping instructions for message in topic: '%s" % topic)
+                        ret_val = process_status.MQTT_info_err
+                        break
+
+            ret_val = register_by_broker(status, ip_port, name, client_sbscr) # Register the topic as f(broker)
             if ret_val:
                 break
             topics_dict[name] = 1  # Keep the (registered) topic name to allow undo
 
-            client_sbscr.add_topic(name, dbms, table, qos, mapping, None, persist)     # Update the subscription info for this client
+            if dynamic:
+                # No Mutex initialized
+                mutex = threading.Lock()
+                data_dict = {}  # keeping a dict of the latest attribute names and values
+            else:
+                mutex = None
+                data_dict = None
+            client_sbscr.add_topic(name, dbms, table, qos, mapping, None, persist, dynamic, mutex, data_dict)     # Update the subscription info for this client
+
+    if not ret_val and only_log:
+        # Open a file to write the data
+        ret_val = client_sbscr.set_log_only(status)
 
     if not ret_val:
         status = process_status.ProcessStat()
         client_sbscr.set_status(status)
+        if dynamic:
+            client_sbscr.set_mem_view()     # memory buffer to update dynamically created policies
+
         # add the client info to the subscriptions dictionary as f(client_id)
         subscriptions[node_client_id] = client_sbscr
         while len(subscript_mutex) < (node_client_id + 1):
@@ -1936,9 +2249,9 @@ def register(status, conditions):
     return [ret_val, client_id]
 
 # -----------------------------------------------------------------------
-# Register the topic in the a dictionary that shows, for each nroker, the list of registered topics
+# Register the topic in the dictionary that shows, for each nroker, the list of registered topics
 # -----------------------------------------------------------------------
-def resister_by_broker(status, ip_port, name, client_sbscr):
+def register_by_broker(status, ip_port, name, client_sbscr):
     global broker_to_topic
 
     topics_dict = broker_to_topic[ip_port]  # The list of topics on this broker
@@ -2072,10 +2385,20 @@ def exit(client_id):
     if not client_id:
         # exit all
         for client_sbscr in subscriptions.values():
+            if client_sbscr.is_log_only():
+                # Topic and data are written to log (and not ptrocessed)
+                file_handle = client_sbscr.get_log_file_handle()
+                file_handle.close_file()
+
             client_sbscr.set_exit()
     else:
         if client_id in subscriptions:
-            subscriptions[client_id].set_exit()             # The object with the subscription info
+            client_sbscr = subscriptions[client_id]
+            if client_sbscr.is_log_only():
+                # Topic and data are written to log (and not ptrocessed)
+                file_handle = client_sbscr.get_log_file_handle()
+                file_handle.close_file()
+            client_sbscr.set_exit()             # The object with the subscription info
         else:
             ret_val = process_status.MQTT_wrong_client_id
     return ret_val
@@ -2091,3 +2414,224 @@ def is_subscription(client_id):
 def is_local_subscription(client_id):
     global subscriptions
     return subscriptions[client_id].is_local()
+
+# -----------------------------------------------------------------------
+# Dynamic message updates all info that satisfies the condition
+# -----------------------------------------------------------------------
+def process_dynamic_msg(status, client_sbscr, topic, value_obj, prep_dir, watch_dir, err_dir):
+
+    if isinstance(value_obj, dict):
+        dbms_name, table_name = client_sbscr.get_dbms_table(topic)
+        msg_data = utils_json.to_string(value_obj)
+        ret_val, hash_value = write_to_buffers(status, dbms_name, table_name, topic, msg_data, prep_dir, watch_dir, err_dir)
+    elif isinstance(value_obj, str):
+        # Update the values - a different thread will write the buffers
+        dbms_name, table_name = client_sbscr.get_dbms_table(topic)
+        value_data = utils_data.normalize_value(value_obj)
+
+        json_data = {
+            "timestamp" : utils_columns.get_current_utc_time(),
+            "value" : value_data,
+        }
+
+        msg_data = utils_json.to_string(json_data)
+
+        ret_val, hash_value = write_to_buffers(status, dbms_name, table_name, topic, msg_data, prep_dir, watch_dir, err_dir)
+
+    else:
+        status.add_error(f"Failed to identify client data in dynamic broker processing of topic {topic}")
+        ret_val = process_status.Failed_to_identify_app_data
+
+    return ret_val
+# -----------------------------------------------------------------------
+# Return the last segment of the topic as attribute name and the prefix as the namespace
+# -----------------------------------------------------------------------
+def get_namespace_attr_name(topic):
+
+    topic = topic.rstrip('/')
+
+    last = topic.rfind('/')
+    if last == -1:
+        return None, None
+
+    table_name = utils_data.reset_str_chars( topic[last + 1:] )
+
+    namespace = topic[:last]
+
+    return namespace, table_name
+
+
+# -----------------------------------------------------------------------
+# Write to buffers as f(dbms and table)
+# -----------------------------------------------------------------------
+def write_to_buffers(status, dbms_name, table_name, topic, msg_data, prep_dir, watch_dir, err_dir):
+    '''
+    user_msg - original message from the broker
+    msg_data - user message converted - the data to be written to the buffers
+    '''
+    hash_value = 0
+    if msg_data:
+        try:
+            ret_val, hash_value = streaming_data.add_data(status, "streaming", 1, prep_dir, watch_dir, err_dir,
+                                                          dbms_name, table_name, '0', '0', 'json', msg_data)
+        except:
+            utils_print.output_box(
+                "Failed to process message at mqtt_client call to streaming_data.add_data(): '%s' with topic: '%s'" % (msg_data, topic))
+            ret_val = process_status.MQTT_data_err
+    else:
+        status.add_error(f"Unrecognized data received from broker: {msg_data}")
+        ret_val = process_status.MQTT_data_err
+
+    return [ret_val, hash_value]
+
+# -----------------------------------------------------------------------
+# Return the streamer status
+# -----------------------------------------------------------------------
+def is_streamer_running():
+    return is_flush_uns_running_
+
+def exit_uns_server():
+    global exit_uns_flash_
+    exit_uns_flash_ = True
+# -----------------------------------------------------------------------
+# Return the streamer info
+# -----------------------------------------------------------------------
+def get_streamer_info(status):
+    global  is_flush_uns_running_
+    global flush_uns_counter_  # Counter writes
+    global flush_uns_frequency_  # Write frequency in seconds (default is 5)
+    global exit_uns_flash_      # Turns to On to signal exit
+
+    if is_flush_uns_running_:
+        reply = f"Write frequency is {flush_uns_frequency_} seconds, total writes ate {flush_uns_counter_:,}"
+    else:
+        reply = ""
+    return reply
+# -----------------------------------------------------------------------
+# Process flush UNS by a dedicated thread
+# -----------------------------------------------------------------------
+def flush_uns(watch_dir, err_dir, prep_dir, write_frequency):
+
+    global is_flush_uns_running_        # Status On - Off
+    global flush_uns_counter_           # Counter writes
+    global flush_uns_frequency_         # Write frequency in seconds (default is 5)
+    global exit_uns_flash_              # Turns to True to signal exit
+
+
+    is_flush_uns_running_ = True
+    exit_uns_flash_ = False             # Turn on from previous exit
+    flush_uns_counter_ = 0
+
+    if not write_frequency:
+        flush_uns_frequency_ = 5        # Set to default if not provided
+
+    status = process_status.ProcessStat()
+    ret_val = process_status.SUCCESS
+
+    while (1):
+
+        time.sleep(flush_uns_frequency_)
+
+        if exit_uns_flash_:
+            break
+
+        client_ids = list(subscriptions)
+
+        for client_id in client_ids:
+
+            client_sbscr = subscriptions[client_id]
+
+            topics_dict = list(client_sbscr.get_topics_dict())
+
+            for topic in topics_dict:
+                topic_info = client_sbscr.get_topic_info(topic)
+                lock = topic_info[TOPIC_MUTEX_]  # validate lock so it is not written while updated
+                if not lock:
+                    continue
+                with lock:
+                    json_data = topic_info[TOPIC_DICT_]
+                    if not len(json_data):
+                        continue        # No data to write
+
+                    dbms_name = topic_info[TOPIC_DBMS_]
+                    table_name = topic_info[TOPIC_TABLE_]
+                    msg_data = utils_json.to_string(json_data)
+
+                flush_uns_counter_ += 1
+                ret_val, hash_value = write_to_buffers(status, dbms_name, table_name, topic, msg_data, prep_dir, watch_dir, err_dir)
+
+                if ret_val:
+                    break
+
+            if ret_val:
+                break
+        if ret_val:
+            break
+
+    is_flush_uns_running_ = False       # Flag off
+
+    if ret_val:
+        color = "red"
+        msg_text = process_status.get_status_text(ret_val)
+    else:
+        color = "green"
+        msg_text = "OK"
+    utils_print.output_box("UNS Streamer Terminated with Status: " + msg_text, color)
+
+# ----------------------------------------------------------------
+# ----------------------------------------------------------------
+# A pool of threads to write client requests
+# Example: set msg client pool 6
+# ----------------------------------------------------------------
+def set_client_pool( status, io_buff_in, cmd_words, trace ):
+    global client_pool_
+
+    if is_client_pool():
+        return process_status.Process_already_running
+
+    workers_count = cmd_words[4]
+    if workers_count.isnumeric():
+        threads_counter = int(workers_count)
+        # Set a pool of workers threads
+        client_pool_ = utils_threads.WorkersPool("MsgClient", threads_counter)
+        ret_val = process_status.SUCCESS
+    else:
+        ret_val = process_status.ERR_command_struct
+    return ret_val
+
+# ----------------------------------------------------------------
+# Flag threads to exit from the pool
+# Command: exit msg client pool
+# ----------------------------------------------------------------
+def exit_client_pool():
+
+    global client_pool_ # WorkersPool
+
+
+    if client_pool_:
+        client_pool_.exit()
+        client_pool_.wait_for_all_threads_termination()
+        client_pool_ = None
+
+    return process_status.SUCCESS
+
+# ----------------------------------------------------------------
+# Return True if client operates with a pool of threads
+# ----------------------------------------------------------------
+def is_client_pool():
+    global client_pool_ # WorkersPool
+
+    return client_pool_ is not None
+
+# ------------------------------------------------------------------
+# Return info on the Workers Pool
+# ------------------------------------------------------------------
+def get_client_pool_info( status = None ):
+    global client_pool_
+
+    if client_pool_:
+        info_str = "Message Client Pool with: %u threads" %  client_pool_.get_number_of_threds()
+    else:
+        info_str = ""
+
+    return info_str

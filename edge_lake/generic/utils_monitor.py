@@ -24,6 +24,8 @@ else:
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_print as utils_print
 import edge_lake.generic.utils_data as utils_data
+import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.utils_io as utils_io
 import edge_lake.generic.params as params
 import edge_lake.generic.utils_columns as utils_columns
 import edge_lake.generic.streaming_data as streaming_data
@@ -321,6 +323,7 @@ def get_node_info(status, io_buff_in, cmd_words, trace):
 
 # ---------------------------------------------------------
 # Get memory info
+# Get memory info where format = json
 # ---------------------------------------------------------
 def get_memory_info(status, io_buff_in, cmd_words, trace):
 
@@ -373,8 +376,21 @@ def get_cpu_info(status, io_buff_in, cmd_words, trace):
     return  [ret_val, reply]
 # ---------------------------------------------------------
 # Get CPU usage
+# get cpu usage where format = json
 # ---------------------------------------------------------
 def get_cpu_usage(status, io_buff_in, cmd_words, trace):
+
+    offset = 2 if  cmd_words[1] == '=' else 0
+
+    words_count = len(cmd_words)
+    if words_count > (3 + offset):
+        if words_count != 7 or not utils_data.test_words(cmd_words, offset + 3, ["where", "format", "="]):
+            # needs to be "where format = json"
+            return [process_status.ERR_command_struct, None]
+
+        reply_format = "json" if cmd_words[offset + 6] == "json" else "table"
+    else:
+        reply_format = "table"
 
     try:
         cpu_info = psutil.cpu_percent(percpu=True).copy()
@@ -384,19 +400,32 @@ def get_cpu_usage(status, io_buff_in, cmd_words, trace):
         ret_val = process_status.ERR_process_failure
     else:
         cpu_per = 0
-        reply_title = []
-        for idx, usage in enumerate(cpu_info):
-            cpu_per += usage
-            reply_title.append(f"Core {idx+1}")
-        cpu_per = cpu_per / len(cpu_info)  # Average on all CPUs
-        cpu_per = round(cpu_per, 2)
+        if reply_format == "table":
+            reply_title = []
+            for idx, usage in enumerate(cpu_info):
+                cpu_per += usage
+                reply_title.append(f"Core {idx+1}")
+            cpu_per = cpu_per / len(cpu_info)  # Average on all CPUs
+            cpu_per = round(cpu_per, 2)
 
-        reply_title.append("Average")
-        cpu_info.append(cpu_per)
+            reply_title.append("Average")
+            cpu_info.append(cpu_per)
 
-        reply_list = [cpu_info]
+            reply_list = [cpu_info]
 
-        reply = utils_print.output_nested_lists(reply_list, "", reply_title, True)
+            reply = utils_print.output_nested_lists(reply_list, "", reply_title, True)
+        else:
+            # JSON
+            reply_dict = {}
+            for idx, usage in enumerate(cpu_info):
+                cpu_per += usage
+                reply_dict[f"Core {idx + 1}"] = cpu_info[idx]
+            cpu_per = cpu_per / len(cpu_info)  # Average on all CPUs
+            cpu_per = round(cpu_per, 2)
+            reply_dict[f"Average"] = cpu_per
+
+            reply = utils_json.to_string(reply_dict)
+
         ret_val = process_status.SUCCESS
 
     return  [ret_val, reply]
@@ -506,7 +535,7 @@ def get_ip_addresses(family):
 
 # ----------------------------------------------------------------
 # Get the CPU temperature
-# Command: get temperature
+# Command: get cpu temperature
 # ----------------------------------------------------------------
 def get_cpu_temperature(status, io_buff_in, cmd_words, trace):
 
@@ -813,4 +842,111 @@ def update_process_statistics(stat_dict, is_operator, is_running):
 
 
         stat_dict["Query timestamp"] = current_timestamp
+
+
+# ------------------------------------------------------------------------
+# Return Detailed info on the node -
+# get node info
+# get node info where format = json
+# ------------------------------------------------------------------------
+def node_resources(status, io_buff_in, words_array, trace):
+
+    offset = 2 if  words_array[1] == '=' else 0
+
+    words_count = len(words_array)
+
+    if words_count > (3 + offset):
+        if words_count != 7 or not utils_data.test_words(words_array, offset + 3, ["where", "format", "="]):
+            # needs to be "where format = json"
+            return [process_status.ERR_command_struct, None]
+
+        reply_format = "json" if words_array[offset + 6] == "json" else "table"
+    else:
+        reply_format = "table"
+
+
+    info_struct = {
+        "ip": params.get_value_if_available("!ip"),
+
+        "system": "Not Available",
+        "version": "Not Available",
+        "node": "Not Available",
+        "machine": "Not Available",
+        "Processor": "Not Available",
+
+        "physical_cores": "Not Available",
+        "logical_cores": "Not Available",
+
+        "memory_total": "Not Available",
+        "memory_available": "Not Available",
+        "memory_used": "Not Available",
+        "memory_free": "Not Available",
+
+        "disk_total": "Not Available",
+        "disk_used": "Not Available",
+        "disk_free": "Not Available",
+
+
+    }
+
+    disk_stat = utils_io.get_disk_stat(".")  # Local drive
+    if disk_stat:
+        if reply_format == "json":
+            info_struct["disk_total"] = disk_stat.total
+            info_struct["disk_used"] = disk_stat.used
+            info_struct["disk_free"] = disk_stat.free
+        else:
+            info_struct["disk_total"] = f"{int(disk_stat.total / 1024):>20,}MB"
+            info_struct["disk_used"] = f"{int(disk_stat.used / 1024):>20,}MB"
+            info_struct["disk_free"] = f"{int(disk_stat.free / 1024):>20,}MB"
+
+    try:
+        node_mem = psutil.virtual_memory()
+    except:
+        pass
+    else:
+        if reply_format == "json":
+            info_struct["memory_total"] = node_mem.total
+            info_struct["memory_available"] = node_mem.available
+            info_struct["memory_used"] = node_mem.used
+            info_struct["memory_free"] = disk_stat.free
+        else:
+            info_struct["memory_total"] = f"{int(node_mem.total / 1024):>20,}MB"
+            info_struct["memory_available"] = f"{int(node_mem.available / 1024):>20,}MB"
+            info_struct["memory_used"] = f"{int(node_mem.used / 1024):>20,}MB"
+            info_struct["memory_free"] = f"{int(node_mem.free / 1024):>20,}MB"
+
+    try:
+        physical_cores = psutil.cpu_count(logical=False)
+        logical_cores = psutil.cpu_count(logical=True)
+    except:
+        pass
+    else:
+        info_struct["physical_cores"] = physical_cores
+        info_struct["logical_cores"] = logical_cores
+
+    try:
+        platform_list = platform.uname()
+    except:
+        pass
+    else:
+        info_struct["system"] = platform_list.system
+        info_struct["version"] = platform_list.version
+        info_struct["node"] = platform_list.node
+        info_struct["machine"] = platform_list.machine
+        info_struct["processor"] = platform_list.processor
+
+
+
+    if reply_format == "json":
+        reply = utils_json.to_string(info_struct)
+    else:
+
+        info_table = []
+        info_table.extend([key, value] for key, value in info_struct.items())
+
+        reply = utils_print.output_nested_lists(info_table, "", ["Property", "Details"], True)
+
+    return [process_status.SUCCESS, reply, reply_format]
+
 

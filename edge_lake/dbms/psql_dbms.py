@@ -20,6 +20,7 @@ import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.interpreter as interpreter
 import edge_lake.generic.utils_sql as utils_sql
+import edge_lake.generic.utils_print as utils_print
 from edge_lake.dbms.database import sql_storage
 
 # Use regex to match 'old' with an optional trailing space, comma, or parenthesis
@@ -36,7 +37,6 @@ class PSQL(sql_storage):
         self.autocommit = True
         self.unlogged = False       # Can set to True to avoid logging
 
-        self.cvs_sql_file = True    # The SQL file can be in CVS format
         self.map_json_to_list = False    # Map the JSON data to a list of insert values. False returns a string
 
 
@@ -433,13 +433,13 @@ class PSQL(sql_storage):
             try:
 
                 insert_sections = sql_buffer.split("\n", 1)
-                column_list = insert_sections[0]
+                column_list = insert_sections[0].strip()
 
                 # Create a buffer with the full CSV content to stream into COPY
                 csv_buffer = io.StringIO(sql_buffer)
 
                 db_cursor[1].copy_expert(
-                    f"COPY {table_name} ({column_list}) FROM STDIN WITH (FORMAT csv, HEADER)",
+                    f"COPY {table_name} ({column_list}) FROM STDIN WITH (FORMAT csv, HEADER, NULL 'NULL')",
                     csv_buffer
                 )
 
@@ -526,7 +526,7 @@ class PSQL(sql_storage):
             csv_buffer = io.StringIO(file_data)
 
             db_cursor[1].copy_expert(
-                f"COPY {table_name} ({column_list}) FROM STDIN WITH (FORMAT csv, HEADER)",
+                f"COPY {table_name} ({column_list}) FROM STDIN WITH (FORMAT csv, HEADER, NULL 'NULL')",
                 csv_buffer
             )
 
@@ -679,8 +679,7 @@ class PSQL(sql_storage):
             status.add_error(error_msg)
             status.keep_error(error_msg)
 
-        reply_list =  [ret_val, output]
-        return reply_list
+        return ret_val, output
 
     # ==================================================================
     # Fetch results
@@ -743,8 +742,7 @@ class PSQL(sql_storage):
             ret_val = False
             list_data = None
 
-        reply_list = [ret_val, list_data]
-        return reply_list
+        return ret_val, list_data
 
     # ==================================================================
     # Given a database name, and table name
@@ -877,6 +875,13 @@ class PSQL(sql_storage):
 
         if ret_val:
             for index, entry in enumerate(column_list):
+
+                if not isinstance(entry, (list, tuple)) or len(entry) < 3:
+                    message = f"Unexpected column info entry from PSQL: {entry}"
+                    status.add_error(message)
+                    utils_print.output_box(message, "red")
+                    return False, []
+
                 # return a list: column_id, column_name, column_type, default_value, 0
                 default_value = entry[2]
                 if default_value and isinstance(default_value,str) and default_value.startswith("nextval("):
@@ -884,8 +889,8 @@ class PSQL(sql_storage):
 
                 column_info.append((index, entry[0], entry[1], None, default_value))
 
-        reply_list = [ret_val, column_info]
-        return reply_list
+
+        return ret_val, column_info
 
     # =======================================
     # Get table info
@@ -1111,13 +1116,15 @@ class PSQL(sql_storage):
     # =======================================
     # Map rows to insert statements
     # ======================================
-    def get_insert_rows(self, status: process_status, dbms_name: str, table_name: str, insert_size: int,
+    def get_insert_rows(self, status: process_status, is_write_immediate: bool, dbms_name: str, table_name: str, insert_size: int,
                         column_names: list, insert_rows: list):
 
-        if self.cvs_sql_file:
-            insert_data = get_inserts_as_cvs(table_name, column_names, insert_rows)
-        else:
+        if is_write_immediate:
+            # In PSQL - write immediate is using SQL format.
             insert_data = get_inserts_as_sql(table_name, insert_rows)
+        else:
+            # In PSQL - buffered data is using CSV format.
+            insert_data = get_inserts_as_csv(table_name, column_names, insert_rows)
 
         return insert_data
 
@@ -1202,7 +1209,7 @@ a list of data rows (with all fields, including auto-generated ones).
 
 '''
 # --------------------------------------------------------------------
-def get_inserts_as_cvs(table_name, column_names, insert_rows):
+def get_inserts_as_csv(table_name, column_names, insert_rows):
 
     # Skip the first column (auto-increment)
     headers = [col_attributes[1] for col_attributes in column_names[1:]]

@@ -20,9 +20,10 @@ import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_threads as utils_threads
 import edge_lake.generic.utils_print as utils_print
 import edge_lake.generic.params as params
+import edge_lake.generic.utils_data as utils_data
 
 from edge_lake.generic.utils_columns import seconds_to_date, get_current_utc_time
-from edge_lake.generic.utils_json import str_to_json
+from edge_lake.generic.utils_json import str_to_json, to_string
 
 CRLF = b"\r\n"
 END_CHUNK = b"0\r\n\r\n"
@@ -684,6 +685,67 @@ def write_str_to_file(status: process_status, data: str, fname: str):
     return ret_val
 
 # ==================================================================
+#
+# generic file write function. User specifies write options
+#
+# ==================================================================
+def write_to_file(status: process_status, data: str, fname: str, write_option: str):
+
+    file_name = get_path(fname)
+
+    if file_name:
+
+        try:
+            with open(file_name, write_option) as f:
+                f.write(data)
+        except:
+            errno, value = sys.exc_info()[:2]
+            message = "Failed to open and write a bytes file: '%s' with error %s: %s" % (file_name, str(errno), str(value))
+            process_log.add("Error", message)
+            ret_val = False
+        else:
+            ret_val = True
+    else:
+        status.add_error("File location '%s' is not recognized" % fname)
+        ret_val = False
+
+    return ret_val
+
+def write_json_list_to_file(status: process_status, rows: list, fname: str):
+    """
+    Write a list of JSON-serializable objects to a file as NDJSON:
+    each element becomes one line: <json>\n
+
+    Returns True on success, False on failure.
+    """
+    file_name = get_path(fname)
+    if not file_name:
+        status.add_error("File location '%s' is not recognized" % fname)
+        return False
+
+    if rows is None:
+        status.add_error("write_json_list_to_file() rows is None")
+        return False
+
+    try:
+        with open(file_name, 'w') as f:
+            for row in rows:
+                # Skip empty rows safely (optional)
+                if row is None:
+                    continue
+                f.write(json.dumps(row))
+                f.write("\n")
+    except Exception:
+        errno, value = sys.exc_info()[:2]
+        message = "Failed to open and write NDJSON file: '%s' with error %s: %s" % (
+            file_name, str(errno), str(value)
+        )
+        process_log.add("Error", message)
+        return False
+
+    return True
+
+# ==================================================================
 # Write nested lists to a file
 # ==================================================================
 def output_nested_lists(status: process_status, nested_lists: list, title: list, fname: str):
@@ -945,7 +1007,7 @@ def write_data_block(fname: str, is_new_file: bool, data_block):
         ret_val = True
 
     if not ret_val:
-        utils_print.output_box("Failed to write data block to file (open mode: %s): '%s'\nError: %s" % (open_mode, str(file_name), message))
+        utils_print.output_box("Failed to write data block to file (open mode: %s): '%s'\nError: %s\n\n Confirm destination directory '%s' exists" % (open_mode, str(file_name), message, os.path.dirname(str(file_name))))
         process_log.add("Error", "Error in write to file %s" % str(fname))
     return ret_val
 # ==================================================================
@@ -1426,7 +1488,7 @@ def test_stream_socket(io_stream):
 # =======================================================================================================================
 # Rename file
 # =======================================================================================================================
-def rename_file(status, src_name, dest_name):
+def rename_file(status, src_name, dest_name, overwrite = False):
 
     separator = params.get_path_separator()
     src = get_path(src_name)
@@ -1447,7 +1509,10 @@ def rename_file(status, src_name, dest_name):
 
     if src != dest:
         try:
-            os.rename(src, dest)
+            if overwrite:
+                os.replace(src, dest)       # If file exists - avoid Error and replace the existing file
+            else:
+                os.rename(src, dest)
         except OSError as e:
             status.add_error("Rename failed: %s" % str(e))
             ret_val = False
@@ -2521,13 +2586,21 @@ def get_archive_date(status, file_type, file_name):
 # ------------------------------------------
 # Return info on the get disk info command
 # Command: get disk [usage] d:
+# or: get disk [usage] d: where format = json
 # ------------------------------------------
 def get_disk_info(status, io_buff_in, words_array, trace):
 
-    if words_array[1] == '=':
-        offset = 2
-    else:
-        offset = 0
+    offset = 2 if  words_array[1] == '=' else 0
+
+    words_count = len(words_array)
+    reply_format = "table"
+    if words_count > (4 + offset):
+        if words_count != 8 or not utils_data.test_words(words_array, offset + 4, ["where", "format", "="]):
+            # needs to be "where format = json"
+            return [process_status.ERR_command_struct, None]
+
+        if words_array[7] == "json":
+            reply_format = "json"
 
     ret_val = process_status.SUCCESS
     path = params.get_value_if_available(words_array[3 + offset])
@@ -2535,12 +2608,21 @@ def get_disk_info(status, io_buff_in, words_array, trace):
     if disk_stat:
         info_type = words_array[2 + offset]
         if info_type == "usage":
-            if status.get_active_job_handle().is_rest_caller():
-                ip = params.get_value_if_available("!ip")
-                reply = "[{'node':'%s', 'total':'%s','used':'%s','free':'%s'}]" % (
-                ip, "{:,d}".format(disk_stat.total), "{:,d}".format(disk_stat.used), "{:,d}".format(disk_stat.free))
+            if reply_format == "json":
+                reply_struct = {
+                    "node" : params.get_value_if_available("!ip"),
+                    "total" : disk_stat.total,
+                    "used" : disk_stat.used,
+                    "free" : disk_stat.free,
+                }
+                reply = to_string(reply_struct)
             else:
-                reply = str(disk_stat)
+                if status.get_active_job_handle().is_rest_caller():
+                    ip = params.get_value_if_available("!ip")
+                    reply = "[{'node':'%s', 'total':'%s','used':'%s','free':'%s'}]" % (
+                    ip, "{:,d}".format(disk_stat.total), "{:,d}".format(disk_stat.used), "{:,d}".format(disk_stat.free))
+                else:
+                    reply = str(disk_stat)
         elif info_type == "free":
             reply = str(disk_stat.free)
         elif info_type == "total":
@@ -2561,8 +2643,7 @@ def get_disk_info(status, io_buff_in, words_array, trace):
         reply = ""
         ret_val = process_status.Wrong_path
 
-    reply_list = [ret_val, reply]
-    return reply_list
+    return [ret_val, reply]
 
 # ------------------------------------------
 # Get the list of objects (files or directories) from a directory
@@ -2697,12 +2778,13 @@ def _create_anylog_dirs(status, io_buff_in, cmd_words, trace):
         if not dir_name:
             message = "Missing file path declaration for '%s'" % directory
         else:
-            if test_dir_exists(status, dir_name, True):
+            if test_dir_exists(status, dir_name, False):
                 if not create_dir(status, dir_name):
                     message = "Failed to create directory for '%s' at '%s'" % (directory, dir_name)
 
         if message:
-            utils_print.output(message, True)
+            status.add_error(message)
+            utils_print.output_box(message, "red")
 
     return process_status.SUCCESS
 # =======================================================================================================================

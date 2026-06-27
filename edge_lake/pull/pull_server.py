@@ -174,19 +174,19 @@ def get_pull_info(status, io_buff_in, cmd_words, trace):
 
         one_process = [
             process_name,
-            process_info["type"],
-            process_info["source"],
-            process_info["log_type"],
-            process_info["event_type"],
-            process_info["frequency"],
-            process_info["continuous"],
-            process_info["topic"],
-            process_info["dbms"],
-            process_info["table"],
-            process_info["status"],
-            process_info["pull_count"],
-            process_info["event_count"],
-            process_info["error"],
+            process_info.get("type","Not Available"),
+            process_info.get("source","Not Available"),
+            process_info.get("log_type","Not Available"),
+            process_info.get("event_type","Not Available"),
+            process_info.get("frequency","Not Available"),
+            process_info.get("continuous","Not Available"),
+            process_info.get("topic","Not Available"),
+            process_info.get("dbms","Not Available"),
+            process_info.get("table","Not Available"),
+            process_info.get("status","Not Available"),
+            process_info.get("pull_count","Not Available"),
+            process_info.get("event_count","Not Available"),
+            process_info.get("error","Not Available"),
             ]
         start_time = process_info["start_time"]
         end_time = process_info["end_time"]

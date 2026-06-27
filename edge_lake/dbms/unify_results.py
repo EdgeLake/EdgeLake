@@ -15,7 +15,6 @@ import edge_lake.generic.utils_columns as utils_columns
 import edge_lake.generic.utils_data as utils_data
 import edge_lake.generic.utils_print as utils_print
 import edge_lake.generic.trace_func as trace_func
-import edge_lake.cmd.member_cmd as member_cmd
 # ==================================================================
 # Create a dbms table, on the publisher node, per each issued query.
 # The table name inclused the job number.
@@ -231,6 +230,8 @@ def count_sql(status, select_parsed, projection, function_id, remote_dbms, remot
 
 # ==================================================================
 # process average
+# Need to consider duplicate between avg and count and sum - over the same column:
+# run client () sql cos format = json:list and stat = false SELECT increments(minute, 10, timestamp), min(realpower),max(realpower),avg(realpower),count(realpower) FROM pp_pm WHERE timestamp >= '2025-12-05' AND timestamp < '2025-12-06'
 # ==================================================================
 def avg_sql(status, select_parsed, projection, function_id, remote_dbms, remote_table, function, description, details, as_name,
             new_type):
@@ -242,6 +243,8 @@ def avg_sql(status, select_parsed, projection, function_id, remote_dbms, remote_
         if column_type == "":
             return ["", ""]
 
+        select_parsed.register_avg(as_name if as_name else f"avg({column_name})")   # Append a list of average columns
+
         new_column_name = column_name.replace(".", "_")  # PI can have names with "."
         new_field_name = "SUM__" + new_column_name
 
@@ -249,7 +252,8 @@ def avg_sql(status, select_parsed, projection, function_id, remote_dbms, remote_
             # PI specific format
             remote_query = ("SUM" + "(cast(" + column_name + " as int32)), COUNT(cast(" + column_name + " as int32))")
         else:
-            remote_query = ("SUM" + "(" + column_name + "), COUNT(" + column_name + ")")
+            remote_query = f"SUM ({column_name}) as sum_{column_name}, COUNT({column_name}) as count_{column_name}"
+            # remote_query = ("SUM" + "(" + column_name + "), COUNT(" + column_name + ")")
 
         local_create = (new_field_name + " " + "numeric" + ", COUNT__" + new_column_name + " integer")
 
@@ -259,7 +263,7 @@ def avg_sql(status, select_parsed, projection, function_id, remote_dbms, remote_
             local_query = ("SUM(" + new_field_name + ") /NULLIF(SUM(COUNT__" + new_column_name + "),0)")
 
         if as_name != "":
-            remote_query += " as " + as_name
+            # No "as name" to remote query as it is provided regardless of the user as name (ignore remote_query += " as " + as_name)
             local_query += " as " + as_name
 
         projection.set_projection_info(column_name, new_field_name, remote_query, remote_query, local_create, local_query, 2, as_name)
@@ -945,7 +949,6 @@ def make_sql_stmt(status, select_parsed, is_suport_join):
         query_data_types = []
         query_columns = []
 
-
     j = 0
     for i in range(total_projections):
 
@@ -1238,7 +1241,7 @@ def make_sql_stmt(status, select_parsed, is_suport_join):
             remote_query += " group by %s" % group_by_no_extended
             generic_query += " group by %s" % group_by_no_extended
 
-        l_group_fields = remote_name_to_local_name(projection_list, group_by_columns, None)
+        l_group_fields = remote_name_to_local_name(projection_list, group_by_columns, extended_list)
 
         with_group_by = True
         pass_through = False
@@ -1289,10 +1292,25 @@ def make_sql_stmt(status, select_parsed, is_suport_join):
 
         if order_columns:
             remote_query += " order by %s %s" % (order_by_columns, ordering)
-            generic_query += " order by %s %s" % (order_by_columns, ordering)
+            apply_order_by = True
+            if select_parsed.is_with_avg():
+                # Average is calculated - ignore "order by" if using avg column
+                column_list = order_columns.split(',')
+                for element in column_list:
+                    if select_parsed.is_avg_column(element.strip()):
+                        apply_order_by = False
+                        break
+
+            if apply_order_by:
+                generic_query += " order by %s %s" % (order_by_columns, ordering)
 
         # Order by for local query
-        if l_sql_order_by == "":
+        if not apply_order_by:
+            # order by was removed from the generic query - but needs to be maintained on the local query
+            if not select_parsed.is_with_incr():
+                # Not increment query (as increment the order by was set)
+                local_query += " order by %s %s" % (order_by_columns, ordering)
+        elif l_sql_order_by == "":
             # order by not determined by functions
             order_fields = remote_name_to_local_name(projection_list, order_by_columns, extended_list)
             local_query += " order by %s %s" % (order_fields.replace(".", "_"), ordering)  # PI can bring names with "."
@@ -1301,8 +1319,6 @@ def make_sql_stmt(status, select_parsed, is_suport_join):
     else:
         if select_parsed.get_per_column():  # If not null, AnyLog calculates the limit - used with extended tables and associating the limit to each table
             pass_through = False
-
-
 
     limit = select_parsed.get_limit()
     if limit:
@@ -1360,9 +1376,10 @@ def remove_extended_columns(group_by_columns, extended_list):
     if not len(extended_list):
         reply_columns = group_by_columns
     else:
-        columns_list = group_by_columns.split()
+        columns_list = group_by_columns.split(',')
         reply_columns = ""
-        for column in columns_list:
+        for column_str in columns_list:
+            column = column_str.strip()
             if column in extended_list:
                 continue
             if reply_columns:
@@ -1512,12 +1529,12 @@ def  process_extended_columns(status, extended_columns):
             column_title = column_name
 
 
-        if column_title[0] == '@' or column_title[0] == '+':
+        if column_title and (column_title[0] == '@' or column_title[0] == '+'):
             query_title += (column_title[1:]  + ',')   # Predefined name like @IP @Table
         else:
             query_title += (column_title  + ',')
 
-        if column_name[0] == '@' or column_name[0] == "+":
+        if column_name and (column_name[0] == '@' or column_name[0] == "+"):
             query_columns.append(column_name[1:])  # Predefined name like @IP @Table
         else:
             status.add_error("Extend directive in SQL command: Wrong variable name prefix: %s" % column_title)

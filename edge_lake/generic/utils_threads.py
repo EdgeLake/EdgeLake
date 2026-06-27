@@ -122,7 +122,7 @@ class ReadWriteLock:
 class WorkersPool:
     """ Thread executing tasks from a given tasks queue """
 
-    def __init__(self, pool_name, threads_count, anylog_cmd = True):
+    def __init__(self, pool_name, threads_count, anylog_cmd = True, io_buff_size = 0):
 
         self.active_threads = True
         if not threads_count:
@@ -134,7 +134,7 @@ class WorkersPool:
         self.workers_counter = [0] * threads_count
         self.al_cmd = anylog_cmd        # If True - execute AnyLog command, else Thread executing the cmd
 
-        self.tasks_que = TasksQue(threads_count)  # declare a Que for instructions to the threads
+        self.tasks_que = TasksQue(threads_count, io_buff_size)  # declare a Que for instructions to the threads
 
         thread_name = pool_name.lower().replace(' ','_')
 
@@ -248,6 +248,17 @@ class WorkersPool:
             if self.workers_status[x] != -1:  # -1 is thread terminated
                 return False
         return True  # all at -1 status
+    # --------------------------------------------------------------------------------
+    # Return when all threads terminated up to 10 seconds
+    # --------------------------------------------------------------------------------
+    def wait_for_all_threads_termination(self):
+        counter = 0
+        while self.all_threads_terminated() == False:
+            time.sleep(1)  # wait for all threads to exit
+            counter += 1
+            if counter > 10:
+                return process_status.ERR_process_failure  # If some unknown error
+        return process_status.SUCCESS
 
     # --------------------------------------------------------------------------------
     # Get an empty task from the Que
@@ -303,7 +314,10 @@ class WorkersPool:
             info_str = utils_print.output_nested_lists(info_list, header, title_list, True)
 
         else:
-            info_str = f"{self.pool_name} Pool with {self.workers_count} threads:".ljust(60) + str(self.workers_status)
+            total_calls = 0
+            for thread_id in range(self.threads_count):
+                total_calls += self.workers_counter[thread_id]    # Number of calls
+            info_str = f"{self.pool_name} Pool with {self.workers_count} threads:".ljust(60) + str(self.workers_status) + f" ({total_calls:,})"
 
         return info_str
 
@@ -340,18 +354,19 @@ class WorkersPool:
 # take new tasks from the root and end to the leaf
 # --------------------------------------------------------------------------------
 class TasksQue:
-    def __init__(self, threads_count):
+    def __init__(self, threads_count, io_buff_size = 0):
 
         self.root = None
         self.leaf = None
         self.free_list = None
         self.threads_on_list = threads_count     # Number of threads on the free list
+        self.io_buff_size = io_buff_size  if io_buff_size else int(params.get_param("io_buff_size"))# Size of buffer for each thread
 
         self.event_new_task = threading.Condition()
         self.event_free_task = threading.Condition()
 
         for i in range(threads_count):
-            new_task = Task(i)
+            new_task = Task(i, self.io_buff_size)
             new_task.set_next(self.free_list)
             self.free_list = new_task
 
@@ -457,7 +472,7 @@ class TasksQue:
 # --------------------------------------------------------------------------------
 class Task:
 
-    def __init__(self, task_id):
+    def __init__(self, task_id, io_buff_siz):
         self.task_id = task_id
         self.next = None  # used in the task list and the free list
         self.previous = None  # used in the task list
@@ -465,9 +480,7 @@ class Task:
         self.args = None  # command arguments
 
         self.status = process_status.ProcessStat()
-
-        buff_size = int(params.get_param("io_buff_size"))
-        self.mem_view = memoryview(bytearray(buff_size))
+        self.mem_view = memoryview(bytearray(io_buff_siz))
 
     def get_task_id(self):
         return self.task_id

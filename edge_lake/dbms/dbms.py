@@ -5,7 +5,7 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 """
 
 from edge_lake.dbms.psql_dbms import PSQL
-from edge_lake.dbms.pi_dbms import PIDB
+# from edge_lake.dbms.pi_dbms import PIDB   # Currently not supported
 from edge_lake.dbms.sqlite_dbms import SQLITE
 from edge_lake.dbms.oledb_dbms import OLEDB
 from edge_lake.dbms.mongodb_dbms import MONGODB
@@ -104,14 +104,14 @@ def select_dbms(status: process_status, db_type: str, connect_str: str, port: in
         status.add_error("Invalid user info to connect ot database.")
         return None
 
-    return connect_dbms(status, dbn, db_type, user, passwd, host, port, in_ram, engine_string, None)
+    return connect_dbms(status, dbn, db_type, user, passwd, host, port, in_ram, engine_string, None, None)
 
 # ==================================================================
 #
 # Connect a logical database to a physical database
 #
 # ==================================================================
-def connect_dbms(status, dbms_name, db_type, user, passwd, host, port, in_ram, engine_string, conditions):
+def connect_dbms(status, dbms_name, db_type, user, passwd, host, port, in_ram, engine_string, conditions, bucket_info = None):
     # connect DBMS
     db_type_name = db_type.lower().strip()
     if db_type_name == "psql":
@@ -125,10 +125,7 @@ def connect_dbms(status, dbms_name, db_type, user, passwd, host, port, in_ram, e
     elif db_type_name.startswith("oledb."):
         dbms = OLEDB(engine_string, db_type_name)
     elif db_type_name == "bucket":
-        if not engine_string:
-            status.add_error("Missing bucket group name in connection string")
-            return None
-        dbms = BUCKET(engine_string)
+        dbms = BUCKET(bucket_info)
     else:
         if db_type_name == "oledb":
             status.add_error("Database type '%s' requires an extension, for example oledb.pi" % db_type)

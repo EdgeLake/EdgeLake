@@ -6,14 +6,12 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import datetime
 import decimal
-import json
-import os
-import sys
-import re
 
+import requests
 
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_json as utils_json
+import edge_lake.generic.params as params
 
 # ==================================================================
 # Based on the query type, execute and get results
@@ -105,3 +103,44 @@ def execute_sql_stmt(status: process_status, active_dbms, dbms_id: str, query_ty
     ret_val = active_dbms.execute_sql_stmt(status, query)
 
     return ret_val
+
+
+# =======================================================================================================================
+#  Execute sql query against network.
+# =======================================================================================================================
+def execute_network_sql(status, sql_cmd: str):
+    """
+    sql_cmmd: the sql query to execute against the network
+    """
+
+    # get anylog rest port
+    rest_port = params.get_param("anylog_rest_port")
+    # determine ip; check if node is operating on overlay ip first
+    ip = params.get_param("overlay_ip")
+    if not ip:
+        ip = params.get_param("ip")
+
+    # generate http request headers
+    headers = {
+        'command': f'{sql_cmd}',
+        'destination': 'network',
+        'User-Agent': 'AnyLog/1.23'
+    }
+    # prepare connection
+    conn = f"http://{ip}:{rest_port}"
+    try:
+        r = requests.get(conn, headers=headers) # send request
+    except Exception as e:
+        status.add_error('Failed to execute GET against %s (Error: %s)' % (conn, e))
+        output = None
+    else:
+        if r.status_code != 200:
+            status.add_error('Failed to execute GET against %s due to network error: %s' % (conn, r.status_code))
+            output = None
+        else:
+            try:
+                output = r.json() # returned sql result
+            except:
+                output = r.text
+    return output
+

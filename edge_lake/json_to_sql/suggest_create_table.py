@@ -51,8 +51,30 @@ def get_column_types(status: process_status, data: list):
     columns = {}
     # Go over all the rows and determine column name and column type
     if isinstance(data, list) is True or isinstance(data, tuple) is True:
+        entry_id = -1
         for index, line in enumerate(data):  # Go over all entries in the file
+            if entry_id != -1:
+                # Multiple lines were processed (each JSON entry spans multiple lines
+                if index <= entry_id:
+                    continue    # This entry was considered in find_parentheses_offset_in_list
+                entry_id = -1   # Flag to scan next entry
+
             jdata = utils_io.format_reading(status, line)  # make each entry a dictionary where columns names ate the keys
+            if jdata == None:
+                # Try to see if the JSON is split over multiple lines. For example:
+                '''
+                Line #
+                00 = {str} '{'
+                01 = {str} '"timestamp": "2026-01-27T23:08:41.217357Z",'
+                02 = {str} '"value": 0.7734120585621161,'
+                03 = {str} '"svalue": true'
+                04 = {str} '}'
+                '''
+                entry_id, counter_left, counter_right = utils_data.find_parentheses_offset_in_list(data, index, '{', '}')
+                if counter_left != 0 and counter_left == counter_right:
+                    json_string = ' '.join(data[index:entry_id+1])
+                    jdata = utils_io.format_reading(status, json_string)  # make each entry a dictionary where columns names ate the keys
+
             if jdata == None:
                 status.add_error("Json data in line #%u is not formatted correctly" % index)
                 return None  # failed to create a JSON
@@ -176,7 +198,8 @@ def get_column_type_by_value(column_name, value):
             data_type = 'TIME NOT NULL DEFAULT NOW()'
         elif utils_data.check_ip_address(value) is True:
             data_type = "CIDR"
-        elif "time" in column_name and value.isdigit() and utils_data.is_valid_timestamp(value):
+        elif "time" in column_name and value.isdigit() and utils_data.is_timestamp_at_least_2000(value):
+            # Taking a guess between int and timestamp - if value represents a date later than 2000
             data_type = 'TIMESTAMP NOT NULL DEFAULT NOW()'
         else:
             data_len = len(value)
@@ -282,7 +305,6 @@ def suggest_create_table(status: process_status, file_name: str, dbms_name:str, 
 
     if utils_json.is_consider_policy_schema(instructions): # star means - use the data
         # use the Schema for the create stmt
-        schema = instructions["mapping"]["schema"]
         if "table" in instructions.keys():
             tb = instructions["table"]  # get table name from instruction
         else:
@@ -298,7 +320,7 @@ def suggest_create_table(status: process_status, file_name: str, dbms_name:str, 
         create_stmt = create_table_sql(tb, columns, with_tsd_info)
 
     else:
-        # Use the data to generate the create stmt
+        # Use the data to generate the SQL create stmt
 
         data = utils_io.read_all_lines_in_file(status, file_name)
         if data == None:
@@ -344,6 +366,9 @@ def policy_to_columns_list(status, dbms_name, table_name, instruct, columns):
     columns.append((None, "tsd_id", "int", 0))  # The ID of the JSON file descriptor in the TSD table
 
     for column_name, column_val in schema.items():
+
+        if column_name.startswith("__") and column_name.endswith("__"):
+            continue        # Dummy column  - Ignore this column. It is used in mapping policies with scripts - i.e. "_-start__" as a column name
 
         if isinstance(column_val, dict):
             column_list = [column_val]  # Make a list with one attribute

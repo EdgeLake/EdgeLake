@@ -23,7 +23,7 @@ from edge_lake.generic.streaming_data import add_data
 from edge_lake.generic.params import get_param
 
 
-
+quote_to_backtick_ = str.maketrans({"'": "`", '"': "`"})
 
 # The MQTT protocol: https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901041
 
@@ -193,9 +193,11 @@ class MQTT_MESSAGES(SESSION):
 
                 if ret_val == process_status.Unrecognized_mqtt_topic:
                     details = self.topic_name
+                    count_event("MQTT", self.peer_ip, "PUBLISH", ret_val, details)
+                    ret_val = process_status.SUCCESS        # This message is unsubscribed, but move to the next message
                 else:
                     details = ""
-                count_event("MQTT", self.peer_ip, "PUBLISH", ret_val, details)
+
 
             elif self.msg_type == 6:
                 # A PUBREL Packet is the response to a PUBREC Packet. It is the third packet of the QoS 2 protocol exchange.
@@ -244,7 +246,7 @@ class MQTT_MESSAGES(SESSION):
     def process_fixed_header(self, mem_view, remaining_length):
 
         self.msg_type = mem_view[0] >> 4  # 1st 4 bits - MQTT Control Packet types
-        self.msg_flags = mem_view[0] & 7  # low 4 bits -  Flags specific to each MQTT Control Packet types
+        self.msg_flags = mem_view[0] & 0xf  # low 4 bits -  Flags specific to each MQTT Control Packet types
 
         message_size, bytes_used = msg_get_var_int(mem_view, 1) # (section 3.1.1) length of the Variable Header plus the length of the Payload
         self.fixed_hdr_len = 1 + bytes_used
@@ -821,10 +823,14 @@ class GENERIC_MSG(SESSION):
                     formatted_val = format_syslog_date(attr_val)
                     if not formatted_val:
                         self.statistics[2] += 1  # Number of errors
-                        self.statistics[3] = f"Failed to format column '{attr_name}'"
+                        self.statistics[3] = f"Failed to format Syslog Timestamp column '{attr_name}'"
                         continue
                 else:
-                    formatted_val = attr_val
+                    if attr_id == last_id:
+                        # This is the "message" attribute --> replace all single (') and double (") quotes with backticks (```)
+                        formatted_val = attr_val.translate(quote_to_backtick_)
+                    else:
+                        formatted_val = attr_val
 
                 if formatted_val:
                     if len(json_msg) == 1:
@@ -912,10 +918,12 @@ sessions_types = {
 def message_broker( host: str, port: int, is_bind:bool, workers_count, trace ):
     global workers_pool_
 
-    # Set a pool of workers threads
-    workers_pool_ = utils_threads.WorkersPool("Message", workers_count)
+    io_buff_size = int(get_param("io_buff_size"))
 
-    net_utils.message_server("Message Broker", "broker", host, port, 2048, workers_pool_, rceive_data, is_bind, trace)
+    # Set a pool of workers threads
+    workers_pool_ = utils_threads.WorkersPool("Message", workers_count, True, io_buff_size)
+
+    net_utils.message_server("Message Broker", "broker", host, port, io_buff_size, workers_pool_, rceive_data, is_bind, trace)
 
     net_utils.remove_connection(2)
 
@@ -1027,11 +1035,13 @@ def is_mqtt(mem_view):
     ret_val = False
     protocol_name_length = msg_get_int(mem_view, 2, 2)
     if protocol_name_length < 20:
-        protocol_name = msg_get_bytes(mem_view, 4, protocol_name_length).lower()
-        if protocol_name and (protocol_name == "mqtt" or protocol_name == "mqisdp"):
-            # In MQTT 3.1 the protocol name is "MQISDP". In MQTT 3.1.1 the protocol name is represented as "MQTT".
-            # https://www.oasis-open.org/committees/download.php/55095/mqtt-diffs-v1.0-wd01.doc
-            ret_val = True
+        protocol_name = msg_get_bytes(mem_view, 4, protocol_name_length)
+        if protocol_name:
+            protocol_name = protocol_name.lower()
+            if (protocol_name == "mqtt" or protocol_name == "mqisdp"):
+                # In MQTT 3.1 the protocol name is "MQISDP". In MQTT 3.1.1 the protocol name is represented as "MQTT".
+                # https://www.oasis-open.org/committees/download.php/55095/mqtt-diffs-v1.0-wd01.doc
+                ret_val = True
 
     return ret_val
 
@@ -1100,7 +1110,7 @@ def msg_get_bytes(msg_buff, offset, length):
     except:
         errno, value = sys.exc_info()[:2]
 
-        err_msg = "Failed to decode message withe error: %s : %s".format(str(errno), str(value))
+        err_msg = f"Failed to decode bytes in a message with error: {errno} : {value}"
 
         process_log.add("Error", err_msg)
 
@@ -1117,7 +1127,7 @@ def msg_get_int(msg_buff, offset, length):
     except:
         errno, value = sys.exc_info()[:2]
 
-        err_msg = "Failed to decode message withe error: %s : %s".format(str(errno), str(value))
+        err_msg = f"Failed to decode int value in a message with error: {errno} : {value}"
 
         process_log.add("Error", err_msg)
 
@@ -1420,21 +1430,19 @@ def rceive_data(status, mem_view, params, clientSoc, ip_in, port_in, thread_buff
                 except:
                     remote_ip = "Not Recognized"
                     remote_port = 0
-                msg_data = msg_get_bytes(mem_view, 0, 100)
+                msg_data = ''.join(chr(b) if 32 <= b < 127 else f'{b:02x}' for b in mem_view[:100])
                 if msg_data:
                     data_prefix = " ..."       # A flag to indicate if all data is printed
                     msg_data = msg_data.replace("\n","\\n").replace("\r", "\\r")    # Remove \n\r from the 100 bytes
                 else:
                     msg_data = ""   # Replace None
                     data_prefix = ""
-                utils_print.output(f"[Message Broker Received {length} Bytes] [Source: {remote_ip}:{remote_port}] [Data: {msg_data}{data_prefix}]", True)
+                thread_name = utils_threads.get_thread_name()
+                utils_print.output(f"[{thread_name}] [Message Broker Received {length} Bytes] [Source: {remote_ip}:{remote_port}] [Data: {msg_data}{data_prefix}]", True)
 
             if not length:
                 ret_val = process_status.SUCCESS
                 break
-
-            #if len == 2048:
-                #continue
 
             if not net_utils.is_active_connection(2) or process_status.is_exit("broker", False):
                 # is_active_connection is tested as "exit broker" may have reset the exit flag
@@ -1490,7 +1498,10 @@ def rceive_data(status, mem_view, params, clientSoc, ip_in, port_in, thread_buff
 
         if err_msg:
             err_msg = f" [Err: {err_msg}]"
-        utils_print.output_box(f"Message Broker thread exists [Protocol: {protocol_name}] [Source: {remote_ip}:{remote_port}]{err_msg}")
+            color = "red"
+        else:
+            color = "green"
+        utils_print.output_box(f"Message Broker thread exists [Protocol: {protocol_name}] [Source: {remote_ip}:{remote_port}]{err_msg}", color)
 
     return ret_val
 

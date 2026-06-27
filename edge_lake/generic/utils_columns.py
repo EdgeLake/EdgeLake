@@ -9,6 +9,7 @@ import time
 import pytz
 import operator
 import re
+import zoneinfo
 
 from datetime import date, datetime, timedelta, timezone
 from dateutil import parser, tz
@@ -102,6 +103,12 @@ tz_list["mt"] =  get_timezone_object("America/Denver")        # mountain time
 tz_list["ct"] =  get_timezone_object("America/Chicago")        # central time
 tz_list["et"] =  get_timezone_object("America/New_York")        # eastern time
 
+tz_name = {
+    "pt" : "America/Los_Angeles",
+    "mt" : "America/Denver",
+    "ct" : "America/Chicago",
+    "et" : "America/New_York",
+}
 
 utc_diff = 0
 
@@ -397,7 +404,7 @@ def get_current_time(format_string=TIME_FORMAT_STR):
 # default date format  \'2019-07-29 19:34:00.123\'
 # =======================================================================================================================
 def get_current_utc_time(format_string = UTC_TIME_FORMAT_STR):
-    return datetime.utcnow().strftime(format_string)
+    return datetime.now(timezone.utc).strftime(format_string)
 
 # =======================================================================================================================
 # Get current UTC time from the number of seconds since January 1, 1970
@@ -1840,12 +1847,29 @@ def cast_with_format(status, row, casting_str, value):
         casted_value = None
     return casted_value
 
+
+# =======================================================================================================================
+# cast by replace
+# =======================================================================================================================
+def cast_by_replace(status, row, casting_str, value):
+
+    casted_value = value
+    if casting_str.startswith("replace(") and casting_str[-1] == ')':
+        replace_info = casting_str[8:-1]
+        left, sep, right = replace_info.partition(' by ')
+        if left and sep and right:
+            left, sep, right = left.strip(), sep.strip(), right.strip() # Remove spaces
+            if left and sep and right:
+                casted_value = str(value).replace(left, right, 1)
+
+    return casted_value
+
 # =======================================================================================================================
 # cast by function
 # =======================================================================================================================
 def cast_by_function(status, row, casting_str, value):
 
-    if casting_str[:9] == "function(" and casting_str[-1] == ')':
+    if casting_str.startswith("function(") and casting_str[-1] == ')':
         try:
             str_function = casting_str[9:-1]
 
@@ -1889,31 +1913,50 @@ def ret_time_diff(status, row, casting_str, value):
 
     return time_diff
 # =======================================================================================================================
+# Change timezone
+# =======================================================================================================================
+def cast_to_timezone(status, row, casting_str, value):
+
+    try:
+
+        target_tz = casting_str[9:-1].strip()
+        if target_tz[0] == "'" and target_tz[-1] == "'":
+            target_tz = target_tz[1:-1]
+
+        dt_utc = datetime.fromisoformat(value[:26])
+
+        # Ensure tzinfo=UTC
+        if dt_utc.tzinfo is None:
+            dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+        # Convert to target timezone
+        if target_tz == "local":
+            dt_target = dt_utc.astimezone()  # system local timezone
+        else:
+            time_zone = tz_name[target_tz] if target_tz in tz_name.keys() else target_tz    # Allow PT, MT, CT, ET
+            dt_target = dt_utc.astimezone(zoneinfo.ZoneInfo(time_zone))
+
+        # Return formatted string
+        casted_value =  dt_target.strftime("%Y-%m-%d %H:%M:%S")
+    except:
+        errno, err_msg = sys.exc_info()[:2]
+        status.add_error(f"Casting: timezone 'target_tz' failed to apply on '{value[:26]}' with error: {err_msg})")
+        casted_value = None
+
+    return casted_value
+# =======================================================================================================================
 # cast to date_time
 # Return second or minute or hour or day or month or year
 # =======================================================================================================================
 def cast_to_date_time(status, row, casting_str, value):
 
     try:
-        # Step 1: Parse the datetime string
-        dt = datetime.strptime(value[:26], '%Y-%m-%d %H:%M:%S.%f')  # the microseconds can be with an extra char which leads to an error
+        info_type = casting_str[9:-1]
+        if len(info_type) > 2 and info_type[0] == "'" and info_type[-1] == "'":
+            info_type = info_type[1:-1]  # The quotations were used to maintain capital letters -
+        casted_value = datetime.fromisoformat(value[:26]).strftime(info_type)
     except:
-        status.add_error(f"Casting failed to apply: datetime.strptime({value}, '%Y-%m-%d %H:%M:%S.%f') ")
+        status.add_error(f"Casting failed to apply: datetime.strptime({value[:26]})")
         casted_value = None
-    else:
-       if casting_str[:9] != "datetime(" or  casting_str[-1] != ')':
-           casted_value = None
-           status.add_error(f"Casting of datetime is not well defined: {casting_str}")
-       else:
-            info_type = casting_str[9:-1]
-            if len(info_type) > 2 and info_type[0] == "'" and info_type[-1] == "'":
-                info_type = info_type[1:-1]     # The quotations were used to maintain capital letters -
-
-            try:
-                casted_value =  dt.strftime(info_type)      # for example info_type = %m-%Y' will return month and year
-            except:
-                casted_value = None
-                status.add_error(f"Casting failed in extracting value using the string: {info_type}")
 
     return casted_value
 
@@ -1924,11 +1967,13 @@ casting_methods_ = {
     'lj' : cast_to_just,
     'rj' : cast_to_just,
     'fo' : cast_with_format,
-    'da' : cast_to_date_time,
+    'da' : cast_to_date_time,       # datetime
+    'zo' : cast_to_timezone,       # return timezone - searched by "zo"
     'fu' : cast_by_function,
     'ls' : cast_lstrip,
     'rs' : cast_rstrip,
-    'ti' : ret_time_diff,   # return time diff
+    'di' : ret_time_diff,   # return time diff  timediff is searched by "di"
+    're' : cast_by_replace,
 }
 # =======================================================================================================================
 # Apply casting on a column
@@ -1949,6 +1994,7 @@ def cast_column(status, row, col_castings, column_val):
            break
 
         method_index = casting_str[0:2]
+        method_index = method_index if method_index != "ti" else casting_str[4:6]     # skkip over time: timediff --> "di" , "timezone" --> "zo"
         if method_index in casting_methods_:
             casted_value = casting_methods_[method_index](status, row, casting_str, casted_value)
             if casted_value == None:

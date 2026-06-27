@@ -9,7 +9,8 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 # sys.path.insert(0, generic_dir)
 
 import time
-
+import os
+import sys
 import edge_lake.dbms.cursor_info as cursor_info
 import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.process_status as process_status
@@ -26,8 +27,7 @@ from edge_lake.dbms.sqlite_dbms import get_dbms_connect_info
 from edge_lake.generic.utils_data import get_string_hash, get_formatted_hms
 from edge_lake.dbms.dbms import connect_dbms, is_blobs_dbms
 from edge_lake.generic.stats import operator_update_inserts
-
-
+from edge_lake.dbms.execute_query import execute_network_sql
 
 active_dbms = {}  # DBMS info as f(dbms name)
 active_tables = {}  # Table info as f(dbms name+table)
@@ -113,7 +113,7 @@ def set_insert_threshold(value):
 # =======================================
 # Create new database
 # ======================================
-def create_dbms(db_name, dbms, db_type, connection_pool, user, password, host, port):
+def create_dbms(db_name, dbms, db_type, connection_pool, user, password, host, port, bucket_info=None):
     '''
     db_name - the logical dbms name
     dbms - the DBMS object
@@ -125,7 +125,7 @@ def create_dbms(db_name, dbms, db_type, connection_pool, user, password, host, p
         owner = "system"
     else:
         owner = "user"
-    active_dbms[db_name] = {'connection': dbms, 'db type': db_type, 'pool' : connection_pool, 'owner': owner, 'user' : user, 'password' : password, 'host' : host, 'port' : port}
+    active_dbms[db_name] = {'connection': dbms, 'db type': db_type, 'pool' : connection_pool, 'owner': owner, 'user' : user, 'password' : password, 'host' : host, 'port' : port, 'bucket_info' : bucket_info}
 # =======================================
 # Get DBMS connection
 # ======================================
@@ -233,7 +233,7 @@ def insert_rows(status, dbms_name, table_name, list_inserts):
     # commit or if error than rollback
     if ret_val:
         db_connect.commit(status, db_cursor)
-        dbms_process_time = - time.time() - dbms_start_time
+        dbms_process_time = time.time() - dbms_start_time
         operator_update_inserts(dbms_name, table_name, len(list_inserts), True, dbms_process_time)  # Update stat on inserts
     else:
         db_connect.rollback(status, db_cursor)
@@ -636,14 +636,14 @@ def close_cursor(status: process_status, dbms_cursor: cursor_info):
 # =======================================
 # Call the database to map rows to insert statements
 # ======================================
-def get_insert_rows(status: process_status, dbms_name: str, table_name: str, insert_size: int, column_names: list,
+def get_insert_rows(status: process_status, is_write_immediate: bool, dbms_name: str, table_name: str, insert_size: int, column_names: list,
                     insert_rows: list):
 
     db_connect = get_connection(dbms_name)
     if db_connect == None:
         data_string = ""
     else:
-        data_string = db_connect.get_insert_rows(status, dbms_name, table_name, insert_size, column_names, insert_rows)
+        data_string = db_connect.get_insert_rows(status, is_write_immediate, dbms_name, table_name, insert_size, column_names, insert_rows)
 
     return data_string
 
@@ -847,6 +847,37 @@ def get_partitions_list(status, dbms_name: str, table_name: str):
 
     return [ret_val, par_list]
 
+
+# =======================================
+# Get tables in a database
+# Given a database name, retrieve the list of tables in the database
+# ======================================
+def get_blobs_database_tables(status, dbms_name: str):
+    '''
+    Return the list of tables in a string format
+    '''
+
+    d_name = dbms_name.lower()
+    db_connect = get_connection(d_name)
+
+    if not db_connect:
+        status.add_keep_error("DBMS '%s' not connected" % dbms_name)
+        table_list = []
+    else:
+        table_list = get_database_tables(status, d_name)
+
+        if with_connection_pool(dbms_name):
+            free_db_connection(dbms_name, db_connect)  # Place the connection on the free list
+
+    # if table_list is empty from db_connection, pull tables from policies
+    if not table_list:
+        dbms_tables = get_database_tables_list(status, dbms_name) # get list of tables
+        if dbms_tables:
+            table_list = [v.get("table_name") for v in dbms_tables]
+        else:
+            table_list = []
+    return table_list
+
 # =======================================
 # Get tables in a database
 # Given a database name, retrieve the list of tables in the database
@@ -870,6 +901,7 @@ def get_database_tables(status, dbms_name: str):
 
 
     return data_string
+
 # =======================================
 # Get tables in a database
 # Given a database name, retrieve the list of tables in the database
@@ -1480,16 +1512,16 @@ def format_db_err_messages(err_msg: str, format_type: str):
 # ==================================================================
 def drop_dbms(status, dbms_type, dbms_name, user, password, host, port):
     ret_val = process_status.Drop_DBMS_failed
-    if is_dbms(dbms_name):
+    if is_dbms(dbms_name) and not dbms_type == "bucket":
         status.add_error("DBMS is active - 'drop dbms' failed - call 'disconnect dbms %s' before the drop" % dbms_name)
     else:
         if dbms_type == 'psql':
             # Use the database 'postgres' to connect to psql
             if not is_dbms("postgres"):
                 # Create the database
-                postgres_dbms = connect_dbms(status, "postgres", "psql", user, password, host, port, False, "", None)
+                postgres_dbms = connect_dbms(status, "postgres", "psql", user, password, host, port, False, "", None, None)
                 if postgres_dbms:
-                    create_dbms(postgres_dbms.get_dbms_name(), postgres_dbms, dbms_type, postgres_dbms.with_connection_pool(), user, password, host, port)
+                    create_dbms(postgres_dbms.get_dbms_name(), postgres_dbms, dbms_type, postgres_dbms.with_connection_pool(), user, password, host, port, None)
             if not test_db_type("postgres", "psql"):
                 status.add_error("'postgres' DBMS is not declared for PSQL")
             else:
@@ -1513,6 +1545,32 @@ def drop_dbms(status, dbms_type, dbms_name, user, password, host, port):
                         ret_val = process_status.SUCCESS
             else:
                 status.add_error("Failed to drop the MongoDB DBMS: %s" % dbms_name)
+        elif dbms_type == "bucket":
+            db_connect = get_connection(dbms_name)
+            if db_connect:
+                # delete bucket and contents
+                # query file list for files inserted by target replica
+                ret_val = process_status.SUCCESS
+                table_list = get_database_tables(status, dbms_name)
+
+                if not ret_val:
+                    # iterate over all logical tables
+                    # continue deleting files even if remove_file fails as each file must be individually deleted such that a row in the DBMS records the deletion
+                    # iterative file deletion is necessary so that we can run SQL queries on file metadata and ensure the file exists or not
+                    for table_name in table_list:
+                        table = table_name
+                        if not table:
+                            ret_val = process_status.Failed_bucket_drop
+                        if not ret_val:
+                            file_list = db_connect.get_file_list(status, dbms_name, table, "", "", None, 0)
+                            for file in file_list:
+                                id_str = file.get('file')
+                                ret_val = remove_file(status, dbms_name, table, id_str, None, None)
+                    ret_val = db_connect.drop_database(status, dbms_name)
+                if ret_val:
+                    status.add_error("Failed to drop the %s DBMS: %s" % (db_connect.engine_name, dbms_name))
+            else:
+                status.add_error("Failed to drop the %s DBMS: %s" % (db_connect.engine_name, dbms_name))
         else:
             ret_val = process_status.Wrong_dbms_type
 
@@ -2274,37 +2332,222 @@ def store_file(status:process_status,  db_name: str, table_name: str, file_path:
             free_db_connection(dbms_name, db_connect)  # Place the connection on the free list
 
     return ret_val
+
 # =======================================
 # Remove Blob Data from a database
 # ======================================
-def remove_file(status: process_status, db_name: str, table_name:str, id_str:str, hash_value, archive_date:str):
-    '''
-    status - AnyLog Status object
-    dbms_name - the database assigned to the file
-    id_str - the file ID
-    table_name - if id_str is not provided
-    archive_date - if id_str is not provided
-    '''
+def remove_file(
+    status: process_status,
+    db_name: str,
+    table_name: str,
+    id_str: str,
+    hash_value: str,
+    archive_date: str,
+    delete_rows: list = None
+):
+    """
+    When deleting multiple files:
+      - keep going even if one delete fails
+      - collect ONLY successful delete rows
+      - write ONE JSON at the end (top-level call only)
+    """
 
-    dbms_name = get_blobs_dbms_name(db_name)    # Can add the blobs_ prefix
+    # Track whether we are the top-level call (only top-level writes the JSON file)
+    top_level = False
+    if delete_rows is None:
+        delete_rows = []
+        top_level = True
+
+    destination_path = ""
+    tmp_dest_dir = None
+    db_filter = None
+    file_meta = None
+
+    dbms_name = get_blobs_dbms_name(db_name)  # Can add the blobs_ prefix
+    db_name_short = dbms_name[6:] if dbms_name.startswith("blobs_") else dbms_name
 
     db_connect = get_connection(dbms_name)
+    ret_val = process_status.SUCCESS
 
-    if db_connect == None:
+    # Used for multi-delete: we continue even if some fail
+    any_failed = False
+
+    if not db_connect:
         status.add_keep_error("DBMS '%s' not connected" % dbms_name)
         ret_val = process_status.ERR_dbms_not_opened
     else:
-
+        # ------------------------------------------------------------
+        # SINGLE FILE DELETE PATH (id_str or hash_value provided)
+        # ------------------------------------------------------------
         if id_str or hash_value:
-            ret_val = db_connect.remove_file(status, dbms_name, table_name, id_str, hash_value)
+
+            # If akave/mongo: enforce "only the node that inserted can delete"
+            if db_connect.engine_name == "akave" or db_connect.engine_name == "mongo":
+                node_name = params.get_param("node_name")
+                if not node_name:
+                    status.add_error("`node_name` is not defined as local variable")
+                    ret_val = process_status.Failed_to_delete_file
+                else:
+                    try:
+                        res = get_files_list(
+                            status, dbms_name, table_name, id_str, hash_value, archive_date, 0, False
+                        )
+                        file_info = res[1]
+
+                        if not file_info or file_info == ['']:
+                            ret_val = process_status.No_file_in_storage
+                        else:
+                            file_meta = file_info[0]
+                            if not file_meta:
+                                ret_val = process_status.Failed_to_delete_file
+                            elif file_meta.get("node_name") != node_name:
+                                ret_val = process_status.File_Operation_Not_Authorized
+                            else:
+                                # Authorized — download file before deleting
+                                file_name = f"{table_name}.{id_str}"
+                                db_filter = {"_id": file_name}
+                                tmp_dest_dir = params.get_param("tmp_dir")
+                                destination_path = os.path.join(tmp_dest_dir, db_filter["_id"])
+
+                                ret_val = db_connect.retrieve_files(
+                                    status, dbms_name, db_filter, 0, "file", destination_path
+                                )
+                    except Exception as e:
+                        status.add_error(f"Failed to prepare delete for '{id_str}': {e}")
+                        ret_val = process_status.Failed_to_delete_file
+
+            # If the pre-delete steps failed, do nothing further
+            if not ret_val:
+                # Attempt to delete from bucket/storage
+                ret_val = db_connect.remove_file(status, dbms_name, table_name, id_str, hash_value)
+
+                # If delete succeeded, build the "is_deleted" row to later write to watch_dir
+                if not ret_val:
+                    try:
+                        insert_row = {}
+
+                        # get all columns for table and populate the values
+                        column_info = get_column_info(status, db_name_short, table_name)
+
+                        # NOTE: your original code used column_info[4:], preserving that
+                        for column in column_info[4:]:
+                            column_name = column[1]
+
+                            if column_name == "file":
+                                insert_row[column_name] = id_str
+                            elif column_name == "is_deleted":
+                                insert_row[column_name] = "1"
+                            elif column_name == "timestamp":
+                                # carry over the original timestamp if available
+                                insert_row[column_name] = (file_meta.get("timestamp") if file_meta else "")
+                                # or use current time:
+                                # insert_row[column_name] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f")
+                            else:
+                                insert_row[column_name] = (file_meta.get(column_name, "") if file_meta else "")
+
+                        # ✅ Accumulate successful delete rows (do NOT write per-row)
+                        delete_rows.append(insert_row)
+
+                    except Exception as e:
+                        # If we cannot create the delete row, rollback by restoring the file
+                        status.add_error(f"Failed to build delete row for '{id_str}', rolling back: {e}")
+
+                        try:
+                            if tmp_dest_dir and db_filter and db_filter.get("_id"):
+                                store_file(
+                                    status,
+                                    dbms_name,
+                                    table_name,
+                                    tmp_dest_dir,
+                                    db_filter.get("_id"),
+                                    "",
+                                    "",
+                                    True,
+                                    True,
+                                    0
+                                )
+                        except Exception as e2:
+                            status.add_error(f"Rollback restore failed for '{id_str}': {e2}")
+
+                        ret_val = process_status.Failed_to_delete_file
+
+            # If pre-delete download failed or authorization failed, we just return that error
+            # (single delete call semantics)
+
+        # ------------------------------------------------------------
+        # MULTI FILE DELETE PATH (no id_str and no hash_value)
+        # ------------------------------------------------------------
         else:
-            ret_val = db_connect.remove_multiple_files(status, dbms_name, table_name, archive_date)
+            res = get_files_list(status, dbms_name, table_name, id_str, hash_value, archive_date, 0, True)
+            file_info = res[1]
 
+            if file_info:
+                for f in file_info:
+                    f_name = f.get("file")
+                    if not f_name:
+                        # skip bad row and continue
+                        any_failed = True
+                        status.add_error("Encountered a file row without 'file' field; skipping.")
+                        continue
 
+                    rv = remove_file(
+                        status,
+                        dbms_name,
+                        table_name,
+                        f_name,
+                        None,
+                        None,
+                        delete_rows=delete_rows
+                    )
+
+                    if rv:
+                        any_failed = True
+                        # keep going; do not add a delete row for failed deletes
+                        # error details should already be in status from inner call
+
+                # Set ret_val based on whether any failed
+                ret_val = process_status.SUCCESS if not any_failed else process_status.Failed_to_delete_file
+            else:
+                # nothing to delete
+                ret_val = process_status.SUCCESS
+
+        # return connection to pool
         if with_connection_pool(dbms_name):
-            free_db_connection(dbms_name, db_connect)  # Place the connection on the free list
+            free_db_connection(dbms_name, db_connect)
+
+    # cleanup tmp download file for SINGLE delete call only
+    # (multi-delete uses recursion; each inner call cleans its own destination_path)
+    if destination_path and os.path.exists(destination_path):
+        utils_io.delete_file(destination_path)
+
+    # ✅ Write ONE JSON file at the end (top-level only), containing ONLY successful delete rows
+    # Even if some deletes failed, we still write the successful ones.
+    if top_level and delete_rows:
+        try:
+            file_name = f"{db_name_short}.{table_name}.json"
+            watch_dir = params.get_param("watch_dir")
+            dest = os.path.join(watch_dir, file_name)
+
+            # Write as JSON array of rows
+            # list_json = utils_json.to_string(delete_rows)
+            if delete_rows:
+                # ok = utils_io.write_str_to_file(status, str_json, dest)
+                ok = utils_io.write_json_list_to_file(status, delete_rows, dest)
+                if not ok:
+                    status.add_error(f"Failed writing delete rows JSON to: {dest}")
+                    # Don't erase ret_val; deletions already happened.
+            else:
+                status.add_error("Failed converting delete rows to JSON string.")
+        except Exception as e:
+            status.add_error(f"Failed writing consolidated delete JSON: {e}")
+
+    # Normalize True -> SUCCESS like your original
+    if ret_val is True:
+        ret_val = process_status.SUCCESS
 
     return ret_val
+
+
 
 # =======================================
 # Retrieve (one or more) Blob Data from a database to a file
@@ -2330,6 +2573,12 @@ def retrieve_file(status: process_status, db_name: str, db_filter:dict, limit, d
         if dest_type == "dir" and destination_name[-1] != params.get_path_separator():
             destination_name += params.get_path_separator()
 
+        table_name = db_filter.get("table")
+        archive_date = db_filter.get("archive_date")
+        hash_value = db_filter.get("_id")   # in member_cmd hash is saved in the form [table].[hash] indexed by _id
+        id_str = db_filter.get("filename")  # in member_cmd id_str is saved in the form [table].[filename] indexed by filename
+        ret_val, res = get_files_list(status, dbms_name, table_name, id_str, hash_value, archive_date, 0, True)
+        db_filter["file_list"] = res
         ret_val = db_connect.retrieve_files(status, dbms_name, db_filter, limit, dest_type, destination_name )
         if with_connection_pool(dbms_name):
             free_db_connection(dbms_name, db_connect)  # Place the connection on the free list
@@ -2357,10 +2606,13 @@ def get_blobs_dbms_name(db_name):
 # ==================================================================
 # Count files
 # ==================================================================
-def get_files_count(status, db_name, table_name):
+def get_files_count(status, db_name, table_name, local):
 
     ret_val = process_status.SUCCESS
 
+    # SQL DBMS name
+    db_name = db_name[6:] if db_name.startswith("blobs_") else db_name
+    # Blobs DB Name
     dbms_name = get_blobs_dbms_name(db_name)
 
     db_connect = get_connection(dbms_name)
@@ -2370,7 +2622,29 @@ def get_files_count(status, db_name, table_name):
         per_table_count = None
         ret_val = process_status.ERR_dbms_not_opened
     else:
-        counter, per_table_count = db_connect.count_files_per_table(status, dbms_name, table_name)
+        if not local:
+            per_table_count = {}  # Counter per table
+            counter = 0
+            # get tables list if table_name not specified
+            if not table_name:
+                tables = get_blobs_database_tables(status, dbms_name)    # returns either [] or list of table names
+            else:
+                tables = [table_name]
+
+            for table in tables:
+                # Query file list for the table.
+                # ret_val not success happens when table does not exist in dbms or query failure. Nevertheless, continue processing the other tables---an error output is written to error log.
+                ret_val, file_list = _query_file_list(status, db_name, table, None, None, None, 0)
+                if not ret_val:
+                    if file_list:
+                        file_count = len(file_list)
+                    else:
+                        file_count = 0
+
+                    per_table_count[table] = file_count
+                    counter += file_count
+        else:
+            counter, per_table_count = db_connect.count_files_per_table(status, dbms_name, table_name)
 
         if with_connection_pool(dbms_name):
             free_db_connection(dbms_name, db_connect)  # Place the connection on the free list
@@ -2380,23 +2654,122 @@ def get_files_count(status, db_name, table_name):
 # =======================================================================================================================
 #  Get files list
 # =======================================================================================================================
-def get_files_list(status:process_status, db_name: str, table_name: str, id_str:str, hash_val:str, archive_date:str, limit:int):
+def get_files_list(status:process_status, db_name: str, table_name: str, id_str:str, hash_val:str, archive_date:str, limit:int, local:bool=False):
 
     dbms_name = get_blobs_dbms_name(db_name)
-
     db_connect = get_connection(dbms_name)
-    if db_connect == None:
+    ret_val = process_status.SUCCESS
+
+    file_list_res = []
+    if not db_connect:
         status.add_keep_error("DBMS '%s' not connected" % dbms_name)
-        files_list = None
         ret_val = process_status.ERR_dbms_not_opened
     else:
-        files_list = db_connect.get_file_list(status, dbms_name, table_name, id_str, hash_val, archive_date, limit)
-        if not files_list:
-            ret_val = process_status.Failed_to_list_files
+        # if user doesn't specify table name then get table names for dbms
+        if not table_name:
+            table_name_list = get_blobs_database_tables(status, dbms_name)
         else:
-            ret_val = process_status.SUCCESS
+            table_name_list = [table_name]
+
+        if table_name_list:
+            for table_name in table_name_list:
+                if not local:
+                    ret_val, files_list = _query_file_list(status, dbms_name, table_name, archive_date, id_str, None, limit)
+                else:
+                    files_list = db_connect.get_file_list(status, dbms_name, table_name, id_str, hash_val, archive_date, limit)
+                if not files_list: # if we failed to list files for one table then return partial file list, but also output error and and write to error log
+                    if not ret_val: # if _query_file_list queries a table that's not managing files, then it returns a ret_val > 0
+                        ret_val = process_status.Failed_to_list_files
+                        status.add_error(f"Failed to get files from DBMS '{dbms_name}' on table '{table_name}'")
+                else:
+                    file_list_res.extend(files_list)
+        else:
+            ret_val = process_status.No_file_in_storage
+            status.add_error(f"No tables in DBMS {db_name}")
 
     if with_connection_pool(dbms_name):
         free_db_connection(dbms_name, db_connect)  # Place the connection on the free list
 
-    return [ret_val, files_list]
+    return [ret_val, file_list_res]
+
+
+# =======================================================================================================================
+#  Query file list from SQL DBMS
+# =======================================================================================================================
+def _query_file_list(status, dbms_name, table_name, archive_date, id_str, target=None, limit=0):
+    ret_val = process_status.SUCCESS
+    db_name = dbms_name[6:] if dbms_name.startswith("blobs_") else dbms_name
+    column_info = get_column_info(status, db_name, table_name)
+    # check if column info is provided. If not then table doesn't exist and we can return an empty list.
+    if not column_info:
+        status.add_error(f"Table {table_name} in DBMS {dbms_name} does not exist")
+        ret_val = process_status.ERR_table_name
+        return ret_val, []
+
+    # check if this table keeps track of files... a table keeps track of files if it has the columns "is_deleted" and "file"
+    cols = list(utils_json.str_to_json(get_table_info(status, db_name, table_name, "")).values())[0]
+    names = {c.get("column_name") for c in cols}
+    if not {"is_deleted", "file"}.issubset(names):
+        ret_val = process_status.Failed_to_list_files
+        return ret_val, []
+
+    # Start building the SQL query
+    WHERE_CLAUSE = "WHERE"
+
+    if archive_date:
+        # Extract year, month, day
+        year = "20" + archive_date[
+            :2]  # assumes archive date is after the year 2000. This is assumed because of the expected input YYMMDD
+        month = archive_date[2:4]
+        day = archive_date[4:]
+        date = f"{year}-{month}-{day}"
+        WHERE_CLAUSE = f"{WHERE_CLAUSE} DATE(insert_timestamp) = '{date}' "
+    if id_str:
+        if len(WHERE_CLAUSE) > 5:
+            WHERE_CLAUSE = f"{WHERE_CLAUSE} AND"
+        # WHERE_CLAUSE = f"{WHERE_CLAUSE} file ILIKE '{id_str}%'"
+        WHERE_CLAUSE = f"{WHERE_CLAUSE} file = '{id_str}'"
+
+    if len(WHERE_CLAUSE) == 5:
+        WHERE_CLAUSE = ""
+
+    rows = []
+
+    columns = ', '.join([column[1] for column in column_info[4:] if column[1] != "file"] or column_info[4:])
+
+    # GROUP_CLAUSE = "GROUP BY file, node_name, is_deleted, file_size, insert_timestamp ORDER BY file"
+    GROUP_CLAUSE = f"GROUP BY node_name, file, insert_timestamp, {columns} ORDER BY file"
+
+
+    # sql_select = f"SELECT DISTINCT file, file_size, is_deleted, timestamp, insert_timestamp FROM {table_name} {WHERE_CLAUSE} {GROUP_CLAUSE};"
+    sql_select = f"SELECT DISTINCT file, insert_timestamp, {columns} FROM {table_name} {WHERE_CLAUSE} {GROUP_CLAUSE};"
+
+    try:
+
+        copy_cmd = f"sql {db_name} extend=(+node_name, @table_name) {sql_select}"
+
+        json_result = execute_network_sql(status, copy_cmd) # returns a dict or None
+        if json_result:
+            if json_result and "Query" in json_result:
+                result_list = json_result["Query"]
+
+                # Step 1: find latest record per file
+                latest_per_file = {}
+                for row in result_list:
+                    f = row["file"]
+                    if f not in latest_per_file or row["insert_timestamp"] > latest_per_file[f]["insert_timestamp"]:
+                        latest_per_file[f] = row
+
+                # Step 2: keep only files where latest record is not deleted
+                result = [v for v in latest_per_file.values() if v["is_deleted"] == 0 or v["is_deleted"] == "0"]
+                rows = result
+
+    except Exception:
+        errno, value = sys.exc_info()[:2]
+        reply = f"Failed to list bucket files: {errno} : {value}"
+        status.add_error(reply)
+        ret_val = process_status.Failed_query_process
+
+    if limit > 0:
+        return ret_val, rows[:limit]
+    return ret_val, rows
