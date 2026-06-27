@@ -9,7 +9,7 @@ COPY . EdgeLake/
 # Install build dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends bash git openssh-client gcc python3-dev libffi-dev libopencv-dev && \
-    python3 -m pip install --upgrade pip wheel pyyaml==6.0.2 && \
+    python3 -m pip install --upgrade pip wheel pyyaml==6.0.2 pyinstaller && \
     python3 -m pip install --upgrade -r /app/EdgeLake/requirements.txt && \
     python3 /app/EdgeLake/setup.py install && \
     mv dist/* /app/edgelake_agent && \
@@ -35,13 +35,15 @@ RUN apt-get update && \
         grpcio-tools==1.70.0 \
         pyyaml==6.0.2 \
         requests==2.32.4 && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /app/EdgeLake /app/EdgeLake/external_lib && \
+    git clone -b pre-develop https://github.com/EdgeLake/deployment-scripts
 
 # Copy only scripts/configs needed at runtime
-RUN mkdir -p /app/EdgeLake && \
-    git clone https://github.com/oshadmon/nebula-anylog /app/nebula
-COPY deploy_edgelake.sh /app/deploy_edgelake.sh
-COPY setup.cfg /app/EdgeLake/setup.
+COPY setup.cfg /app/EdgeLake/setup.cfg
+COPY LICENSE /app/EdgeLake/LICENSE
+COPY EdgeLake_Technical_Charter.pdf /app/EdgeLake/EdgeLake_Technical_Charter.pdf
+COPY external_lib/* /app/EdgeLake/external_lib/
 
 # ==== Part 3: Runtime configuration ====
 ENV EDGELAKE_PATH=/app \
@@ -49,9 +51,8 @@ ENV EDGELAKE_PATH=/app \
     APP_NAME=edgelake_agent \
     BLOCKCHAIN_DIR=/app/EdgeLake/blockchain \
     DATA_DIR=/app/EdgeLake/data \
-    LOCAL_SCRIPTS=/app/deployment-scripts/node-deployment \
+    LOCAL_SCRIPTS=/app/deployment-scripts \
     TEST_DIR=/app/deployment-scripts/tests \
     DEBIAN_FRONTEND=noninteractive
 
-RUN chmod +x /app/deploy_edgelake.sh
-ENTRYPOINT ["/app/deploy_edgelake.sh"]
+ENTRYPOINT exec ${EDGELAKE_PATH}/${APP_NAME} process $EDGELAKE_PATH/deployment-scripts/node-deployment/main.al
