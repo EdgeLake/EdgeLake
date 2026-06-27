@@ -53,6 +53,7 @@ bring_types_ = {
     "min"   :   1024,
     "max"   :   2048,
     "list"   :  4096,
+    "children" : 8192,
 }
 
 ignored_keyword_ = {
@@ -180,26 +181,92 @@ def str_to_list(data: str):
 
     if len(data) >= 3:
         if not data[1:-1] in ignored_keyword_:
-            try:
-                # First, try parsing as a Python literal (safe version of eval)
-                # If that fails, try parsing as JSON
-                list_obj = json.loads(data)
-            except:
+            if not data[1:-1] in ignored_keyword_:
                 try:
-                    list_obj = ast.literal_eval(data)  # list_obj = list(eval(data))
+                    # First, try parsing as a Python literal (safe version of eval)
+                    # If that fails, try parsing as JSON
+                    list_obj = json.loads(data)
                 except:
+                    try:
+                        list_obj = ast.literal_eval(data)  # If it’s not valid JSON, try parsing as a Python literal
+                    except:
 
-                    errno, value = sys.exc_info()[:2]
-                    err_msg = "Failed to transform a string to a list %s: %s" % (str(errno), str(value))
-                    process_log.add("Error", err_msg)  # Log Error
-                    list_obj = None
+                        inner = data[1:-1].strip()
+
+                        if "'" not in inner and '"' not in inner:
+                            # no quotations - assume a single string
+                            list_obj = data         # Make it as a string - used in mapping policies (with bring)
+                        else:
+
+                            list_obj = []
+
+
+                            strip = str.strip
+                            parts = inner.split(",")
+
+                            for s in parts:
+                                s = strip(s)
+                                if not s:
+                                    continue
+
+                                # remove one layer of matching quotes
+                                if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
+                                    # is a string - with quotation
+                                    s = strip(s[1:-1])
+                                    list_obj.append(s)
+                                    continue
+
+                                if not s:
+                                    continue
+
+                                low = s.lower()
+
+                                # bool
+                                if low == "true":
+                                    list_obj.append(True)
+                                    continue
+                                if low == "false":
+                                    list_obj.append(False)
+                                    continue
+
+                                # int (no regex; fast)
+                                # accept optional leading +/-
+                                t = s
+                                sign = 1
+                                if t[0] in "+-":
+                                    sign = -1 if t[0] == "-" else 1
+                                    t = t[1:]
+
+                                if t.isdigit():
+                                    list_obj.append(sign * int(t))
+                                    continue
+
+                                # float (includes 1.2, .5, 1e-3, -2E4, etc.)
+                                try:
+                                    list_obj.append(float(s))
+                                    continue
+                                except ValueError:
+                                    pass
+
+                                # fallback string
+                                list_obj.append(s)  # is a string - without quotation
+
         else:
             list_obj = None
     else:
         list_obj = None
 
     return list_obj
+# =======================================================================================================================
+# Add quotations to strings inside a list:
+# [a, b, c] --> ["a", "b", "c"]
+# =======================================================================================================================
+def fix_bracket_list(data: str):
 
+    inside = data[1:-1].strip()
+    if not inside:
+        return "[]"
+    return '["' + '","'.join(p.strip() for p in inside.split(",")) + '"]'
 # =======================================================================================================================
 # Validate JSON Format. Return True if a vakid JSON format
 # JSON requires double quotes for its strings -  there are no single quotes in a JSON string
@@ -256,6 +323,22 @@ def str_to_json(in_data: str):
                 json_object = None
 
     return json_object
+# =======================================================================================================================
+# lowercase_keys(obj) recursively converts all dictionary string keys in a nested JSON-like structure to lowercase (using casefold()),
+# while leaving values unchanged unless they are also dictionaries or lists.
+# =======================================================================================================================
+def lowercase_keys(obj):
+    if isinstance(obj, dict):
+        return {
+            (k.casefold() if isinstance(k, str) else k):
+            (lowercase_keys(v) if isinstance(v, (dict, list)) else v)
+            for k, v in obj.items()
+        }
+
+    if isinstance(obj, list):
+        return [lowercase_keys(x) if isinstance(x, (dict, list)) else x for x in obj]
+
+    return obj
 # =======================================================================================================================
 # Try to fix the JSON data:
 # 1) Connect strings on multiple lines - parenthesis without commas are connected
@@ -587,7 +670,7 @@ def pull_info(status, user_params, json_data, pull_instruct, conditions, bring_t
         if not ret_val:
             if out_json:
                 if len(new_json):
-                    json_str = str(new_json)
+                    json_str = to_string(new_json)
                     if not is_unique or test_unique(json_str, False, None, None, unique_struct):
                         dynamic_list.append(json_str)
             elif new_string != "":
@@ -727,14 +810,14 @@ def get_object_data(status, user_params, obj, key, is_list, next_key, out_json, 
         else:
             if out_value is not None:
                 if not isinstance(out_value, str):
-                    data_out = str(out_value)
+                    data_out = out_value
                 else:
                     if add_quotation:
                         data_out = '"' + out_value + '"'
                     else:
                         data_out = out_value
 
-                if data_out:
+                if data_out is not None:
                     if out_json:
                         if key == "":
                             json_key = "policy"
@@ -824,7 +907,7 @@ def get_key_string(key):
 # where dbms = !dbms_name and table = !table_name --> { "dbms" : !dbms_name }
 # example blockchain get operator where dbms = lsl_demo
 # ======================================================================================================================
-def make_jon_struct_from_where(cmd_words, offset_first):
+def make_json_struct_from_where(status, cmd_words, offset_first, policy):
     offset = offset_first
     words_count = len(cmd_words)
 
@@ -840,6 +923,23 @@ def make_jon_struct_from_where(cmd_words, offset_first):
 
         value = cmd_words[offset + 2]
         if len(value):
+            if cmd_words[offset + 1] == '=' and policy and value[0] == '[' and value[-1] == ']':
+                # take value from the policy
+                join_keys = [k for k in value.replace(']', '').split('[') if k]
+                policy_inner = policy
+                for one_key in join_keys:
+                    if isinstance(policy_inner, dict) and one_key in policy_inner:
+                        policy_inner = policy_inner[one_key]
+                    else:
+                        policy_inner = None
+                        break
+                if not policy_inner:
+                    status.add_error(f"The policy used is missing the attributes '{value}'")
+                    ret_val = process_status.ERR_wrong_json_structure
+                    break
+                else:
+                    value = str(policy_inner)
+
             if value[0] != '!':
                 value = "\"%s\"" % value  # wrap with quotations
 
@@ -1320,7 +1420,7 @@ def make_row_by_row(status, source_data):
 # ----------------------------------------------------------------------
 # Get value from policy
 # ----------------------------------------------------------------------
-def get_policy_val(status, json_obj, policy_id, key, data_type, add_type_err, add_value_err):
+def get_policy_val(status, attr_name, json_obj, policy_id, key, data_type, add_type_err, add_value_err):
     '''
     status - status object
     json_obj - needs to be a dictionary
@@ -1339,11 +1439,13 @@ def get_policy_val(status, json_obj, policy_id, key, data_type, add_type_err, ad
                     value = "null"    # Replace empty string with "null" for all data types
                 else:
                     if add_type_err:
-                        status.add_error("The value for the key '%s' in JSON object (associated to policy '%s') is not of type %s" % (key, policy_id, str(data_type)))
+                        err_msg = f"Error in policy '{policy_id}' and attribute '{attr_name}': the key '{key}' is not of type '{data_type}'"
+                        status.add_error(err_msg)
                         ret_val = process_status.ERR_wrong_json_structure
     elif add_value_err:
         value = None
-        status.add_error("The key '%s' (derived from policy '%s') is missing in JSON object" % (key, policy_id))
+        err_msg = f"Error in policy '{policy_id}' and attribute '{attr_name}': the key '{key}' is missing in the JSON object"
+        status.add_error(err_msg)
         ret_val = process_status.ERR_wrong_json_structure
     else:
         value = None

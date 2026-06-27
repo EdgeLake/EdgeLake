@@ -3,12 +3,22 @@ This Source Code Form is subject to the terms of the Mozilla Public
 License, v. 2.0. If a copy of the MPL was not distributed with this
 file, You can obtain one at http://mozilla.org/MPL/2.0/
 """
-
+import os.path
 from datetime import datetime
+from urllib.parse import quote
 import ipaddress
 import uuid
 import hashlib
 import re
+import sys
+from urllib.parse import urlparse
+
+try:
+    import yt_dlp
+except:
+    lib_yt_dlp_ = False
+else:
+    lib_yt_dlp_ = True
 
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.process_log as process_log
@@ -74,6 +84,7 @@ data_types_unifier_ = {
     "variant"    :      "varchar",    # From OPCUA"  Container for any data type
     "datavalue"    : "varchar",    # From OPCUA"  Value + status + timestamp
     "diagnosticinfo"    : "varchar",    # From OPCUA" Info for errors or diagnostics
+    "nonetype"      : "nonetype",       # The None use case
 }
 
 # Data types that require quotations on the value ot the default value
@@ -128,12 +139,27 @@ url_chars_ = {  "20": ' ',
 
 hex_digits_ = "0123456789abcdef"
 
-skip_chars_ = {
-    ' ' :  1,
-    '\t' : 1,
-    '\r' : 1,
-    '\n' : 1,
+
+TYPE_MAP = {
+    "str": str,
+    "int": int,
+    "float": float,
+    "bool": lambda v: v.lower() in ("true", "1", "yes"),
+    "list": lambda v: [x.strip() for x in v.split(",") if x.strip()],
 }
+# -------------------------------------------------------------------------
+#   Data convertor from string to type
+# -------------------------------------------------------------------------
+def convert_value(value_str: str, type_name: str):
+
+    if type_name == "list" and len(value_str) and value_str[0] =='[' and value_str[-1] == ']':
+        # Remove parenthesis
+        value_str = value_str[1:-1]
+
+    converter = TYPE_MAP.get(type_name, None)
+    if not converter:
+        return None
+    return converter(value_str)
 
 # -------------------------------------------------------------------------
 #   Check if a string is hexadecimal
@@ -141,26 +167,6 @@ skip_chars_ = {
 def is_hex_str(hex_string):
     global hex_digits_
     return set(hex_string).issubset(hex_digits_)
-# -------------------------------------------------------------------------
-#   Transform a url string to string
-# -------------------------------------------------------------------------
-def url_to_str(url_str):
-
-    url_entries = url_str.split('%')
-    for index, entry in enumerate(url_entries):
-        if len(entry) >= 2:
-            sub_str = entry[:2].lower()
-            if sub_str in url_chars_:
-                # replace to the ascii char
-                url_entries[index] = url_chars_[ sub_str ] + entry[2:]
-            else:
-                url_entries[index] = ('%' + url_entries[index]) # Return Original char
-        else:
-            url_entries[index] = ('%' + url_entries[index])  # Return Original char
-
-    updated_str = ''.join(url_entries)
-    return updated_str
-
 # -------------------------------------------------------------------------
 #   Test if quotation is needed with this data type and string
 # -------------------------------------------------------------------------
@@ -198,8 +204,16 @@ def time_to_seconds(counter, time_unit):
 
     if time_unit in time_to_sec_:
         seconds = time_to_sec_[time_unit]
+        if counter[0] == '-':
+            # negative number
+            counter = counter[1:]
+            negative = True
+        else:
+            negative = False
         if counter.isnumeric():
             seconds *= int(counter)
+            if negative:
+                seconds = -seconds
         else:
             seconds = None
     else:
@@ -280,6 +294,31 @@ def is_supported_data_type(data_type):
 def reset_str_chars( source_str ):
     global translate_dict_
     return source_str.translate ( translate_dict_ )
+
+
+# -------------------------------------------------------------------------
+# The function takes a string input and converts it into the correct Python data type
+# so that when you serialize it to JSON, it becomes properly formatted.
+# -------------------------------------------------------------------------
+def normalize_value(val):
+    if isinstance(val, str):
+        s = val.strip()
+        low = s.lower()
+
+        if low == "true":
+            return True
+        if low == "false":
+            return False
+        if low == "null":
+            return None
+
+        try:
+            num = float(s)
+            return int(num) if num.is_integer() else num
+        except ValueError:
+            return s
+
+    return val
 
 # ======================================================================================================================
 # Remove control chars (replace with space) - keep printable chars
@@ -1047,6 +1086,11 @@ def make_single_space_string(source: str):
 # starting point is the first parenthesis
 # ======================================================================================================================
 def find_parentheses_offset(test_str, from_offset, open_char, close_char, ignore_chars = None, left_counter = 0, right_counter = 0):
+    '''
+    If test_str is a string - the returned offset represents  the offset in the string
+    If test string is a list - the returned offset represents the line number in the list -
+    it is used for JSON entries listed in multiple lines - see in suggest_create_table.get_column_types()
+    '''
     stop_offset = len(test_str)
 
     counter_left = left_counter
@@ -1072,6 +1116,62 @@ def find_parentheses_offset(test_str, from_offset, open_char, close_char, ignore
             break
     return [position, counter_left, counter_right]
 
+# ======================================================================================================================
+# Transform a list of strings to a list of JSON strings.
+# Will work on JSON broken to multiple entries in the list
+# ======================================================================================================================
+def str_list_to_json_list(source_list):
+
+    new_list = []
+    source_size = len(source_list)
+    index = 0
+    while index < source_size:        # Scan all entries
+        entry_id, counter_left, counter_right = find_parentheses_offset_in_list(source_list, index, '{', '}')
+        if counter_left == 0 or counter_right == 0 or entry_id >= source_size or entry_id == -1:
+            break
+        new_entry = ' '.join(source_list[index:entry_id + 1])
+        new_list.append(new_entry)
+        index = entry_id + 1
+
+    return new_list
+
+# ======================================================================================================================
+# Get offset to substring based on matching parentheses
+# starting point is the first parenthesis
+'''
+Line #
+00 = {str} '{'
+01 = {str} '"timestamp": "2026-01-27T23:08:41.217357Z",'
+02 = {str} '"value": 0.7734120585621161,'
+03 = {str} '"svalue": true'
+04 = {str} '}'
+'''
+# ======================================================================================================================
+def find_parentheses_offset_in_list(test_list, from_line, open_char, close_char):
+    '''
+    The test string is a list - the returned offset represents the line number in the list -
+    it is used for JSON entries listed in multiple lines - see in suggest_create_table.get_column_types()
+    '''
+
+    counter_left = 0
+    counter_right = 0
+    entry_id = -1
+
+    for entry_id in range(from_line, len(test_list)):      # Entry_ID represents the offset in the list
+
+        entry = test_list[entry_id]
+        for char in entry:
+            # Scan the entire entry
+            if char == open_char:
+                counter_left += 1
+            elif char == close_char:
+                counter_right += 1
+        # end of entry:
+        if counter_left and counter_left == counter_right:
+            # done
+            break
+
+    return [entry_id, counter_left, counter_right]
 
 # ======================================================================================================================
 # Find first non-space offset
@@ -1103,38 +1203,48 @@ def is_sub_array(source_array, offset, sub_array):
 # For a given string, determine if enclosed in the specified parenthesis.
 # Used to determine the type of structure represented by the string: { } represents a dictionary and [ ] for a list.
 # Ignore trailing \r\n
-# Returns dict or list or none
+# Returns dict or list or none and the value
 # ======================================================================================================================
-def get_str_obj(tested_str):
+# Example: include ASCII whitespace + common noise bytes; customize as needed
+def get_str_obj(tested_str: str):
+    """
+    Returns (kind, new_str_or_none)
+      kind: 'dict' | 'list' | 'str' | 'none'
+      new_str_or_none: only provided if we had to trim/extract a substring; otherwise None.
 
-    if tested_str:
-        str_len = len(tested_str)
-        if str_len > 1:
-            first_char = tested_str[0]
-            last_char = tested_str[-1]
-            if first_char == '{' or first_char == '[': # Dictionary or list
-                if first_char == '{' and last_char == '}':
-                    return "dict"
-                elif first_char == '[' and last_char == ']':
-                    return "list"
+    Fast path: if first and last chars are already matching braces, return immediately.
+    Slow path: trim leading/trailing skip chars, then (if needed) extract embedded { ... } or [ ... ].
+    """
+    if not tested_str:
+        return "none", None
 
-            offset_first = 0
-            while first_char in skip_chars_:
-                offset_first += 1
-                if offset_first >= str_len:
-                    return "none"
-                first_char = tested_str[offset_first]
-            offset_last = 1     # -1 is the last char
-            while last_char in skip_chars_:
-                offset_last += 1
-                if (offset_last + offset_first + 1) >= str_len:
-                    return "none"
-                last_char = tested_str[-offset_last]
-            if first_char == '{' and last_char == '}':
-                return "dict"
-            elif first_char == '[' and last_char == ']':
-                return "list"
-    return "none"
+    fc = tested_str[0]
+    lc = tested_str[-1]
+
+    # ---- Fast path ----
+    if fc == '{' and lc == '}':
+        return "dict", None
+    if fc == '[' and lc == ']':
+        return "list", None
+
+    # If no leading/trailing whitespace → plain string
+    if not fc.isspace() and not lc.isspace():
+        return "str", None
+
+    # ---- Strip once ----
+    stripped = tested_str.strip()
+    if not stripped:
+        return "none", None
+
+    fc = stripped[0]
+    lc = stripped[-1]
+
+    if fc == '{' and lc == '}':
+        return "dict", stripped
+    if fc == '[' and lc == ']':
+        return "list", stripped
+
+    return "str", stripped
 
 # ======================================================================================================================
 # Get word length - return length to space or end of line
@@ -1670,8 +1780,209 @@ def get_equal_value(test_str, key):
 # Test Unix timestamp, representing the number of seconds that have elapsed since the Unix epoch (January 1, 1970, 00:00:00 UTC). T
 # =======================================================================================================================
 def is_valid_timestamp(timestamp):
+    # No need in datetime object:
     try:
-        datetime.utcfromtimestamp(int(timestamp))
-        return True
-    except:
+        ts = float(timestamp)
+        return ts == ts and ts > -62135596800
+    except (TypeError, ValueError):
         return False
+# =======================================================================================================================
+# Return True for a timestamp at least at year 2000
+# =======================================================================================================================
+def is_timestamp_at_least_2000(timestamp):
+    # No need in datetime object:
+    try:
+        return float(timestamp) >= 946684800
+    except (TypeError, ValueError):
+        return False
+
+# =======================================================================================================================
+# Create a URL for a camera
+# =======================================================================================================================
+def camera_url_builder(url: str, user: str, password: str, protocol: str = None):
+    """
+    URL builder for video processing protocol.
+    - Safely URL-encodes user/password for URLs.
+    - If url already contains scheme, protocol argument is ignored.
+    """
+    if not url:
+        return None
+
+    if "://" in url:
+        protocol, rest = url.split("://", 1)
+    elif protocol:
+        rest = url
+    else:
+        return None
+
+    user_enc = quote(user) if user else ""
+    pass_enc = quote(password) if password else ""
+
+    if user_enc and pass_enc:
+        return f"{protocol}://{user_enc}:{pass_enc}@{rest}"
+    return f"{protocol}://{rest}"
+
+
+# =======================================================================================================================
+# Uses yt-dlp to extract the best live stream or video HLS URL
+# =======================================================================================================================
+"""
+Check if platform is supported 
+"""
+def _check_platform(domain:str)->str:
+    domain = (domain or "").lower()
+    platform = "unknown"
+    if "youtube.com" in domain or "youtu.be" in domain:
+        platform = "youtube"
+    elif "twitch.tv" in domain:
+        platform = "twitch"
+    elif "facebook.com" in domain:
+        platform = "facebook"
+    elif "instagram.com" in domain:
+        platform = "instagram"
+    elif "tiktok.com" in domain:
+        platform = "tiktok"
+    elif "vimeo.com" in domain:
+        platform = "vimeo"
+    elif "linkedin.com" in domain:
+        platform = "linkedin"
+    return platform
+
+"""
+Download cookies
+"""
+def _get_cookies(status, url, cookies_file: str):
+    """
+    Container-safe: validate and use an already-mounted Netscape cookies file.
+    """
+    if not os.path.isfile(cookies_file):
+        status.add_error(f"Cookies file not found: {cookies_file}")
+        return process_status.Connection_error, None
+
+    try:
+        with open(cookies_file, "r", encoding="utf-8", errors="ignore") as f:
+            head = f.read(256)
+        if "Netscape HTTP Cookie File" not in head and "HTTP Cookie File" not in head:
+            status.add_error(f"Invalid cookie format (expected Netscape): {cookies_file}")
+            return process_status.Connection_error, None
+    except Exception as e:
+        status.add_error(f"Failed reading cookies file {cookies_file}: {e}")
+        return process_status.Connection_error, None
+
+    ydl_opts = {
+        "cookiefile": cookies_file,   # key option in container
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.extract_info(url, download=False)
+        return process_status.SUCCESS, "cookiefile"
+    except Exception as e:
+        status.add_error(f"Failed using cookiefile '{cookies_file}': {type(e).__name__}: {e}")
+        return process_status.Connection_error, None
+
+
+# =======================================================================================================================
+# Extract stream URL via yt-dlp
+# =======================================================================================================================
+def _get_hls_url(status, url: str, cookies_file: str = None, browser: str = None):
+    """
+    Return (ret_val, stream_url).
+
+    Priority:
+      1) If cookies_file exists -> use it (cookiefile) and DO NOT try cookiesfrombrowser.
+      2) Else if browser is provided -> use cookiesfrombrowser (optionally write cookies_file).
+      3) Else -> no cookies (works for many public videos).
+    """
+    # If we're given an rtsp URL then use it
+    if url.startswith("rtsp://"):
+        return process_status.SUCCESS, url
+
+    ydl_opts = {
+        "quiet": True,
+        "skip_download": True,
+        # Prefer HLS (.m3u8) where possible, else best overall.
+        "format": "best[protocol=m3u8]/best",
+    }
+
+    # --- Cookie priority: cookiefile first ---
+    cookies_exist = bool(cookies_file) and os.path.isfile(cookies_file)
+
+    if cookies_exist:
+        # Use existing cookies file; do NOT attempt browser extraction
+        ydl_opts["cookiefile"] = cookies_file
+
+    elif browser:
+        # Only if no cookiefile exists, try reading from a browser profile
+        ydl_opts["cookiesfrombrowser"] = (browser,)
+
+        # If a cookies_file path is provided, write cookies for reuse next time
+        if cookies_file:
+            os.makedirs(os.path.dirname(cookies_file), exist_ok=True)
+            ydl_opts["write_cookies"] = cookies_file
+
+    # else: no cookies
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+        # yt-dlp often provides the direct URL for the selected format here
+        stream_url = info.get("url")
+        if stream_url:
+            return process_status.SUCCESS, stream_url
+
+        # Fallback: search formats for something usable
+        formats = info.get("formats") or []
+
+        # Prefer HLS explicitly
+        for f in formats:
+            if f.get("protocol") == "m3u8" and f.get("url"):
+                return process_status.SUCCESS, f["url"]
+
+        # Otherwise, pick the best available URL at the end
+        for f in reversed(formats):
+            if f.get("url"):
+                return process_status.SUCCESS, f["url"]
+
+        status.add_error("Failed to get a stream URL (no formats/url in yt-dlp info).")
+        return process_status.Connection_error, None
+
+    except Exception:
+        errno, value = sys.exc_info()[:2]
+        status.add_error(f"Failed to get URL for live video feed: {type(errno).__name__}: {value}")
+        return process_status.Connection_error, None
+
+"""
+Main for URL conversion
+"""
+# 'C:\\Users\\oshad\\AnyLog-code\\EdgeLake\\external_lib\\video_processing\\cookies\\youtube.txt'
+def hls_url(status, url: str, browser: str = None):
+    """
+    Resolve a watch URL to a direct HLS/media URL.
+
+    - Server: pass browser=None and supply a cookies file if you have one.
+    - Desktop: optionally pass browser="chrome"/"edge" to refresh cookies.
+    """
+    domain = urlparse(url).netloc.lower()
+    platform = _check_platform(domain=domain)
+
+    # Directory to store cookie files
+    base_dir = os.path.dirname(__file__).split('generic')[0].replace('edge_lake', 'external_lib')
+    dest_cookies = os.path.join(base_dir, 'video_processing', 'cookies')
+    os.makedirs(dest_cookies, exist_ok=True)
+
+    cookies_path = os.path.join(dest_cookies, f"{platform}.txt")  # file path
+
+    # Optional: refresh cookies from local browser if requested AND running on a machine with a browser profile
+    if browser:
+        cookie_status, used_browser = _get_cookies(status=status, url=url, cookies_file=cookies_path)
+        if cookie_status != process_status.SUCCESS:
+            # fall back to no-cookies attempt
+            used_browser = None
+        browser = used_browser
+
+    return _get_hls_url(status=status, url=url, cookies_file=cookies_path, browser=browser)

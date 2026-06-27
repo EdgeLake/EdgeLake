@@ -3,21 +3,66 @@ import sys
 
 import edge_lake.generic.process_status as process_status
 import os
+from edge_lake.generic.utils_lazy_import import lazy_import
 
-try:
-    lib_name_ = "boto3"
-    import boto3
-    from botocore.config import Config
 
-    lib_name_ = "botocore/exceptions/ClientError"
-    from botocore.exceptions import ClientError
-except:
-    akave_installed_ = False
-else:
+# boto3 + botocore are lazy-imported. Under Nuitka onefile, eagerly importing
+# boto3 at module load time runs before the CA override in
+# anylog_enterprise/anylog.py can fix certifi resource resolution. boto3 also
+# pulls botocore, urllib3 and s3transfer, all of which touch SSL contexts at
+# import. See utils_lazy_import.py for the rules.
+# Tri-state: None = not yet attempted; True/False = result of the attempt.
+boto3 = None
+Config = None
+ClientError = None
+akave_installed_ = None
+lib_name_ = ""
+
+
+def _lazy_import_akave(status=None):
+    """
+    Import boto3, botocore.config.Config and botocore.exceptions.ClientError on
+    first use. Populates module globals and `akave_installed_`. Returns True if
+    all three are available, False otherwise.
+    """
+    global boto3, Config, ClientError, akave_installed_, lib_name_
+
+    if akave_installed_ is not None:
+        return akave_installed_
+
+    boto3_mod, err = lazy_import("boto3")
+    if err:
+        lib_name_ = "boto3"
+        if status is not None:
+            status.add_error(err)
+        akave_installed_ = False
+        return False
+
+    botocore_config, err = lazy_import("botocore.config")
+    if err:
+        lib_name_ = "botocore.config"
+        if status is not None:
+            status.add_error(err)
+        akave_installed_ = False
+        return False
+
+    botocore_exceptions, err = lazy_import("botocore.exceptions")
+    if err:
+        lib_name_ = "botocore.exceptions"
+        if status is not None:
+            status.add_error(err)
+        akave_installed_ = False
+        return False
+
+    boto3 = boto3_mod
+    Config = botocore_config.Config
+    ClientError = botocore_exceptions.ClientError
     akave_installed_ = True
+    return True
+
 
 def test_lib_installed(status):
-    if akave_installed_:
+    if _lazy_import_akave(status):
         ret_val = process_status.SUCCESS
     else:
         status.add_error(f"Lib {lib_name_} not installed")
@@ -33,7 +78,12 @@ class AkaveConnector:
         :param region: Akave region, e.g. "akave-network"
         :access_key: AKAVE access key
         :secret_key: AKAVE secret key
+
+        Callers are expected to verify availability via `test_lib_installed()`
+        before instantiating this class.
         """
+
+        _lazy_import_akave()
 
         self.s3 = boto3.client(
             "s3",
@@ -113,11 +163,13 @@ class AkaveConnector:
             if delete_all:
                 ret_val, file_list = self.list_files(status, bucket_name)
                 if not ret_val:
-                    for key in file_list:
-                        ret_val, reply = self.delete_file(status, bucket_name, key)
+                    for obj in file_list:
+                        key = obj.get("Key", None)
+                        version_id = obj.get("VersionId", None)
+                        ret_val, reply = self.delete_file(status, bucket_name, key, version_id)
                         if ret_val:
                             break
-            self.s3.delete_bucket(Bucket=bucket_name)
+            # self.s3.delete_bucket(Bucket=bucket_name) # cannot recreate deleted akave bucket, so fo now only delete all files
         except:
             errno, value = sys.exc_info()[:2]
             reply = f"Failed to delete Akave bucket:  {errno} : {value}"
@@ -132,36 +184,80 @@ class AkaveConnector:
     # ------------------------------
     # List all files in bucket
     # ------------------------------
-    def list_files(self, status, bucket_name: str, prefix: str="") -> tuple:
+    def list_files(self, status, bucket_name: str, prefix: str = "", include_versions: bool = True) -> tuple:
         """
-        Returns object keys under a prefix. Handles pagination.
+        Lists all object keys under a prefix, optionally including versioned objects.
 
         :param status: display AnyLog status messages
-        :param bucket_name: Akave bucket name to be list files from
-        :param prefix: Prefix string to be list files from
+        :param bucket_name: S3 bucket name
+        :param prefix: optional prefix filter
+        :param include_versions: include versioned objects if True
+        :return: (ret_val, reply)
+                 reply = list of dicts [{"Key": str, "VersionId": str | None, "IsLatest": bool | None}]
         """
         keys = []
+        token_key = "NextContinuationToken" if not include_versions else "NextKeyMarker"
+        token_ver = "NextVersionIdMarker" if include_versions else None
         token = None
+        version_id_marker = None
+
         try:
-            while True:
-                kwargs = {"Bucket": bucket_name, "Prefix": prefix}
-                if token:
-                    kwargs["ContinuationToken"] = token
-                resp = self.s3.list_objects_v2(**kwargs)
-                for item in resp.get("Contents", []):
-                    keys.append(item["Key"])
-                if resp.get("IsTruncated"):
-                    token = resp.get("NextContinuationToken")
-                else:
-                    break
+            if include_versions:
+                # versioned bucket listing
+                while True:
+                    kwargs = {"Bucket": bucket_name, "Prefix": prefix}
+                    if token:
+                        kwargs["KeyMarker"] = token
+                    if version_id_marker:
+                        kwargs["VersionIdMarker"] = version_id_marker
+
+                    resp = self.s3.list_object_versions(**kwargs)
+                    for v in resp.get("Versions", []):
+                        keys.append({
+                            "Key": v["Key"],
+                            "VersionId": v.get("VersionId"),
+                            "IsLatest": v.get("IsLatest", False),
+                        })
+                    for m in resp.get("DeleteMarkers", []):
+                        keys.append({
+                            "Key": m["Key"],
+                            "VersionId": m.get("VersionId"),
+                            "IsLatest": m.get("IsLatest", False),
+                            "DeleteMarker": True,
+                        })
+
+                    if resp.get("IsTruncated"):
+                        token = resp.get(token_key)
+                        version_id_marker = resp.get(token_ver)
+                    else:
+                        break
+
+            else:
+                # regular bucket listing
+                while True:
+                    kwargs = {"Bucket": bucket_name, "Prefix": prefix}
+                    if token:
+                        kwargs["ContinuationToken"] = token
+                    resp = self.s3.list_objects_v2(**kwargs)
+                    for item in resp.get("Contents", []):
+                        keys.append({
+                            "Key": item["Key"],
+                            "VersionId": None,
+                            "IsLatest": True,
+                        })
+                    if resp.get("IsTruncated"):
+                        token = resp.get(token_key)
+                    else:
+                        break
+
             reply = keys
-        except:
+            ret_val = process_status.SUCCESS
+
+        except Exception:
             errno, value = sys.exc_info()[:2]
-            reply = f"Failed to List Akave Bucket Files:  {errno} : {value}"
+            reply = f"Failed to list Akave bucket files: {errno} : {value}"
             status.add_error(reply)
             ret_val = process_status.Failed_to_list_files
-        else:
-            ret_val = process_status.SUCCESS
 
         return ret_val, reply
 
@@ -222,7 +318,7 @@ class AkaveConnector:
     # ------------------------------
     # Download file
     # ------------------------------
-    def download_file(self, status, bucket_name: str, key: str, file_name: str, dest_folder: str, encryption_key=None) -> tuple:
+    def download_file(self, status, bucket_name: str, key: str, file_name: str, dest_folder: str, version_id=None, encryption_key=None) -> tuple:
         """
         :param status: display AnyLog status messages
         :param bucket_name: Akave bucket name to download file from
@@ -232,7 +328,10 @@ class AkaveConnector:
         """
         try:
             dest_write_folder = os.path.join(dest_folder, file_name)
-            self.s3.download_file(bucket_name, key, dest_write_folder)
+            if version_id:
+                self.s3.download_file(bucket_name, key, dest_write_folder, ExtraArgs={"VersionId": version_id})
+            else:
+                self.s3.download_file(bucket_name, key, dest_write_folder)
             reply = None
         except:
             errno, value = sys.exc_info()[:2]
@@ -248,7 +347,7 @@ class AkaveConnector:
     # ------------------------------
     # Delete file
     # ------------------------------
-    def delete_file(self, status, bucket_name: str, key: str) -> tuple:
+    def delete_file(self, status, bucket_name: str, key: str, version_id=None) -> tuple:
         """
         :param status: display AnyLog status messages
         :param bucket_name: Akave bucket name to delete file from
@@ -256,7 +355,18 @@ class AkaveConnector:
         """
         token = None
         try:
-            self.s3.delete_object(Bucket=bucket_name, Key=key)
+            if version_id:
+                self.s3.delete_object(Bucket=bucket_name, Key=key, VersionId=version_id)
+                # self.s3.delete_object(Bucket=bucket_name, Key=key)
+            else:
+                ret_val, file_list = self.list_files(status, bucket_name, key)
+                if not ret_val:
+                    for obj in file_list:
+                        key = obj.get("Key", None)
+                        version_id = obj.get("VersionId", None)
+                        ret_val, reply = self.delete_file(status, bucket_name, key, version_id)
+                        if ret_val:
+                            break
             reply = None
         except:
             errno, value = sys.exc_info()[:2]
@@ -282,9 +392,11 @@ class AkaveConnector:
         """
         token = None
         try:
-            files = self.list_files(status, bucket_name, prefix)
-            for key in files:
-                self.delete_file(status, bucket_name, key)
+            ret_val, files = self.list_files(status, bucket_name, prefix)
+            for obj in files:
+                key = obj.get("Key", None)
+                version_id = obj.get("VersionId", None)
+                self.delete_file(status, bucket_name, key, version_id)
             reply = None
         except:
             errno, value = sys.exc_info()[:2]
@@ -295,3 +407,46 @@ class AkaveConnector:
             ret_val = process_status.SUCCESS
 
         return ret_val, reply
+
+    # ------------------------------
+    # Return table names
+    # ------------------------------
+    def get_unique_tables(self, status, bucket_name):
+        """
+        Return all table names based on indexing
+
+        :param status: display AnyLog status messages
+        :param bucket_name: Akave bucket name to delete file from
+        """
+        prefixes = []
+        try:
+            response = self.s3.list_objects_v2(
+                Bucket=bucket_name,
+                Delimiter='/'
+            )
+            prefixes = [p['Prefix'][:-1] for p in response.get('CommonPrefixes', [])]
+        except:
+            errno, value = sys.exc_info()[:2]
+            reply = f"Failed to get logical tables from Akave:  {errno} : {value}"
+            status.add_error(reply)
+            ret_val = process_status.Failed_to_delete_file
+        else:
+            ret_val = process_status.SUCCESS
+
+        return ret_val, prefixes
+
+    def key_exists(self, status, node_bucket_name, key):
+        ret_val = process_status.SUCCESS
+        try:
+            self.s3.head_object(Bucket=node_bucket_name, Key=key)
+            return ret_val, True
+        except ClientError as e:
+            if e.response['Error']['Code'] == "404":
+                return ret_val, False
+        except:
+            errno, value = sys.exc_info()[:2]
+            reply = f"Failed to get logical tables from Akave:  {errno} : {value}"
+            status.add_error(reply)
+            ret_val = process_status.Failed_to_import_lib
+            return ret_val, False
+

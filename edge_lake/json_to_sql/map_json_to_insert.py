@@ -75,7 +75,7 @@ def map_columns(status, dbms_name, table_name, tsd_name, tsd_id, json_data, colu
     attr_names_map = {}
 
     # Build transform IDs and precompiled transform functions
-    transform_ids = analyze_json_entry_recompiled(columns_list, attr_names_map, json_data[0])
+    transform_ids = analyze_json_entry_recompiled(columns_list, attr_names_map, json_data[0])       # Review first entry
     transform_fns = [build_transform_fn(tid, status, dbms_name, table_name, current_utc) for tid in transform_ids]
 
     for entry in json_data:
@@ -84,7 +84,19 @@ def map_columns(status, dbms_name, table_name, tsd_name, tsd_id, json_data, colu
         for index, column_info in enumerate(columns_list[4:]):
             attr_name = column_info[1]
             raw_val = get_value_ignore_case(entry, attr_name, attr_names_map)
-            final_val = transform_fns[index](raw_val)
+            step_val = transform_fns[index](raw_val)
+            if raw_val == "" and step_val == "DEFAULT":
+                if column_info[3] == "now()":
+                    final_val = current_utc
+                else:
+                    final_val = transform_fns[index](column_info[3])
+            else:
+                if step_val == "DEFAULT":
+                    final_val = "NULL" if column_info[3] is None else column_info[3]    # Get the default value
+                elif step_val is None or step_val == '':
+                    final_val = "NULL"      # For SQL
+                else:
+                    final_val = step_val
             column_array.append(str(final_val))
 
         insert_list.append(column_array)
@@ -213,7 +225,10 @@ def analyze_json_entry_recompiled(columns_list, attr_names_map, json_entry):
         elif isinstance(val, (list, dict)):
             transform_list.append(TRANSFORM_LIST_STRING)
         elif val is None:
-            transform_list.append(TRANSFORM_DEFAULT)
+            if default_val:
+                transform_list.append(TRANSFORM_DEFAULT)
+            else:
+                transform_list.append(TRANSFORM_NONE)
         else:
             transform_list.append(TRANSFORM_NONE)
 
@@ -273,7 +288,7 @@ def handle_string_column_value(column_value, column_type, default_declared, curr
 # Given a Key - Get value from JSON - ignore Upper Lower Case
 # ==================================================================
 def get_value_ignore_case(json_entry, key, attr_names_map):
-    # First try without mapping to lowere case
+    # First try without mapping to lower case
     try:
         value = json_entry[key]
     except:
@@ -321,7 +336,7 @@ def get_value_by_function(function, json_entry, upper_lower_map):
 # ==================================================================
 # Given relevent information generate INSERT statment
 # ==================================================================
-def generate_insert_stmt(status: process_status, dbms_name, table_name, insert_size, column_names, insert_rows):
+def generate_insert_stmt(status: process_status, is_write_immediate, dbms_name, table_name, insert_size, column_names, insert_rows):
     # check number of lines to insert
     if len(insert_rows) == 0:
         status.add_error(
@@ -329,7 +344,7 @@ def generate_insert_stmt(status: process_status, dbms_name, table_name, insert_s
         return ''
 
     # map to inserts per specific dbms
-    insert_statements = db_info.get_insert_rows(status, dbms_name, table_name, insert_size, column_names, insert_rows)
+    insert_statements = db_info.get_insert_rows(status, is_write_immediate, dbms_name, table_name, insert_size, column_names, insert_rows)
 
     return insert_statements
 
@@ -394,6 +409,15 @@ def map_json_file_to_insert(status: process_status, update_dbms, tsd_name, tsd_i
                 ]
 
                 #json_data = utils_io.read_json_strings(status, json_file)
+
+                if not json_data or not len(json_data):
+                    # Try JSONs broken to multiple lines
+                    data_list = utils_data.str_list_to_json_list(data_list)     # Read assuming JSON entry spans multiple list entries
+                    json_data = [
+                        json_instance
+                        for entry in data_list
+                        if len(entry) > 2 and (json_instance := utils_json.str_to_json(entry)) is not None
+                    ]
 
                 if not json_data or not len(json_data):
                     status.add_error(f"Failed to retrieve JSON rows from file: {json_file}")
@@ -505,7 +529,8 @@ def map_json_list_to_sql(status: process_status, update_dbms, process_name, tsd_
                     err_msg = "Failed to INSERT streaming data to local table with immediate flag: %s.%s" % (dbms_name, table_name)
             else:
                 # Operator process
-                ret_val, insert_stmt = columns_to_insert_stmt(status, dbms_name, table_name, table_extension, columns_list, insert_size, insert_columns)
+                # The False value represents no immediate flag - in postgreSQL it will generate CSV file
+                ret_val, insert_stmt = columns_to_insert_stmt(status, False, dbms_name, table_name, table_extension, columns_list, insert_size, insert_columns)
                 if ret_val:
                     # Write SQL data to the database
                     if update_dbms:
@@ -648,7 +673,8 @@ def write_sql_file(status, insert_stmt, sql_file):
 def insert_sql_to_table(status, sql_file, dbms_name, table_name, par_name, insert_size, column_names, insert_columns):
 
     # Map columns data to insert stmt
-    ret_val, insert_stmt = columns_to_insert_stmt(status, dbms_name, table_name, par_name, column_names, insert_size, insert_columns)
+    # The True value on the call represents an immediate flag - in PostgreSQL it will force to generate SQL stmt and not a CSV file
+    ret_val, insert_stmt = columns_to_insert_stmt(status, True, dbms_name, table_name, par_name, column_names, insert_size, insert_columns)
 
     if ret_val:
         insert_list = insert_stmt.split("\n")
@@ -659,13 +685,13 @@ def insert_sql_to_table(status, sql_file, dbms_name, table_name, par_name, inser
 # -------------------------------------------------------------------------------------------
 # Map the columns data to insert statements
 # ___________________________________________________________________________________________
-def columns_to_insert_stmt(status, dbms_name, table_name, par_name, column_names, insert_size, insert_columns):
+def columns_to_insert_stmt(status, is_write_immediate, dbms_name, table_name, par_name, column_names, insert_size, insert_columns):
 
     if par_name:
         t_name = "par_" + table_name + "_" + par_name  # extend name by partition
     else:
         t_name = table_name
-    insert_stmt = generate_insert_stmt(status, dbms_name, t_name, insert_size, column_names, insert_columns)
+    insert_stmt = generate_insert_stmt(status, is_write_immediate, dbms_name, t_name, insert_size, column_names, insert_columns)
 
     ret_val = insert_stmt != ''
 
@@ -675,9 +701,32 @@ def columns_to_insert_stmt(status, dbms_name, table_name, par_name, column_names
 # Map JSON streaming data to SQL Inserts
 # ___________________________________________________________________________________________
 def buffered_json_to_sql(status, dbms_name, table_name, source, instructions, tsd_id, json_data):
+    '''
+    instructions - Needs to be an ID of a policy with mapping instructions or the string "0" for no instructions
+    '''
 
+    err_flag = False
 
-    sql_file_name = dbms_name + '.' + table_name
-    sql_file_list, rows_count = map_json_list_to_sql(status, True, "streaming", '0', tsd_id, dbms_name, table_name, 1, None, sql_file_name, None, json_data)
+    if not instructions:
+        # instructions should be a policy id or '0' (representing no mapping policy) - None if not excepted
+        error_msg = "Missing mapping instructions or mapping without instructions is not identified"
+        err_flag = True
+    if instructions == '0':
+        # No instruction
+        # When no mapping policy provided - mapping transforms attribute-value to column values
+        instruct = None
+    elif instructions:
+        instruct = member_cmd.get_instructions(status, instructions)
+        if not instruct:
+            error_msg = "Failed to retrieve mapping instructions using the key: '%s' for table: '%s.%s'" % (instructions, dbms_name. table_name)
+            err_flag = True
+
+    if not err_flag:
+        sql_file_name = dbms_name + '.' + table_name
+        sql_file_list, rows_count = map_json_list_to_sql(status, True, "streaming", '0', tsd_id, dbms_name, table_name, 1, None, sql_file_name, instruct, json_data)
+    else:
+        status.add_error(error_msg)
+        sql_file_list = None
+        rows_count = 0
 
     return [sql_file_list, rows_count]

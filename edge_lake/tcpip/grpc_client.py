@@ -15,30 +15,21 @@ import importlib
 import time
 
 
-try:
-    import grpc
-except:
-    grpc_installed_ = False
-else:
-    grpc_installed_ = True
-    try:
-        # Install grpcio-reflection
-        from grpc_reflection.v1alpha.reflection_pb2 import ListServiceResponse
-        from grpc_reflection.v1alpha.reflection_pb2 import ServerReflectionRequest
-        from grpc_reflection.v1alpha.reflection_pb2 import ServiceResponse
-        from grpc_reflection.v1alpha.reflection_pb2 import ServerReflectionResponse
-        from grpc_reflection.v1alpha.reflection_pb2_grpc import ServerReflectionStub
-
-    except:
-        grpc_reflection_installed_ = False
-    else:
-        grpc_reflection_installed_ = True
-        try:
-            from google.protobuf import json_format
-        except:
-            google_protobuff_installed_ = False
-        else:
-            google_protobuff_installed_ = True
+# grpc, grpcio-reflection and google.protobuf are lazy-imported on first use.
+# Under Nuitka onefile, eagerly importing them at module load time runs before
+# the CA override in anylog_enterprise/anylog.py can fix certifi resource
+# resolution. See utils_lazy_import.py for the rules.
+# Tri-state flags: None = not yet attempted; True/False = result.
+grpc = None
+ListServiceResponse = None
+ServerReflectionRequest = None
+ServerReflectionResponse = None
+ServiceResponse = None
+ServerReflectionStub = None
+json_format = None
+grpc_installed_ = None
+grpc_reflection_installed_ = None
+google_protobuff_installed_ = None
 
 
 import edge_lake.generic.process_status as process_status
@@ -48,6 +39,7 @@ import edge_lake.generic.utils_json as utils_json
 import edge_lake.generic.params as params
 from edge_lake.generic.interpreter import get_value_dict
 from edge_lake.generic.streaming_data import add_data
+from edge_lake.generic.utils_lazy_import import lazy_import
 from edge_lake.tcpip.mqtt_client import process_policy
 
 connect_list_ = {}                  # The list of connections, key is ip and port, values include: exit_event, policy_id, mapping_policy, policy_type, policy_name
@@ -70,6 +62,7 @@ for entry in conn_list_attr_:
     if entry[1] == "External":
         title_list_.append(entry[0])    # The list of attributes returned to the user in a "get grpc clients" call
 
+invokable_endpoints = {}
 
 connect_offset_status_ = 0     #"Active" "Terminated (SUCCESS)", "Terminated (Error)"
 connect_offset_exit_ = 1        # Location of exit event
@@ -78,25 +71,79 @@ connect_offset_timeouts_ = 10  # Location of Counter timeouts
 connect_offset_err_msg_ = 11  # Location of Error message
 
 # ----------------------------------------------------------------------
+# Lazy-import grpc + grpc_reflection + google.protobuf on first use.
+# Populates the module-level globals (grpc, ListServiceResponse,
+# ServerReflectionRequest, ServerReflectionResponse, ServiceResponse,
+# ServerReflectionStub, json_format) and the *_installed_ flags.
+# Returns True if at least the core grpc module is available.
+# `status` may be None when called from contexts that don't have one.
+# ----------------------------------------------------------------------
+def _lazy_import_grpc(status=None):
+    global grpc, ListServiceResponse, ServerReflectionRequest
+    global ServerReflectionResponse, ServiceResponse, ServerReflectionStub, json_format
+    global grpc_installed_, grpc_reflection_installed_, google_protobuff_installed_
+
+    if grpc_installed_ is not None:
+        return grpc_installed_
+
+    grpc_mod, err = lazy_import("grpc")
+    if err:
+        if status is not None:
+            status.add_error(err)
+        grpc_installed_ = False
+        grpc_reflection_installed_ = False
+        google_protobuff_installed_ = False
+        return False
+
+    grpc = grpc_mod
+    grpc_installed_ = True
+
+    refl_pb2, err_pb2 = lazy_import("grpc_reflection.v1alpha.reflection_pb2")
+    refl_grpc, err_grpc = lazy_import("grpc_reflection.v1alpha.reflection_pb2_grpc")
+    if err_pb2 or err_grpc:
+        grpc_reflection_installed_ = False
+    else:
+        ListServiceResponse = refl_pb2.ListServiceResponse
+        ServerReflectionRequest = refl_pb2.ServerReflectionRequest
+        ServerReflectionResponse = refl_pb2.ServerReflectionResponse
+        ServiceResponse = refl_pb2.ServiceResponse
+        ServerReflectionStub = refl_grpc.ServerReflectionStub
+        grpc_reflection_installed_ = True
+
+    pb_json_format, err = lazy_import("google.protobuf.json_format")
+    if err:
+        google_protobuff_installed_ = False
+    else:
+        json_format = pb_json_format
+        google_protobuff_installed_ = True
+
+    return grpc_installed_
+
+# ----------------------------------------------------------------------
 # Test if needed lib in installed
 # ----------------------------------------------------------------------
 def is_installed():
-    global grpc_installed_
-    global grpc_reflection_installed_
-    global google_protobuff_installed_
-    return (grpc_installed_ and grpc_reflection_installed_ and google_protobuff_installed_)
+    _lazy_import_grpc()
+    return bool(grpc_installed_ and grpc_reflection_installed_ and google_protobuff_installed_)
 # ----------------------------------------------------------------------
 # Exit a process, process id is ip and port, or the string "all"
 # ----------------------------------------------------------------------
 def exit( process_id:str ):
     ret_val = process_status.SUCCESS
     if process_id == "all":
-        for values in connect_list_.values():
-            exit_event = values[connect_offset_exit_]
-            try:
-                exit_event.set()
-            except:
-                ret_val = process_status.gRPC_process_failed
+        grpc_connection_keys = list(connect_list_.keys())
+        for grpc_name in grpc_connection_keys:
+            values = connect_list_.get(grpc_name, None)     # guard against key being deleted in another thread with .get
+            if values:
+                exit_event = values[connect_offset_exit_]
+                # guard against cleaning in try catch
+                try:
+                    if grpc_name in invokable_endpoints:
+                        del invokable_endpoints[grpc_name]
+                        del connect_list_[grpc_name]   # no thread started for invokable grpc connection so manually delete
+                    exit_event.set()
+                except:
+                    ret_val = process_status.gRPC_process_failed
     else:
         # Exit specific connection
         # Process ID is available using the command: get grpc clients
@@ -104,7 +151,12 @@ def exit( process_id:str ):
             ret_val = process_status.gRPC_wrong_connect_info
         else:
             exit_event = connect_list_[process_id][connect_offset_exit_]
+            # delete grpc if it's invokable
             try:
+                # guard cleaning
+                if process_id in invokable_endpoints:
+                    del invokable_endpoints[process_id]
+                    del connect_list_[process_id]  # no thread started for invokable grpc connection so manually delete
                 exit_event.set()
             except:
                 ret_val = process_status.gRPC_process_failed
@@ -130,6 +182,7 @@ def is_connected( key: str ):
 # Info returned to the get processes command
 # ----------------------------------------------------------------------
 def get_status_string(status):
+    _lazy_import_grpc(status)
     if not grpc_installed_:
         info_str = "gRPC library not installed"
     else:
@@ -202,7 +255,7 @@ service HandleCli {
 '''
 
 # ----------------------------------------------------------------------
-def subscribe(dummy: str, conditions: dict, conn:str, proto_dir:str, proto_name:str, connection_id:str, policy_id:str, mapping_policy:dict):
+def subscribe(dummy: str, conditions: dict, conn:str, proto_dir:str, proto_name:str, connection_id:str, policy_id:str, mapping_policy:dict, invoke:bool):
     '''
     conditions - the user provided data
     conn - IP and Port of target
@@ -215,14 +268,14 @@ def subscribe(dummy: str, conditions: dict, conn:str, proto_dir:str, proto_name:
 
     is_reconnect = conditions["reconnect"] if "reconnect" in conditions else False
     while 1:
-        ret_val = process_grpc(conditions, conn, proto_dir, proto_name, connection_id, policy_id, mapping_policy)
+        ret_val = process_grpc(conditions, conn, proto_dir, proto_name, connection_id, policy_id, mapping_policy, invoke)
         if ret_val != process_status.ERR_process_failure or not is_reconnect:
             break   # Exit or an error which is not connection error
         # Wait and Try again
         time.sleep(3)       #Wait for the gRPC server to restart
 
 # ----------------------------------------------------------------------
-def process_grpc(conditions: dict, conn:str, proto_dir:str, proto_name:str, connection_id:str, policy_id:str, mapping_policy:dict):
+def process_grpc(conditions: dict, conn:str, proto_dir:str, proto_name:str, connection_id:str, policy_id:str, mapping_policy:dict, invoke:bool):
     '''
     conditions - the user provided data
     conn - IP and Port of target
@@ -234,6 +287,8 @@ def process_grpc(conditions: dict, conn:str, proto_dir:str, proto_name:str, conn
     '''
 
     status = process_status.ProcessStat()
+    if not _lazy_import_grpc(status):
+        return process_status.Failed_to_import_lib
     exit_msg = f"gRPC Client process terminated {proto_name}.proto (name: {connection_id}) "
     ret_val = process_status.SUCCESS
     # Load the proto libraries from where they are placed by the user
@@ -289,7 +344,7 @@ def process_grpc(conditions: dict, conn:str, proto_dir:str, proto_name:str, conn
                 # Associate the stub with the server and allow the client to make RPC calls
                 stub = set_stub(status=status, module_pb2_grpc=module_pb2_grpc, service_name=service_name, channel=channel)
 
-                if stub:
+                if stub and not invoke:
 
                     request_obj = get_request_obj(status, debug_flag, conditions, module_pb2, request_msg)     # Make a request object based on the send message and send values
                     if request_obj:
@@ -314,11 +369,20 @@ def process_grpc(conditions: dict, conn:str, proto_dir:str, proto_name:str, conn
                         exit_msg += "Failed to create a request object for the gRPC call"
                         ret_val = process_status.ERR_process_failure
 
+                elif stub and invoke:
+                    if not connection_id in invokable_endpoints:
+                        ret_val = process_status.SUCCESS
+                        invokable_endpoints[connection_id] = stub
+                    else:
+                        ret_val = process_status.gRPC_process_failed
+                        status.add_error("gRPC endpoint already exists")
 
-                close_channel(status=status, channel=channel)
+
+                if ret_val:
+                    close_channel(status=status, channel=channel)
 
 
-            if ret_val != process_status.EXIT:
+            if ret_val != process_status.EXIT and not invoke:
                 # Test if schema has an error - error on a schema is updated in mapping_policy.process_event()
                 if mapping_policy and "mapping" in mapping_policy and "schema" in mapping_policy["mapping"] and "__error__" in mapping_policy["mapping"]["schema"]:
                     error_msg = mapping_policy["mapping"]["schema"]["__error__"]
@@ -326,11 +390,15 @@ def process_grpc(conditions: dict, conn:str, proto_dir:str, proto_name:str, conn
                     error_msg = exit_msg
                 connect_list_[connection_id][connect_offset_status_] = "Terminated (Error)"
                 connect_list_[connection_id][connect_offset_err_msg_] = error_msg
+            elif not ret_val and invoke:
+                connect_list_[connection_id][connect_offset_status_] = "gRPC Invoke (Success)"
             else:
                 connect_list_[connection_id][connect_offset_status_] = "Terminated (Success)"
 
-
-    process_log.add_and_print("event", exit_msg + f" [{process_status.get_status_text(ret_val)}]")
+    if invoke:
+        process_log.add_and_print("event", f"gRPC Client process available {proto_name}.proto (name: {connection_id}) " + f" [{process_status.get_status_text(ret_val)}]")
+    else:
+        process_log.add_and_print("event", exit_msg + f" [{process_status.get_status_text(ret_val)}]")
     return ret_val
 
 # ----------------------------------------------------------------------
@@ -646,6 +714,8 @@ def process_grpc_data(status, policy_id, policy_inner, added_info, grpc_data, re
 # ----------------------------------------------------------------------
 def get_services_list(status, io_buff_in, cmd_words, trace):
 
+    _lazy_import_grpc(status)
+
     if cmd_words[3] != "where":
         ret_val = process_status.ERR_command_struct
         reply = None
@@ -741,4 +811,12 @@ def get_load_moudle(status, proto_dir, moudle_name):
             module_obj = sys.modules[moudle_name]
 
     return module_obj
+
+
+def get_stub(status, service_name):
+    stub = invokable_endpoints.get(service_name, None)
+    if not stub:
+        status.add_error(f"Failed to invoke gRPC {service_name} as it does not exist")
+    return stub
+
 

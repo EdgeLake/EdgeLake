@@ -8,20 +8,56 @@ import os
 import threading
 
 
-try:
-    import gridfs
-    import pymongo
-    import_libs_failed = ""
-except:
-    mongo_installed = False
-    import_libs_failed = "gridfs/pymongo"    # List the libraries for the error message
-else:
-    mongo_installed = True
+# pymongo and gridfs are lazy-imported. Under Nuitka onefile, eagerly importing
+# pymongo at module load time runs before the CA override in
+# anylog_enterprise/anylog.py can fix certifi resource resolution. pymongo also
+# pulls in bson C extensions and SSL/DNS auto-discovery hooks. See
+# utils_lazy_import.py for the rules.
+# Tri-state: None = not yet attempted; True/False = result of the attempt.
+pymongo = None
+gridfs = None
+mongo_installed = None
+import_libs_failed = ""
 
 import sys
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.utils_io as utils_io
 import edge_lake.generic.utils_print as utils_print
+from edge_lake.generic.utils_lazy_import import lazy_import
+
+
+# ---------------------------------------------------------------
+# Lazy-import pymongo + gridfs on first use.
+# Populates module globals pymongo, gridfs, mongo_installed, import_libs_failed.
+# Returns True if both libraries are available, False otherwise.
+# ---------------------------------------------------------------
+def _lazy_import_mongo(status=None):
+    global pymongo, gridfs, mongo_installed, import_libs_failed
+
+    if mongo_installed is not None:
+        return mongo_installed
+
+    mod_pymongo, err_pm = lazy_import("pymongo")
+    mod_gridfs, err_gf = lazy_import("gridfs")
+
+    if err_pm or err_gf:
+        failed = []
+        if err_pm:
+            failed.append("pymongo")
+        if err_gf:
+            failed.append("gridfs")
+        import_libs_failed = "/".join(failed)
+        if status is not None:
+            for err in (err_pm, err_gf):
+                if err:
+                    status.add_error(err)
+        mongo_installed = False
+        return False
+
+    pymongo = mod_pymongo
+    gridfs = mod_gridfs
+    mongo_installed = True
+    return True
 
 
 # ---------------------------------------------------------------
@@ -63,7 +99,7 @@ class MONGODB:
     def get_cursor(self, status):
         return None     # Not supported
 
-    def get_database_tables(sekf, status, d_name):
+    def get_database_tables(self, status, d_name):
         return [process_status.SUCCESS, None]     # Not supported
 
     # =======================================================================================================================
@@ -139,7 +175,7 @@ class MONGODB:
              conditions - can deliver specific connections params
          """
 
-        if not mongo_installed:
+        if not _lazy_import_mongo(status):
             status.add_error("MongoDB Libraries (%s) not installed" % import_libs_failed)
             ret_val = False
         else:
@@ -233,7 +269,8 @@ class MONGODB:
         ret_val = False
 
         try:
-            connection = pymongo.MongoClient(host=self.ip, port=self.port)
+            # get the existing connection
+            connection = self.get_connection(status).conn
         except:
             errno, value = sys.exc_info()[:2]
             status.add_error(
@@ -241,7 +278,7 @@ class MONGODB:
         else:
 
             try:
-                connection.drop_database(dbms_name)
+                connection.drop_database(dbms_name) # drop dbms
             except:
                 errno, value = sys.exc_info()[:2]
                 status.add_error(f"MongoDB: Failed to drop database '{dbms_name}': with error: [{errno}] [{value}]")
@@ -270,6 +307,7 @@ class MONGO_INSTANCE:
         self.dbms_name = dbms_name
         self.conn = connection
         self.cur_large = cur_large
+        self.engine_name = "mongo"
 
     # =======================================================================================================================
     #  Return False for SQL Storage
@@ -281,7 +319,12 @@ class MONGO_INSTANCE:
     # Returned but not supported
     # ---------------------------------------------------------------
     def get_database_tables(self, status: process_status, dbms_name: str):
-        return [process_status.SUCCESS, ""]
+        try:
+            db = self.conn[dbms_name]
+            table_list = db.fs.files.distinct("table")
+            return [process_status.SUCCESS, table_list]
+        except:
+            return [process_status.SUCCESS, ""]
 
     # ---------------------------------------------------------------
     # Get the list of databases
@@ -306,10 +349,7 @@ class MONGO_INSTANCE:
         :args:
             db_name:str - logical database name
         """
-        global mongo_installed
-        global import_libs_failed
-
-        if not mongo_installed:
+        if not _lazy_import_mongo(status):
             status.add_error("MongoDB Libraries (%s) not installed" % import_libs_failed)
             ret_val = False
         else:
@@ -389,8 +429,9 @@ class MONGO_INSTANCE:
                     with open(full_path, 'rb') as f:
                         try:
                             if not self.is_duplicate(status, dbms_name, per_table_name):
-                                file_data = f.read()
-                                content = self.cur_large.put(file_data, filename=per_table_name, _id = per_table_hash, table = table_name, archive_date = archive_date)
+                                # file_data = f.read()
+                                # instead of reading the entire file into RAM, stream the file to the DB
+                                content = self.cur_large.put(f, filename=per_table_name, _id = per_table_hash, table = table_name, archive_date = archive_date)
                             else:
                                 if ignore_duplicate == False:
                                     # Duplicates do ot return an error - allowing multiple images to point to the same file
@@ -483,6 +524,7 @@ class MONGO_INSTANCE:
         '''
 
         ret_val = process_status.SUCCESS
+        dest_folder = ""
         counter = 0
 
         if "_id" in db_filter or "filename" in db_filter:
@@ -504,31 +546,62 @@ class MONGO_INSTANCE:
 
             try:
                 fs = self.cur_large
-                for grid_out in fs.find(db_filter, no_cursor_timeout=False):
-                    if dest_file:
-                        output_file = dest_file
-                    else:
-                        output_file = f"{dest_folder}{dbms_name}.{grid_out.name}"
-                    data = grid_out.read()
-                    if not utils_io.write_data_block(output_file, True, data):
-                        status.add_keep_error("Retrieve File Error: '%s' Failed to write into file" % destination_name)
-                        ret_val = process_status.ERR_write_stream
-                        break
+                if not one_file and dest_folder:
+                    for file in db_filter.get("file_list"):
+                        # for grid_out in fs.find(db_filter, no_cursor_timeout=False):
+                        filename = file.get("file")
+                        table = file.get("table_name")
+                        cursor = fs.find({"filename": f"{table}.{filename}"}, no_cursor_timeout=False)
+                        for grid_out in cursor:
+                            if dest_file:
+                                output_file = dest_file
+                            else:
+                                output_file = f"{dest_folder}{dbms_name}.{grid_out.name}"
+                            data = grid_out.read()
+                            if not utils_io.write_data_block(output_file, True, data):
+                                status.add_keep_error(
+                                    "Retrieve File Error: '%s' Failed to write into file" % destination_name)
+                                ret_val = process_status.ERR_write_stream
+                                break
 
-                    counter = counter + 1
-                    if limit and counter >= limit:
-                        break;
+                            counter = counter + 1
+                            if limit and counter >= limit:
+                                break
+                elif one_file:
+                    if db_filter.get("_id") or db_filter.get("filename"): # search either on filename or _id
+                        # db_filter cannot contain file_list entry so delete
+                        if 'file_list' in db_filter:
+                            del db_filter['file_list']
+                        for grid_out in fs.find(db_filter, no_cursor_timeout=False):
+                            if dest_file:
+                                output_file = dest_file
+                            else:
+                                output_file = f"{dest_folder}{dbms_name}.{grid_out.name}"
+                            data = grid_out.read()
+                            if not utils_io.write_data_block(output_file, True, data):
+                                status.add_keep_error(
+                                    "Retrieve File Error: '%s' Failed to write into file" % destination_name)
+                                ret_val = process_status.ERR_write_stream
+                                break
+
+                            counter = counter + 1
+                            if limit and counter >= limit:
+                                break;
+
+                else:
+                    status.add_error("Destination folder for output files from bucket are not properly defined")
+                    ret_val = process_status.ERR_command_struct
 
             except:
                 errno, value = sys.exc_info()[:2]
-                status.add_error(f"MongoDB: Failed to retrieve documents from DBMS '{dbms_name}' and search by: '{db_filter}', with error {errno} : {value}" )
+                status.add_error(
+                    f"MongoDB: Failed to retrieve documents from DBMS '{dbms_name}' and search by: '{db_filter}', with error {errno} : {value}")
                 ret_val = process_status.DBMS_error
             else:
                 if counter == 0:
                     ret_val = process_status.No_file_in_storage
 
-
-        return  ret_val
+        return ret_val
 
     # =======================================================================================================================
     #  Delete multiple files from storage
@@ -615,13 +688,12 @@ class MONGO_INSTANCE:
         filter = {}  # all tables in he database
 
         if table_name:
-
             filter["table"] = table_name
             if id_str:
-                filter["filename"] = table_name + '.' + id_str
+                filter["filename"] = f"{table_name}.{id_str}"
 
             if hash_val:
-                filter["_id"] = table_name + '.' + hash_val
+                filter["_id"] = hash_val
 
         if archive_date:
             filter["archive_date"] = archive_date   # In the format of YYMMDD
@@ -638,20 +710,24 @@ class MONGO_INSTANCE:
                 file_length = grid_out.length
                 file_size = format(file_length,',').rjust(20)
                 total_size += file_length
-                file_name = f"{print_name}.{grid_out.name}"
-                files_name_list.append(file_size + "   " + file_name)
+                file = {"table_name": table_name, "file": grid_out.name.split(".", 1)[1], "file_size": file_size}
+                # file_name = f"{print_name}.{grid_out.name}"
+
+                # files_name_list.append(file_size + "   " + file_name)
+                files_name_list.append(file)
                 if limit:
                     counter = counter + 1
                     if counter >= limit:
                         break
+            files_name_list.append({"table_name": "", "file": "", "file_size": format(total_size,',').rjust(20)})
         except:
             errno, value = sys.exc_info()[:2]
             status.add_error("MongoDB: Failed to retrieve documents list from DBMS '%s' and table: '%s', with error %s : %s" % (
                                                             dbms_name, table_name, str(errno), str(value)))
             files_name_list = None
 
-        if files_name_list:
-            files_name_list.append(format(total_size,',').rjust(20) + "   Total files size")
+        # if files_name_list:
+        #     files_name_list.append(format(total_size,',').rjust(20) + "   Total files size")
 
         return  files_name_list
 

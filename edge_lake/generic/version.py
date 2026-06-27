@@ -89,14 +89,18 @@ def permissions_permissions_by_public_key(status, public_key):
 def permissions_authenticate_rest_message(status, public_key):
     return process_status.SUCCESS
 
-def prep_aggregations(dbms_name, table_name):
+def prep_aggregations(status, dbms_name, table_name, user_data):
     return False
 
-def process_agg_events(status, dbms_name, table_name, columns_info, json_data):
-    return [process_status.SUCCESS, None]
+def process_agg_events(status, dbms_name, table_name, columns_info, json_data, trace_level):
+    return [process_status.SUCCESS, None, None]
 
 def get_table_agg(status, dbms_name, table_name):
     return None
 
-def is_ingest_data(dbms_name, table_name):
+def is_ingest(dbms_name, table_name):
     return False
+
+def get_agg_metadata(status, dbms_name, table_name):
+    return None
+

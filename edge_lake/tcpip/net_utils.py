@@ -131,22 +131,30 @@ def is_new_connections(server_type, main_ip, main_port, second_ip, second_port, 
 # ----------------------------------------------------------------
 # Get the number of threads from config policy
 # ----------------------------------------------------------------
-def get_threads_from_ploicy(status, policy_id, json_object, threads_type, default_value):
+def get_threads_from_ploicy(status, policy_id, json_object, policy_key, default_value):
     # threads_type - "tcp, rest, msg whiich is extended to the keys: tcp_threads, rest_threads and msg_threads
 
     ret_val = process_status.SUCCESS
-    policy_key = f"{threads_type}_threads"
-    tcp_threads = json_object[policy_key] if threads_type in json_object else default_value
-    try:
-        tcp_threads = int(tcp_threads)
-        if not tcp_threads:
-            tcp_threads = default_value # Replace 0 with default value
-    except:
-        tcp_threads = 0
-        status.add_error(f"Wrong number of TCP Threads in config policy: '{policy_id}'")
-        ret_val = process_status.ERR_command_struct
+    if policy_key in json_object:
+        policy_value = json_object[policy_key]
+        if isinstance(policy_value, str) and len(policy_value) > 0 and policy_value[0] == '!':
+            value = params.get_value_if_available(policy_value)
+        else:
+            value = policy_value
 
-    return [ret_val, tcp_threads]
+        try:
+            threads_counter = int(value)
+        except:
+            threads_counter = 0
+            status.add_error(f"Wrong number of {policy_key} Threads in config policy: '{policy_id}'")
+            ret_val = process_status.Config_Error
+        else:
+            if not threads_counter:
+                threads_counter = default_value     # 0 value not allowed
+    else:
+        threads_counter = default_value
+
+    return [ret_val, threads_counter]
 
 # ----------------------------------------------------------------
 # Init Message Server
@@ -168,6 +176,7 @@ def message_server(connect_name:str, exit_name:str, host: str, port: int, buff_s
     soc.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)  # alawys send the data
     # socket created
 
+    # the X20 --> If messages arrive faster than your code processes them, the OS queues them.
     soc.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 20 * buff_size)
     soc_buff_size = soc.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
 

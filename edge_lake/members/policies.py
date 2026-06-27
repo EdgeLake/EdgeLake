@@ -39,7 +39,27 @@ def test_node_id(status, policy_obj, root_key, val, blockchain_file):
 
     return ret_val
 
+# ------------------------------------------------------------------------------------
+# Code to validate that the Parent exists in a Unified Name Space policy
+# ------------------------------------------------------------------------------------
+def validate_parent_exists( status, policy_obj, root_key, cluster_id, blockchain_file ):
 
+    if not "parent" in policy_obj:
+        status.add_error("UNS parent policy is not specified in child")
+        ret_val = process_status.Missing_parent_policy
+    else:
+        parent_policy_id = policy_obj["parent"]
+        test_cmd = ["blockchain", "get", "uns", "where", "id", "=", parent_policy_id, "bring.count"]
+        ret_val, parent_policy = member_cmd.blockchain_get(status, test_cmd, blockchain_file, True)
+        if not ret_val:
+            if not parent_policy:
+                status.add_error(f"UNS parent policy with ID: '{parent_policy_id}' is missing in the metadata")
+                ret_val = process_status.Missing_cluster_policy
+            elif parent_policy != "1":
+                status.add_error(f"UNS parent_policy with ID: '{parent_policy_id}' has multiple occurences in the metadata")
+                ret_val = process_status.Wrong_policy_structure
+
+    return ret_val
 # ------------------------------------------------------------------------------------
 # For these policies - use specific field values to make the ID
 # ------------------------------------------------------------------------------------
@@ -136,6 +156,12 @@ permissions_attr = [
     ("signature",   str,         None,               None,           True,        False,    None),
 ]
 
+bucket_attr = [
+    # attr name * attr type * child attributes * default value * must exists *  is unique
+    ("name",        str,            None,           None,           True,       True, None),
+    ("operator",    str,            None,           None,           True,       False, None),
+]
+
 assignment_attr = [
     # Connect member to permissions
     # attr name * attr type * child attributes * default value * must exists *  is-unique
@@ -161,6 +187,15 @@ tag_attr = [
     ("ns",          int,            None,           None,           True,       False,              test_node_id),   # Namespace
     ("node_iid",    str,            None,           None,           False,       ["dbms", "table", "node_iid"], None),   # Int ID
     ("node_sid",    str,            None,           None,           False,       ["dbms", "table", "node_sid"], None),   # String ID
+]
+
+uns_attr = [        # Unified Name Space
+    # attr name * attr type * child attributes * default value * must exists *  is unique
+    ("name",        str,            None,           None,           True,       False, None),
+    ("namespace",   str,            None,           None,           True,       True, None),   # Keep namespace unique
+    ("parent",      str,            None,           None,           False,      False, validate_parent_exists),   # optional parent
+    ("dbms",        str,            None,           None,           False,      False, None),  # table name is unique
+    ("table",       str,            None,           None,           False,      ["dbms", "table", "name"], None),   # table name is unique
 ]
 
 # ------------------------------------------------------------------------------------
@@ -402,8 +437,14 @@ def test_key_val(status, policy_type, policy_obj, root_key_val, blockchain_file)
                             test_cmd.append("and")
                         test_cmd.append(attr_name)
                         test_cmd.append("=")
+                        if not attr_name in policy_obj:
+                            status.add_error(f"Error in policy type: '{policy_type}' - Missing '{attr_name}' in the policy")
+                            ret_val = process_status.Wrong_policy_structure
+                            break
                         attr_val = policy_obj[attr_name]    # current value
                         test_cmd.append(str(attr_val))
+                    if ret_val:
+                        break
 
                 ret_val, cluster_policy = member_cmd.blockchain_get(status, test_cmd, blockchain_file, True)
                 if not ret_val and len(cluster_policy):
@@ -442,6 +483,8 @@ def test_key_val(status, policy_type, policy_obj, root_key_val, blockchain_file)
                             break
                 elif isinstance(val, dict):
                     for child_dict_key, child_value in val.items():
+                        if child_dict_key.startswith("__") and child_dict_key.endswith("__"):
+                            continue        # Ignore these tests - this is a special attribute - for example to detail scripts in mapping policies
                         child_policy_type = "%s[%s]" % (policy_type, child_dict_key)
                         if isinstance(child_value, dict):
                             # A dictionary with the policy instructions
@@ -516,13 +559,14 @@ def new_mapping_policy(status, policy_type, policy_obj, blockchain_file):
                     # Test data type of default value in policy
                     if "default" in type_info:
                         default_value = type_info["default"]
-                        column_type = type_info["type"] # the data type assigned to the column
-                        if (column_type == "string" and not isinstance(default_value, str))\
-                            or (column_type == "int" and not isinstance(default_value, int))\
-                            or (column_type == "bool" and not isinstance(default_value, bool)):
-                            status.add_error(f"Default value ('{default_value}') for column '{col_name}' is not '{column_type}'")
-                            ret_val = process_status.Wrong_policy_structure
-                            break
+                        if default_value != None:
+                            column_type = type_info["type"] # the data type assigned to the column
+                            if (column_type == "string" and not isinstance(default_value, str))\
+                                or (column_type == "int" and not isinstance(default_value, int))\
+                                or (column_type == "bool" and not isinstance(default_value, bool)):
+                                status.add_error(f"Default value ('{default_value}') for column '{col_name}' is not '{column_type}'")
+                                ret_val = process_status.Wrong_policy_structure
+                                break
                     # Test the script by compiling to see that no errors returned
                     if "script" in type_info:
                         non_compiled = type_info["script"]  # A list with commands
@@ -591,6 +635,15 @@ def new_member_policy(status, policy_type, policy_obj, blockchain_file):
 
 # =======================================================================================================================
 # Test that the policy has all components and complete missing values
+# Bucket policies are tested for unique name
+# =======================================================================================================================
+def new_bucket_policy(status, policy_type, policy_obj, blockchain_file):
+
+    ret_val = test_key_val(status, policy_type, policy_obj, bucket_attr, blockchain_file)
+
+    return ret_val
+# =======================================================================================================================
+# Test that the policy has all components and complete missing values
 # Permission policy determines commands and databases allowed
 # =======================================================================================================================
 def new_permission_policy(status, policy_type, policy_obj, blockchain_file):
@@ -628,6 +681,13 @@ def new_license_policy(status, policy_type, policy_obj, blockchain_file):
 # =======================================================================================================================
 def new_tag_policy(status, policy_type, policy_obj, blockchain_file):
     ret_val = test_key_val(status, policy_type, policy_obj, tag_attr, blockchain_file)
+    return ret_val
+
+# =======================================================================================================================
+# Test that the policy has all components and complete missing values
+# =======================================================================================================================
+def new_uns_policy(status, policy_type, policy_obj, blockchain_file):
+    ret_val = test_key_val(status, policy_type, policy_obj, uns_attr, blockchain_file)
     return ret_val
 # =======================================================================================================================
 # Test that the policy has all components and complete missing values
@@ -715,6 +775,8 @@ new_policies = {          # The process to execute when a new policy is added
     "assignment" :  new_assignment_policy,      # Connect member to permissions
     "license" :  new_license_policy,      # Connect member to permissions
     "tag" :  new_tag_policy,      # Connect member to permissions
+    "bucket" : new_bucket_policy,       # Adding a new bucket
+    "uns"    : new_uns_policy,          # Adding Unified Name Space Policy
 }
 
 # =======================================================================================================================

@@ -5,14 +5,9 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 """
 
 # Echo client program
-import socket
-import sys
-import threading
-import time
-import errno
-import select
 
-# import edge_lake.generic.utils_io as util_io
+import threading
+
 import edge_lake.tcpip.message_header as message_header
 import edge_lake.generic.process_log as process_log
 import edge_lake.generic.params as params
@@ -24,6 +19,9 @@ import edge_lake.generic.utils_io as utils_io
 import edge_lake.generic.process_status as process_status
 import edge_lake.generic.version as version
 import edge_lake.generic.trace_methods as trace_methods
+
+
+large_msg_id_ = 0       # A counter to provide a unique id in the destination node
 
 # run tcp client 10.0.0.124 2048 read aaa bbb
 
@@ -40,11 +38,18 @@ def use_udp():
 # =======================================================================================================================
 def large_message(status, ip:str, port:int, mem_view, large_msg, data):
 
+    global large_msg_id_
+
+    large_msg_id_ += 1
+
+    if large_msg_id_ > 100:
+        large_msg_id_ = 1       # Limit the size of the ID
+
     source_ip = net_utils.get_external_ip()  # Serves to identify the node on the file name
     if not source_ip:
         source_ip = net_utils.get_local_ip()
 
-    output_file = f"cmd.{source_ip}.{utils_threads.get_thread_number()}.lmsg"
+    output_file = f"cmd.{source_ip}.{large_msg_id_}.lmsg"
 
     ret_val, auth_str = version.al_auth_get_transfer_str(status, net_utils.get_external_ip_port())
     if ret_val:

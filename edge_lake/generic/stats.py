@@ -157,8 +157,8 @@ statistics_ = {
 
         "prep_inserts": (
             # Dictionary Key to update       Operation    Dictionary   operand 1        Dictionary  2perand 2
-            ("operator", "inserts", 'P', None, set_elapsed_time, 1, 3),  # Time since the last successful insert
-            ("operator", "inserts", 'P', None, set_elapsed_time, 0, 2),  # Time since the first successful insert
+            ("operator", "inserts",         'P',            None,       set_elapsed_time, 1,        3),  # Time since the last successful insert
+            ("operator", "inserts",         'P',            None,       set_elapsed_time, 0,        2),  # Time since the first successful insert
         ),
 
         "sql" : {},
@@ -372,7 +372,7 @@ def get_info(status, reply_format, conditions):
 
             prep_key = f"prep_{topic}"      # Execute these instructions prior to providing the stats info
             if prep_key in statistics_[service]:
-                prepare_stats(service, topic, prep_key)
+                prepare_stats(service, topic, prep_key)     # THIS IS WHERE OUTPUT IS PREPARED !!!
 
 
             if reply_format == "json":

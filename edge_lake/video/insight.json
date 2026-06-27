@@ -1,0 +1,5 @@
+{"start_ts": "2025-11-03T20:24:00.413242Z", "end_ts": "2025-11-03T20:24:00.413242Z", "frames": 1, "truck": 1, "car": 8, "person": 12, "motorbike": 1}
+{"start_ts": "2025-11-03T20:34:22.798955Z", "end_ts": "2025-11-03T20:34:22.798955Z", "frames": 1, "bicycle": 1}
+{"start_ts": "2025-11-03T20:35:55.505110Z", "end_ts": "2025-11-03T20:35:55.505110Z", "frames": 1, "motorbike": 2}
+{"start_ts": "2025-11-03T20:52:54.254165Z", "end_ts": "2025-11-03T20:54:30.242478Z", "frames": 2, "car": 8, "person": 28, "bus": 1, "bicycle": 1, "truck": 2}
+{"start_ts": "2025-11-03T20:59:27.865811Z", "end_ts": "2025-11-03T21:02:43.167318Z", "frames": 2, "car": 11, "person": 21, "motorbike": 2, "truck": 1}

@@ -153,6 +153,10 @@ def set_directory_locations(home_path):
     global path_separator
     global path_niu
 
+    home_path = home_path.replace(path_niu, path_separator)    # Fix a problem of switching configs from Linux to windows or windows to linux
+    if  sys.platform.startswith('win'):
+        # Switching configs from Linux to windows or windows to linux
+        home_path = home_path.replace(path_separator + path_separator, path_separator)
 
     if home_path[-1] == '\\' or  home_path[-1] == '/':
         home_path = home_path[:-1]
@@ -211,6 +215,17 @@ def key_to_job(assignment, job_id, unique_job_id):
             del user_defined[key]  # Delete current value from User dictionary
 
 # =======================================================================================================================
+# Extend value - Extend the value of an existing key
+# =======================================================================================================================
+def extend_value(key: str, value):
+
+    if key in user_defined:
+        user_defined[key] += value
+    else:
+        user_defined[key] = value
+
+
+# =======================================================================================================================
 # Add value to dictionary
 # =======================================================================================================================
 def add_param(key: str, value):
@@ -266,8 +281,10 @@ def del_param(key: str):
         del user_defined[key]
     if key in job_process_:
         del job_process_[key]       # Link to data in job instance
-    if key in job_process_:
-        del job_process_[key]       # Link to data in job instance
+
+def reset_key(key: str):
+    if key in user_defined:
+        del user_defined[key]
 # =======================================================================================================================
 # Test that key is in dictionary and the value provided is the assigned value for the key
 # =======================================================================================================================
@@ -460,6 +477,9 @@ def get_value_if_available(key_type: str):
             value = get_env_var(key)
             if not value:
                 value = get_path(key)
+            if len(value) > 1 and value[0] == '!':
+                value = get_value_if_available(value)
+
             #if not value:
                 # Removed because "if $abc" returns True whereas $abc is not set
                 #value = key  # needs to be kept as source as $X may be processed by the OS even without system param defined
@@ -862,8 +882,9 @@ def test_condition(status, user_params, cmd_words, offset_start, words_count, js
     if words_count == 2:
         # The case of "NOT X"
         if cmd_words[offset] != "not":
-            err_msg = "Comparison of values failed: Missing 'not' with stmt: '%s'" % (' '.join(cmd_words))
+            err_msg = "If statement error: Missing 'not' with stmt: '%s'" % (' '.join(cmd_words))
             status.add_error(err_msg)
+            utils_print.output_box(err_msg, "red")
             return -1
 
         ret_val, data_type, value = get_value_type(status, user_params, cmd_words[offset+1], json_struct)
@@ -883,8 +904,9 @@ def test_condition(status, user_params, cmd_words, offset_start, words_count, js
             word1 = cmd_words[offset]
             word2 = cmd_words[offset + 2]
         else:
-            err_msg = "Comparison of values failed: Comparison operator '%s' is not recognized: '%s'" % (opr, ' '.join(cmd_words[1:-1]))
+            err_msg = "If statement error: Comparison operator '%s' is not recognized: '%s'" % (opr, ' '.join(cmd_words[1:-1]))
             status.add_error(err_msg)
+            utils_print.output_box(err_msg, "red")
             return -1
     elif words_count == 4:
         # a == b, a !=b, a >= b or a <= b
@@ -894,9 +916,9 @@ def test_condition(status, user_params, cmd_words, offset_start, words_count, js
         word1 = cmd_words[offset]
         word2 = cmd_words[offset + 3]
     else:
-        err_msg = "Comparison of values failed with stmt: '%s'" % ' '.join(cmd_words)
-
+        err_msg = "If statement error: '%s'" % ' '.join(cmd_words)
         status.add_error(err_msg)
+        utils_print.output_box(err_msg, "red")
         return -1
 
 
@@ -1228,18 +1250,21 @@ def get_added_string(my_array, from_entry, to_enty=0):
 
     need_plus = False
 
+    ret_val = process_status.SUCCESS
+
     for x in range(from_entry, array_len):
 
         sub_str = my_array[x]
         if need_plus:  # has to have the + sign
             if sub_str != '+':
                 new_string = ""  # did not find the plus sign
+                ret_val = process_status.Concatenating_failed
                 break
 
             need_plus = False
             continue
 
-        if len(sub_str) > 1 and (sub_str[0] == '!' or sub_str[1] == '$'):
+        if len(sub_str) > 1 and (sub_str[0] == '!' or sub_str[0] == '$'):
             new_string += str(get_value_if_available(sub_str))
         else:
             new_string += sub_str
@@ -1247,8 +1272,9 @@ def get_added_string(my_array, from_entry, to_enty=0):
 
     if need_plus == False:
         new_string = ""  # ended with a plus
+        ret_val = process_status.Concatenating_failed
 
-    return new_string
+    return ret_val, new_string
 
 
 # ======================================================================================================================
@@ -1286,6 +1312,8 @@ def json_str_replace_key_with_value(data_str: str):
                     else:
                         str_word = utils_json.replace_non_supported_chars(new_word)
                     is_str = True
+                elif isinstance(new_word, bool):
+                    str_word = str(new_word).lower()        # Keep bool in lower case not to fail JSON mapping
                 else:
                     str_word = str(new_word)
                     is_str = False              # Int or float
@@ -1482,9 +1510,9 @@ def set_dictionary(status, dict_key:str, key_value:list):
         policy = {}
     else:
         policy = utils_json.str_to_json(policy_str)
-        if  policy == None:
+        if  policy == None or not isinstance(policy, dict):
             if status:
-                status.add_error("Set Policy failed: The value assigned to '%s' is not in JSON structure" % dict_key)
+                status.add_error("Set Policy failed: The initial value assigned to '%s' is not in JSON structure" % dict_key)
             ret_val = process_status.ERR_wrong_json_structure
 
     if not ret_val:

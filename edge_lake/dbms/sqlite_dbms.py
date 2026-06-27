@@ -6,6 +6,7 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import os
 import sys
+import time
 import sqlite3
 from sqlite3 import Error
 
@@ -384,37 +385,42 @@ class SQLITE(sql_storage):
 
         ret_val = True
 
-        try:
-            db_cursor.execute(sql_stmt)
-        except sqlite3.DataError as e:
-            error_msg = str(e)
-            ret_val = False
-        except sqlite3.InternalError as e:
-            error_msg = str(e)
-            ret_val = False
-        except sqlite3.IntegrityError as e:
-            error_msg = str(e)
-            ret_val = False
-        except sqlite3.OperationalError as e:
-            if sql_stmt.endswith("set unlogged;"):
-                pass  # "set unlogged" not supported
-            else:
+        for _ in range(5):          # SQLlite can't do multiple inserts - therefore the sleep and retry
+            try:
+                db_cursor.execute(sql_stmt)
+            except sqlite3.DataError as e:
                 error_msg = str(e)
                 ret_val = False
-        except sqlite3.NotSupportedError as e:
-            error_msg = str(e)
-            ret_val = False
-        except sqlite3.ProgrammingError as e:
-            error_msg = str(e)
-            ret_val = False
-        except (Exception, sqlite3.Error) as e:
-            error_msg = str(e)
-            ret_val = False
-        except:
-            error_msg = "Unknown error"
-            ret_val = False
-        else:
-            error_msg = ""
+            except sqlite3.InternalError as e:
+                error_msg = str(e)
+                ret_val = False
+            except sqlite3.IntegrityError as e:
+                error_msg = str(e)
+                ret_val = False
+            except sqlite3.OperationalError as e:
+                if sql_stmt.endswith("set unlogged;"):
+                    pass  # "set unlogged" not supported
+                elif "database table is locked" in str(e):
+                    time.sleep(0.5)
+                    continue
+                else:
+                    error_msg = str(e)
+                    ret_val = False
+            except sqlite3.NotSupportedError as e:
+                error_msg = str(e)
+                ret_val = False
+            except sqlite3.ProgrammingError as e:
+                error_msg = str(e)
+                ret_val = False
+            except (Exception, sqlite3.Error) as e:
+                error_msg = str(e)
+                ret_val = False
+            except:
+                error_msg = "Unknown error"
+                ret_val = False
+            else:
+                error_msg = ""
+            break
 
         if utils_sql.is_trace_sql():
             utils_sql.trace_sql("SQLite", sql_stmt, ret_val, ignore_error, error_msg)
@@ -643,8 +649,7 @@ class SQLITE(sql_storage):
             output = None
             ret_val = False
 
-        reply_list =  [ret_val, output]
-        return reply_list
+        return ret_val, output
 
     # =======================================
     # Get table info
@@ -835,7 +840,10 @@ class SQLITE(sql_storage):
     # =======================================
     # Map rows to insert statements
     # ======================================
-    def get_insert_rows(self, status: process_status, dbms_name: str, table_name: str, insert_size: int, column_names: list, insert_rows: list):
+    def get_insert_rows(self, status: process_status, is_write_immediate: bool, dbms_name: str, table_name: str, insert_size: int, column_names: list, insert_rows: list):
+        '''
+        is_write_immediate - used in PSQL
+        '''
 
         if self.single_insert:
             # One insert command

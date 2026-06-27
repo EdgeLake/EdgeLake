@@ -18,7 +18,16 @@ import edge_lake.generic.process_log as process_log
 try:
     import web3.logs
     from web3 import HTTPProvider, Web3
-    from web3.middleware import geth_poa_middleware
+    # from web3.middleware import geth_poa_middleware
+    # from web3.middleware import ExtraDataToPOAMiddleware
+
+    try:
+        # Web3.py v7+
+        from web3.middleware import ExtraDataToPOAMiddleware as poa_middleware
+    except ImportError:
+        # Web3.py v6 and older
+        from web3.middleware import geth_poa_middleware as poa_middleware
+
 except:
     errno, value = sys.exc_info()[:2]
     err_msg = f"\n\rFailed to import a library: {errno} : {value}"
@@ -88,7 +97,7 @@ class Ethereum(gateway.BlockchainNode):
                 self.connection = Web3(
                     HTTPProvider(self.provider))  # 'https://rinkeby.infura.io/v3/45e96d7ac85c4caab102b84e13e795a1'
 
-                self.connection.middleware_onion.inject(geth_poa_middleware, layer=0)
+                self.connection.middleware_onion.inject(poa_middleware, layer=0)
 
             except:
                 errno, value = sys.exc_info()[:2]

@@ -11,23 +11,32 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/
 import sys
 import ssl
 import os
+import errno
 import traceback
+import socket
+import time
+from urllib.parse import unquote
+
+HTTP_VERBS = (b'GET', b'POST', b'PUT', b'DELETE', b'HEAD', b'OPTIONS', b'PATCH')
+
+
 with_profiler_ = True if os.getenv("PROFILER", "False").lower() == "true" else False      # Needs to return True - otherwise will be False
 if with_profiler_:
     import edge_lake.generic.profiler as profiler
 
-try:
-    import OpenSSL
-    from OpenSSL import crypto
-except:
-    with_open_ssl_ = False
-else:
-    with_open_ssl_ = True
+# pyOpenSSL is lazy-imported. Under Nuitka onefile, eagerly importing OpenSSL
+# at module load time runs before the CA override in anylog_enterprise/anylog.py
+# can fix certifi resource resolution. See utils_lazy_import.py for the rules.
+# Tri-state: None = not yet attempted; True/False = result of the attempt.
+with_open_ssl_ = None
+OpenSSL = None      # populated by _lazy_import_openssl()
+crypto = None       # populated by _lazy_import_openssl()
 
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 
+from edge_lake.generic.utils_lazy_import import lazy_import
 import edge_lake.cmd.member_cmd as member_cmd
 import edge_lake.generic.params as params
 import edge_lake.generic.version as version
@@ -47,6 +56,9 @@ import edge_lake.generic.utils_threads as utils_threads
 import edge_lake.tcpip.mqtt_client as mqtt_client
 import edge_lake.tcpip.html_reply as html_reply
 from edge_lake.generic.utils_columns import get_current_time
+from edge_lake.tcpip.mcp_server import handle_messages_endpoint, handle_sse_endpoint, generate_data_query
+from edge_lake.tcpip.mcp_server import get_mcp_connections
+
 
 
 # REST with server and client authentication requests - https://requests.readthedocs.io/en/master/user/advanced/
@@ -127,6 +139,29 @@ rest_stat_ = {}         # Collect statistics
 with_traceback_ = False     # On an exception - show error file and line, enabled with: set exception traceback on
 
 # ---------------------------------------------------------
+# Lazy-import pyOpenSSL on first use.
+# Populates module globals `OpenSSL`, `crypto`, and `with_open_ssl_`.
+# Returns True if the library is available, False otherwise.
+# ---------------------------------------------------------
+def _lazy_import_openssl(status):
+    global OpenSSL, crypto, with_open_ssl_
+
+    if with_open_ssl_ is not None:
+        return with_open_ssl_
+
+    mod, err = lazy_import("OpenSSL")
+    if err:
+        if status is not None:
+            status.add_error(err)
+        with_open_ssl_ = False
+        return False
+
+    OpenSSL = mod
+    crypto = getattr(mod, "crypto", None)
+    with_open_ssl_ = crypto is not None
+    return with_open_ssl_
+
+# ---------------------------------------------------------
 # Get the IP and port which is used by the server
 # ---------------------------------------------------------
 def get_declared_ip_port():
@@ -149,7 +184,6 @@ class http_server_info():
     ca_public_key = None        # The CA public key file
     node_cr = None              # The node Certificate Request file
     node_private_key = None     # The node private key file
-    lib_open_ssl = with_open_ssl_   # Test if library is loaded
     streaming_log = False       # Sets to true to enable logging
 
 def get_workers_pool():
@@ -194,7 +228,6 @@ class debug_rest_flow():
 # documentation: https://docs.python.org/3.4/library/socketserver.html
 
 # =======================================================================================================================
-
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     """An HTTP Server that handle each request in a new thread"""
     # Example is here - https://docs.aws.amazon.com/polly/latest/dg/example-Python-server-code.html
@@ -204,7 +237,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     #  You should set the flag explicitly if you would like threads to behave autonomously;
     #  the default is False, meaning that Python will not exit until all threads created by ThreadingMixIn have exited.
     daemon_threads = True
-
+    request_queue_size = 50 # Max number of incoming TCP connections that can wait in the OS backlog before being accepted by the server
 
     # --------------------------------------------------------------------
     # Overrides the method in class ThreadingMixIn in socketserver.py
@@ -241,9 +274,29 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         The default is to print a traceback and continue.
 
         """
+        exc_type, exc, tb = sys.exc_info()
+
+        if exc is not None:
+            traceback.print_exc()
+
+        # Ignore benign disconnects (common for SSE)
+        if isinstance(exc, ConnectionResetError):
+            return
+        if isinstance(exc, BrokenPipeError):
+            return
+        if isinstance(exc, OSError) and exc.errno in (
+                errno.ECONNRESET,
+                errno.ESHUTDOWN,
+                errno.EPIPE,
+                10054, 10058  # Windows errors
+        ):
+            return
+
+        # traceback.print_exc()
         try:
             message1 = "REST server on %s received unrecognized message" % http_server_info.connection
         except:
+
             message1 = "REST server received unrecognized message"
             pass
 
@@ -269,6 +322,27 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 # https://docs.python.org/3/library/http.server.html
 # =======================================================================================================================
 class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except ConnectionResetError:
+            # Client closed the connection early; ignore quietly.
+            self.close_connection = True
+            return
+        except BrokenPipeError:
+            # Client went away while we were writing a response.
+            self.close_connection = True
+            return
+        except:
+            # Socket may have been closed and self.msg_body will be returned as NULL
+            errno, value = sys.exc_info()[:2]
+            err_msg = f"Failed to handle one request: {errno} : {value}"
+            self.close_connection = True
+            process_log.add("Error", err_msg)
+            utils_print.output_box(err_msg)
+
 
     # =======================================================================================================================
     # Print message if trace level is set: trace level = 1 run rest server
@@ -277,20 +351,11 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
 
         trace_level = member_cmd.commands["run rest server"]['trace']
-        if trace_level:
-            # Trace leve is 1 - print incoming message source
-            try:
-                command = get_value_from_headers(self.al_headers, "command")
-            except:
-                command = "Undetermined"
+        if trace_level > 1:
+            # Trace leve is 2 - print incoming message source
 
-            message = "\r\n%s - - [%s] [Command: %s] %s" %(self.address_string(), self.log_date_time_string(), command, format % args)
-            if trace_level == 1:
-                utils_print.output(message, True)
-            else:
-                utils_print.output(message, False)  # More printouts to come, wait with AL prompt
-
-
+            message = f"\r\n{format % args}"
+            utils_print.output(message, True)
     # =======================================================================================================================
     # Log execution: trace level = 1 run rest server
     # =======================================================================================================================
@@ -327,10 +392,12 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
             status_text = process_status.get_status_text(ret_val)
             message = "%s [Command: %s] [(%u) %s]" % (self.address_string(), command, ret_val, status_text)
-            if self.msg_body:
-                message += "\r\nHEADERS: %s\r\nBODY: %s" % (str(self.headers._headers), str(self.msg_body))
+            body_text = getattr(self, 'msg_body', None)
+            if body_text:
+                message += "\r\nHEADERS: %s\r\nBODY: %s" % (str(self.headers._headers), str(body_text))
             else:
                 message += "\r\nHEADERS: %s" % (str(self.headers._headers))
+
             process_log.secondary_log("streaming", message)
 
 
@@ -394,19 +461,41 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
         status.add_error(message)       # Print the code location
 
+
     # =======================================================================================================================
     # Logs Errors
     # =======================================================================================================================
     def log_error(self, format, *args):
 
+
+        # Check if this is a non-HTTP binary message (e.g. AnyLog native TCP frame)
+        # If so, silently discard — not a real error, just a protocol mismatch
+        try:
+            peek = self.raw_requestline[:7]
+            if peek and not any(peek.startswith(verb) for verb in HTTP_VERBS):
+                message1 = "REST server received a non-HTTP request"
+                process_log.add("Error", message1)
+                utils_print.output_box(message1)
+                return  # ← stop here, skip all the rest
+        except:
+            pass
+
+        # --- real error, proceed with normal logging ---
+
+        exc_type, exc, tb = sys.exc_info()
+
+        # if exc is not None:
+        #    traceback.print_exc()
+
+
         try:
             message1 = "REST server on %s received unrecognized message" % http_server_info.connection
         except:
             message1 = "REST server received unrecognized message"
-            pass
 
-        utils_print.output(message1, True)
         process_log.add("Error", message1)
+        utils_print.output_box(message1)
+
 
         try:
             ip_source = str(self.address_string())
@@ -422,10 +511,10 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
             error_name = "HTTP Request Error"
             error_txt = "Failed to retrieve failure info"
 
-        utils_print.output("%s: [Source: %s] [Date: %s] [Message: %s]" % (error_name, ip_source, date_time, error_txt), True)  # We saw UnicodeEncodeError - an error caused by a Chinese character encoding problem in Python, mainly caused by the character \u200e
+        utils_print.output("\r\n%s: [Source: %s] [Date: %s] [Message: %s]" % (error_name, ip_source, date_time, error_txt), True)  # We saw UnicodeEncodeError - an error caused by a Chinese character encoding problem in Python, mainly caused by the character \u200e
 
         try:
-            message3 = "REST error using: %s" % str(self.connection)
+            message3 = "\r\nREST error using: %s" % str(self.connection)
         except:
             pass
         else:
@@ -478,38 +567,58 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # Send reply headers
     # Details at https://docs.python.org/3/library/http.server.html
     # =======================================================================================================================
-    def send_reply_headers(self, status, response_code, message, echo_message, content_type, content_length, is_chunked, accept_ranges):
+    def send_reply_headers(self, status, response_code, message, echo_message, content_type, content_length, is_chunked,
+                           accept_ranges):
         '''
-        status - thread object
-        response_code - REST reply
-        message - message to deliver
-        echo_message - message to the node echo queue
-        content_length - messages which are nor queries to data and length can be determined
-        is_chunked - bool value to represent reply with data (or with info with undetermined length)
+        status         - thread object
+        response_code  - REST reply code
+        message        - message to deliver (must be a plain HTTP reason phrase — e.g. "OK", "Bad Request")
+        echo_message   - message to the node echo queue
+        content_length - set when length is known and reply is not chunked
+        is_chunked     - True for streamed / query data replies with undetermined length
+        accept_ranges  - if set, enables partial-content (range) support
         '''
 
+        ret_val = process_status.REST_header_err  # safe default — overwritten in else/except
+
         try:
-            # defining all the headers
             if message:
-                message += "\r\n"
-            self.send_response(response_code, message)
+                self.send_response(response_code, message)  # message must be a plain reason phrase — no \r\n
+            else:
+                self.send_response(response_code)
+
             self.send_header('Content-Type', content_type)
+
+            # CORS — actual response headers (not preflight)
+            # Allow-Origin:   required on every cross-origin response
+            # Vary:           tells proxies/CDNs the response differs by origin
+            # Expose-Headers: grants JS permission to read response headers via fetch()
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Vary', 'Origin')
+            self.send_header('Access-Control-Expose-Headers', '*')
+
             if is_chunked:
-                self.send_header('Transfer-Encoding', 'chunked') # https://en.wikipedia.org/wiki/Chunked_transfer_encoding
-            elif content_length:
-                self.send_header('Content-Length', str(content_length))  # https://datatracker.ietf.org/doc/html/rfc9110#name-content-length
+                self.send_header('Transfer-Encoding',
+                                 'chunked')  # https://en.wikipedia.org/wiki/Chunked_transfer_encoding
+            elif content_length is not None:
+                self.send_header('Content-Length',
+                                 str(content_length))  # https://datatracker.ietf.org/doc/html/rfc9110#name-content-length
 
             if accept_ranges:
                 # bytes: This indicates that the server supports range requests and can return partial content using the Range header.
                 # The Range header specifies the byte range of the content the client wants to retrieve.
                 # For example, a client can send a request with the Range header set to bytes=0-999 to retrieve the first 1000 bytes of a resource.
-                self.send_header("Accept-Ranges", accept_ranges)
+                self.send_header('Accept-Ranges', accept_ranges)  # e.g. "bytes" — enables Range request support
                 # public - the response can be stored by any cache (on the client)
-                # max-age=3600 - the response can be cached for one hour
-                self.send_header("Cache-Control", "public, max-age=3600")
+                # max-age=3600 - the response can be cached for one h
+                self.send_header('Cache-Control', 'public, max-age=3600')
 
+            self.send_header('Connection', 'close')
+            self.end_headers()  # flushes all buffered headers to the output stream
+            self.close_connection = True
 
-            self.end_headers()      # The buffered headers are written to the output stream
+        except (ConnectionAbortedError, BrokenPipeError):
+            ret_val = process_status.SUCCESS  # client closed the connection — not a server error
         except:
             error_type, error_value = sys.exc_info()[:2]
             err_msg = "REST failed to write reply header: {} - {}".format(error_type, error_value)
@@ -521,6 +630,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
         if echo_message and message:
             self.echo_error(status, message)
+
         return ret_val
     # =======================================================================================================================
     # Echo error message and connection info
@@ -547,7 +657,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         '''
 
         if http_server_info.is_ssl:
-            if with_open_ssl_:
+            if _lazy_import_openssl(status):
                 ret_val = self.process_user_certificate(status, rest_type, command)
             else:
                 ret_val = False
@@ -623,7 +733,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     # Failed to process with AnyLog command
     # =======================================================================================================================
-    def error_failed_process(self, status, with_wait, error_code, http_method, into_output, command, err_msg):
+    def error_failed_process(self, status, with_wait, is_select, error_code, http_method, into_output, command, err_msg):
 
         err_reply = {
             "method": http_method,
@@ -671,7 +781,12 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
                 self.send_reply_headers(status, REST_BAD_REQUEST, reply, True, content_type, 0, True, None)
 
-            write_ret_value = utils_io.write_to_stream(status, self.wfile, reply, False, True)
+            if with_wait and is_select:
+                is_chunked = True if http_method == "get" else False
+            else:
+                is_chunked = False
+
+            write_ret_value = utils_io.write_to_stream(status, self.wfile, reply, is_chunked, True)
 
     # =======================================================================================================================
     # Mismatch between REST CALL and AnyLog command - return an error
@@ -767,18 +882,83 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         return ret_val
 
     # =======================================================================================================================
+    # Set a struct with AnyLog Info representing the command
+    # =======================================================================================================================
+    def set_al_info(self, call_type):
+        trace_level = member_cmd.commands["run rest server"]['trace']
+        if trace_level:
+            self.al_trace = {
+                "trace_level" : trace_level,
+                "call": call_type,          # GET, PUT, POST , etc
+                "cmd": "None",                  # The AnyLog command
+                "result" : -1,              # AnyLog ret_val - -1 not processed
+                "include_path" : self.path,
+                "include_user-agent" : self.al_headers.get("user-agent","not provided")
+            }
+        else:
+            self.al_trace = None
+
+    # =======================================================================================================================
+    # Output the trace info
+    # =======================================================================================================================
+    def output_trace(self):
+
+        client_ip, client_port = self.connection.getpeername()
+        call_type = self.al_trace["call"]
+        al_cmd = self.al_trace["cmd"]
+        al_result = self.al_trace["result"]
+        if al_result == -1:
+            al_text = "AnyLog cmd not processed"
+            color = "green"
+        else:
+            color = "red" if al_result else "green"
+            al_text = process_status.get_status_text(al_result)
+
+
+        info_string = f"Source: {client_ip}:{client_port}\nCall: {call_type}\nAnyLog Command: {al_cmd}\nResult: {al_result} : {al_text}"
+
+        # Add additional info that starts with "include_"
+        for k, v in self.al_trace.items():
+            if k.startswith("include_"):
+                info_string += f"\r\n{k[8:]}: {v}"
+
+
+        utils_print.output_box(info_string, color, 250)
+
+    # =======================================================================================================================
     # GET Method Definition
     # =======================================================================================================================
     def do_GET(self):
 
-        ret_val = process_status.SUCCESS
-
         if with_profiler_:
             profiler.manage("get")  # Stop, Start and reset the profiler
 
-        self.msg_body = None
-        self.al_headers = set_al_headers(self.headers._headers)
         status = process_status.ProcessStat()
+        self.al_headers = set_al_headers(self.headers._headers)
+
+
+        if self.path.startswith('/mcp/sse'):
+
+            self.set_al_info("GET (MCP)")  # if trace level is set: Set a struct with AnyLog Info representing the command
+
+            # Open sse connection for MCP calls
+            handle_sse_endpoint(self, status, http_server_info.workers_pool.get_number_of_threds(), net_utils.get_connection_info(1))
+            try:
+                # Thread terminated - close the socket so the thread will not block on the read from the socket
+                self.connection.shutdown(socket.SHUT_RDWR)
+                self.connection.close()
+            except:
+                pass
+
+            if self.al_trace:
+                # with trace
+                self.output_trace()
+
+            return
+
+        self.set_al_info("GET")  # Set a struct with AnyLog Info representing the command
+
+        self.msg_body = None
 
         user_agent, version, user_id = self.get_client("get")
 
@@ -791,6 +971,23 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
         command = get_value_from_headers(self.al_headers, "command")
 
+        if not user_agent and not command:
+            # Try to get the command from the URL
+            user_agent, command = self.get_info_from_url()      # These are path commands
+
+        self.process_get_request(status, user_agent, command)
+
+        if self.al_trace:
+            # with trace
+            self.output_trace()
+
+    # =======================================================================================================================
+    # GET Method Processing
+    # =======================================================================================================================
+    def process_get_request(self, status, user_agent, command):
+
+        ret_val = process_status.SUCCESS
+
         if self.authenticate_request(status, "GET", command):
 
             if user_agent == "grafana":
@@ -798,16 +995,24 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                 ret_val = al_grafana.grafana_get(status, self)
 
             elif command and user_agent == "anylog":
-
                 try:
+                    # Update default HTTP protocol version to the protocol version used by the request.
+                    # This update is to support requests from deno https://docs.deno.com/, but in general,
+                    # the returned protocol version should be the same version that was sent.
+                    if self.request_version != self.protocol_version and self.request_version == 'HTTP/1.1':
+                        self.protocol_version = self.request_version
                     ret_val = self.al_exec(status, "get", command)      # Updated version
                 except:
                     errno, value, stack_trace = sys.exc_info()[:3]
                     self.handle_exception(status, "GET", errno, value, stack_trace)
                     ret_val = process_status.REST_call_err
             else:
-                # Treat like ping - return OK
-                self.send_reply_headers(status, REST_OK, "", False, 'text/json', 0, True, None)
+                if user_agent == "url":
+                    # Respond to a URL request like -- self.path == "/health"
+                    self.reply_to_url_request(status, command)
+                else:
+                    # Treat like ping - return OK
+                    self.send_reply_headers(status, REST_OK, "", False, 'text/json', 0, True, None)
 
             native_api.end_job(status)  # need to end Job regardless of an error. for example in time-out to release the job
         else:
@@ -820,6 +1025,8 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         if with_profiler_:
             profiler.stop("get")     # Force Profiler because thread goes to sleep
 
+        return ret_val
+
 
     # =======================================================================================================================
     # An option to place AnyLog header on the URL line.
@@ -831,31 +1038,104 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
         ret_val = process_status.SUCCESS
 
-        request_str = self.raw_requestline.decode('utf-8')
+        requestline = self.raw_requestline
 
-        commands_str = utils_data.url_to_str(request_str)
-        offset_headers = commands_str.find('?')
-        index = commands_str.rfind("HTTP")          # The string ends with HTTP
-        if offset_headers > 0 and (index == -1 or index > offset_headers):
-            self.al_headers["url"] = True
-            offset_headers += 1     # Skip the question mark
-            headers_list = commands_str[offset_headers:index].split('?')
-            for header in headers_list:
-                if header and header != ' ':
-                    offset_equal = header.find("=")     # Commands are split by the equal sign
-                    if offset_equal < 1 or offset_equal == (len(header) - 1):
-                        err_msg = f"Error in header value {header}"
-                        ret_val = process_status.Wrong_header_struct
-                        break
-                    else:
-                        key = header[:offset_equal].strip().lower()
-                        value = header[offset_equal+1:].strip()
-                        self.al_headers[key] = value
+        try:
+
+            request_str = requestline.decode('utf-8')
+            commands_str  = unquote(request_str) # Converts:  %3D → =, %20 → space, %2F → /, etc.
+
+            offset_headers = commands_str.find('?')
+            index = commands_str.rfind("HTTP")          # The string ends with HTTP
+            if offset_headers > 0 and (index == -1 or index > offset_headers):
+                self.al_headers["url"] = True
+                offset_headers += 1     # Skip the question mark
+                headers_list = commands_str[offset_headers:index].split('?')
+                for header in headers_list:
+                    if header and header != ' ':
+                        offset_equal = header.find("=")     # Commands are split by the equal sign
+                        if offset_equal < 1 or offset_equal == (len(header) - 1):
+                            err_msg = f"Error in header value {header}"
+                            ret_val = process_status.Wrong_header_struct
+                            break
+                        else:
+                            key = header[:offset_equal].strip().lower()
+                            value = header[offset_equal+1:].strip()
+                            if key == "anylog-agent":
+                                # Some browsers overwrite the user-agent - USE the value provided in anylog-agent
+                                self.al_headers["user-agent"] = value
+                            else:
+                                self.al_headers[key] = value
+        except:
+            err_msg = f"Get command using URL error: parsing request failed: {requestline}"
+            ret_val = process_status.Wrong_header_struct
+
         if ret_val:
             status.add_error(err_msg)
             self.send_reply_headers(status, REST_BAD_REQUEST, err_msg, True, 'text', 0, True, None)
 
         return ret_val
+
+    # =======================================================================================================================
+    # Get info from the path
+    # =======================================================================================================================
+    def get_info_from_url(self):
+
+        if self.path.startswith("/health"):
+            user_agent = "url"      # Respond to a URL request
+            command = "/health"
+        elif self.path.startswith("/api/status"):
+            user_agent = "url"  # Respond to a URL request
+            command = "/api/status"
+        else:
+            user_agent = None
+            command = None
+
+        return user_agent, command
+
+    # =======================================================================================================================
+    # Reply to a request in the URL, like -- self.path == "/health"
+    # =======================================================================================================================
+    def reply_to_url_request(self, status, command):
+
+        if command == "/health":
+            response = {
+                "status": "healthy",
+                "service": "anylog-rest-server",
+                "timestamp": time.time()
+            }
+            response_code = REST_OK
+        elif command == "/api/status":
+            response = {
+                "status": "ok",
+            }
+            response_code = REST_OK
+        else:
+            response = {
+                "error": "unknown command"
+            }
+            response_code = 404
+
+
+        encoded_message = utils_json.to_string(response).encode("utf-8")
+
+        ret_val = self.send_reply_headers(status, response_code, None, False, "application/json", len(encoded_message), False, None)
+        if not ret_val:
+            write_ret_value = utils_io.write_encoded_to_stream(status, self.wfile, encoded_message)
+        else:
+            write_ret_value = -1
+
+        if self.al_trace:
+            # Trace info for: trace level = 1 run rest server
+            self.al_trace["include_path_command"] = command
+            if write_ret_value == -1:
+                self.al_trace["include_write_stream"] = "Not return"
+            else:
+                stat_message = process_status.get_status_text(write_ret_value)
+                self.al_trace["include_write_stream"] = f"{write_ret_value} : {stat_message}"
+
+        return ret_val
+
     # =======================================================================================================================
     # Test is Grafana call
     # =======================================================================================================================
@@ -904,9 +1184,13 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     def do_VIEW(self):
 
+        self.al_headers = set_al_headers(self.headers._headers)
+
+        self.set_al_info("VIEW")  # Set a struct with AnyLog Info representing the command
+
+
         status = process_status.ProcessStat()
         self.msg_body = None
-        self.al_headers = set_al_headers(self.headers._headers)
         self.send_reply_headers(status, REST_NOT_IMPLEMENTED, "VIEW NOT SUPPORTED", True, 'text/json', 0, True, None)
 
         try:
@@ -919,14 +1203,23 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
             write_ret_value = utils_io.write_to_stream(status, self.wfile, message)
 
+        if self.al_trace:
+            # with trace
+            self.output_trace()
+
     # =======================================================================================================================
     # HEAD
     # =======================================================================================================================
     def do_HEAD(self):
 
+        self.al_headers = set_al_headers(self.headers._headers)
+
+
+        self.set_al_info("HEAD")  # Set a struct with AnyLog Info representing the command
+
+
         status = process_status.ProcessStat()
         self.msg_body = None
-        self.al_headers = set_al_headers(self.headers._headers)
 
 
         self.send_reply_headers(status, REST_NOT_IMPLEMENTED, "HEAD NOT SUPPORTED", True, 'text/json', 0, False, None)
@@ -939,6 +1232,9 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
             utils_print.output(message, True)
             process_log.add("Error", message)
 
+        if self.al_trace:
+            # with trace
+            self.output_trace()
 
     # =======================================================================================================================
     # POST
@@ -949,14 +1245,45 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         if with_profiler_:
             profiler.manage("post")     # Stop, Start and reset the profiler
 
-        self.msg_body = None
-        self.al_headers = set_al_headers(self.headers._headers)
         status = process_status.ProcessStat()
+        self.al_headers = set_al_headers(self.headers._headers)
+
+        # MCP messages endpoint routing (before profiler to minimize overhead)
+        if self.path.startswith('/mcp/'):
+            # Run mcp process
+            self.set_al_info("POST (MCP)")  # Set a struct with AnyLog Info representing the command
+            ret_val = handle_messages_endpoint(self, status)
+            if self.al_trace:
+                # with trace
+                self.al_trace["include_path"] = self.path
+                self.output_trace()
+            return
+
+        self.msg_body = None
+
         err_msg = None
         user_agent, version, user_id = self.get_client("post")
 
         header_delivered = False
         command = get_value_from_headers(self.al_headers, "command")
+        if not command and (not user_agent or user_agent.lower().startswith("anylog")):
+            # No command or instructions in header - look at msg body
+            ret_val, msg_body, err_msg = self.get_msg_body(status)
+            if not ret_val and msg_body:
+                # Get command from header
+                msg_body = msg_body.strip()
+                if msg_body[0] == '{' and msg_body[-1] == '}':
+                    json_msg = utils_json.str_to_json(msg_body)
+                    if json_msg and len(json_msg):
+                        # This post commands has an AnyLog command in the message body
+                        if self.process_as_get(status, json_msg) == process_status.SUCCESS:
+                            if self.al_trace:
+                                # with trace
+                                self.output_trace()
+                            return      # Executed using get
+
+        self.set_al_info("POST")  # Set a struct with AnyLog Info representing the command
+
         if command and len(command) == 4 and command.lower() == "data":
             mqtt_data = True
         else:
@@ -975,7 +1302,7 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                             self.handle_exception(status, "POST", errno, value, stack_trace)
                             ret_val = process_status.REST_call_err
                     else:
-                        err_msg = "{\"Error\" : \"HTTP server received POST message to add data and not able to determine the message broker user ID\" }"
+                        err_msg = "{\"Error\" : \"HTTP server received POST message to add data. Missing USER ID (associated to the message broker)\" }"
                         status.add_error(err_msg)
                         ret_val = process_status.Unknown_user_agent
                 else:
@@ -1039,6 +1366,42 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
         if with_profiler_:
             profiler.stop("post")     # Force Profiler because thread goes to sleep
+
+        if self.al_trace:
+            # with trace
+            self.output_trace()
+
+    # =======================================================================================================================
+    # Process this request as a get request
+    # =======================================================================================================================
+    def process_as_get(self, status, json_msg):
+
+        if "dbms" in json_msg and ("sql" in json_msg or "timeColumn" in json_msg):
+            # SQL Query or Increments query from JSON
+            ret_val, command = generate_data_query(status, json_msg)
+            if not ret_val:
+                self.al_headers["command"] = command  # Make the same as AnyLog headers
+                self.al_headers["destination"] = "network"  # will add "run client ()"
+
+        else:
+            # Get the headers from the message body
+            command = None
+            ret_val = process_status.Wrong_header_struct
+
+            for key, value in json_msg.items():
+                self.al_headers[key] = value
+                if key == "command":
+                    command = value
+                    ret_val = process_status.SUCCESS
+
+        if not ret_val:
+            self.set_al_info("POST (Command in body)")  # For Trace - Set a struct with AnyLog Info representing the command
+            self.al_headers["cmd_source"] = "json"      # Flag that info was provided by a POST request in json format
+            # Process the command as n AnyLog get command
+            ret_val = self.process_get_request(status, "anylog", command)
+
+        return ret_val
+
 
     # =======================================================================================================================
     # send info to MQTT CLIENT
@@ -1131,13 +1494,12 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
                     ret_val = self.execute_al_commands(status, io_buff, commands_list, into_output, file_data)
 
-
                 j_handle = status.get_active_job_handle()  # Need to be done after the execution of the commands
                 if ret_val != process_status.SUCCESS and ret_val < process_status.NON_ERROR_RET_VALUE:
                     # Operator returned an error
 
                     err_msg = j_handle.get_operator_error_txt()         # Error returned by operators
-                    self.error_failed_process(status, with_wait, ret_val, http_method, into_output, command, err_msg)
+                    self.error_failed_process(status, with_wait, is_select, ret_val, http_method, into_output, command, err_msg)
 
 
                 elif not with_wait and is_select:
@@ -1251,11 +1613,15 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         content_type = 'text/json'
         file_data = None  # File via a call like: curl -X POST -H "command: file store where dest = !prep_dir/file2.txt" -F "file=@testdata.txt" http://10.0.0.78:7849
         is_binary_data = get_value_from_headers(self.al_headers, "Content-Type") == "application/octet-stream"
+        msg_body = None
 
         ret_val, run_client = self.get_run_client()
         if not ret_val:
 
-            ret_val, msg_body, err_msg = self.get_msg_body(status)
+            cmd_source = self.al_headers.get("cmd_source", "header")
+            if cmd_source != "json":
+                ret_val, msg_body, err_msg = self.get_msg_body(status) # this command can only be called once as the data can only be pulled from the msg body once
+
             if not ret_val:
 
                 if rest_cmd_words[0] == "body":
@@ -1264,6 +1630,8 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
                     msg_body = None
                     cmd_words = utils_data.str_to_list(command, 3)
                 else:
+                    # do not overwrite msg_body as was does before.
+                    # self.get_msg_body(status) can only be called once on the msg body and we need that data for the `file to` command
                     cmd_words = rest_cmd_words
 
 
@@ -1397,11 +1765,24 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
         for index, entry in enumerate (commands_list):
             command = entry[0]
+
+            if "assignment" in self.al_headers and index == (len(commands_list) -1):    # Only on las command
+                # Assign the result to a param in the dictionary
+                assignment = self.al_headers["assignment"]
+                params.reset_key(assignment)
+                command = f"{assignment} = {command}"
+
             with_reply = entry[1]       # Indicate if the thread needs to wait for a reply (i.e. SQL query)
             if with_reply:
                 ret_val = native_api.exec_al_cmd(status, command, self.wfile, into_output, 20)   # Timeout for a list of commands is the default
             else:
                 ret_val = native_api.exec_no_wait(status, command, io_buff, file_data, self.wfile)
+
+            if self.al_trace:
+                # Trace info
+                self.al_trace["cmd"] = command
+                self.al_trace["result"] = ret_val
+
             if ret_val:
                 if index != (len(commands_list) - 1):
                     # the command that failed is in the message body (not the header)
@@ -1465,9 +1846,12 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         if with_profiler_:
             profiler.manage("put")     # Stop, Start and reset the profiler
 
+        self.al_headers = set_al_headers(self.headers._headers)
+
+        self.set_al_info("PUT")  # Set a struct with AnyLog Info representing the command
+
         status = process_status.ProcessStat()
         self.msg_body = None
-        self.al_headers = set_al_headers(self.headers._headers)
         user_agent, version, user_id = self.get_client("put")
 
         if self.authenticate_request(status, "PUT", "Data"):
@@ -1489,6 +1873,10 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
 
         if with_profiler_:
             profiler.stop("put")     # Force Profiler because thread goes to sleep
+
+        if self.al_trace:
+            # with trace
+            self.output_trace()
 
     # =======================================================================================================================
     # AnyLog PUT method def - write data
@@ -1563,12 +1951,88 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
     # =======================================================================================================================
     def do_DELETE(self):
 
+        self.al_headers = set_al_headers(self.headers._headers)
+
+        self.set_al_info("DELETE")  # Set a struct with AnyLog Info representing the command
+
         status = process_status.ProcessStat()
         self.msg_body = None
-        self.al_headers = set_al_headers(self.headers._headers)
 
         self.send_reply_headers(status, REST_NOT_IMPLEMENTED, "DELETE NOT SUPPORTED", True, 'text/json', 0, True, None)
 
+        if self.al_trace:
+            # with trace
+            self.output_trace()
+    # =======================================================================================================================
+    # It asks the server what HTTP methods and headers are allowed for this endpoint.
+    # =======================================================================================================================
+    def do_OPTIONS(self):
+        """
+        Handle CORS preflight requests (OPTIONS method).
+
+        Browser behaviour:
+          1. Before any cross-origin POST/GET with custom headers, the browser
+             sends an OPTIONS preflight to ask: "will you accept my request?"
+          2. This method must reply 204 with the three Allow-* headers.
+          3. Only then does the browser send the actual request.
+
+        Headers sent:
+          Access-Control-Allow-Origin   — who may call us  (* = anyone)
+          Access-Control-Allow-Methods  — which HTTP verbs are permitted
+          Access-Control-Allow-Headers  — which request headers are permitted
+          Access-Control-Expose-Headers — which response headers JS may read
+          Access-Control-Max-Age        — how long the browser caches this preflight (seconds)
+        """
+
+        self.al_headers = set_al_headers(self.headers._headers)
+        self.set_al_info("OPTIONS")
+
+        # ── Path-aware method + header lists ──────────────────────────────
+        if self.path.startswith('/mcp/'):
+            allow_methods = "GET, POST, OPTIONS"
+            default_headers = "Content-Type, Authorization, Accept, Mcp-Session-Id"
+        else:
+            allow_methods = "GET, POST, PUT, DELETE, HEAD, OPTIONS"
+            default_headers = (
+                "Content-Type, Authorization, Accept, User-Agent, "
+                "command, dbms, table, details, destination, timeout, subset, "
+                "into, html, pdf, topic, mode, source, instructions, type, assignment, "
+                "Mcp-Session-Id"
+            )
+
+        # Echo back exactly what the browser asked for — more compatible than
+        # a static wildcard (*), which does not cover Authorization and breaks
+        # on credentialed requests and older Safari builds.
+        requested_headers = self.headers.get("Access-Control-Request-Headers")
+        allow_headers = requested_headers if requested_headers else default_headers
+
+        # ── Write preflight response ───────────────────────────────────────
+        try:
+            self.send_response(204)  # 204 No Content — correct for preflight
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", allow_methods)
+            self.send_header("Access-Control-Allow-Headers", allow_headers)
+            self.send_header("Access-Control-Expose-Headers", "*")  # JS can read any response header
+            self.send_header("Access-Control-Max-Age", "86400")  # cache preflight 24 h
+            self.send_header("Content-Length", "0")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+        except (ConnectionAbortedError, BrokenPipeError):
+            pass  # client closed before preflight completed — not an error
+        except:
+            error_type, error_value = sys.exc_info()[:2]
+            err_msg = "REST OPTIONS failed to write reply header: {} - {}".format(error_type, error_value)
+            utils_print.output_box(err_msg)
+
+        # ── Trace (after end_headers — does not affect the response) ──────
+        if self.al_trace:
+            self.al_trace["include_command"] = self.command
+            self.al_trace["include_requestline"] = self.requestline
+            self.al_trace["include_origin"] = self.headers.get("Origin")
+            self.al_trace["include_access_control_request_method"] = self.headers.get("Access-Control-Request-Method")
+            self.al_trace["include_access_control_request_headers"] = self.headers.get("Access-Control-Request-Headers")
+            self.output_trace()
     # =======================================================================================================================
     # Get the message body
     # =======================================================================================================================
@@ -1578,31 +2042,40 @@ class ChunkedHTTPRequestHandler(BaseHTTPRequestHandler):
         err_msg = None
         ret_val = process_status.SUCCESS
 
-        msg_body_length = get_value_from_headers(self.al_headers, 'Content-Length') # Get the message lengthe from the headers
+        try:
 
-        if msg_body_length and msg_body_length.isnumeric():
-            msg_info = utils_io.read_from_stream(status, self.rfile, int(msg_body_length))
+            msg_body_length = get_value_from_headers(self.al_headers, 'Content-Length') # Get the message lengthe from the headers
+
+            if msg_body_length and msg_body_length.isnumeric():
+                msg_info = utils_io.read_from_stream(status, self.rfile, int(msg_body_length))
 
 
-            if len(msg_info) == 2:
-                # The message body is a list with 2 entries:
-                # msg_info[0] is the Content length
-                # msg_info[1] is the content
-                if get_value_from_headers(self.al_headers, "Content-Type") == "application/octet-stream":
-                    # Specify binary content  - keep unchanged
-                    self.msg_body = msg_info[1]
-                else:
-                    try:
-                        self.msg_body = msg_info[1].decode('iso-8859-1')    # Save the decoded body - being used in case of an error to provide error info
-                    except:
-                        self_command = (self.command + "\r\n") if hasattr(self, 'command') else ""
-                        err_msg = f"Failed to decode message body:{self_command}\r\n'Content-Length': {msg_body_length}\r\nmsg_info[0]: {msg_info[0]}\r\nmsg_info[1]: {msg_info[1]}"
-                        status.add_error(err_msg)
-                        utils_print.output_box(err_msg)
-                        ret_val = process_status.HTTP_failed_to_decode
+                if len(msg_info) == 2:
+                    # The message body is a list with 2 entries:
+                    # msg_info[0] is the Content length
+                    # msg_info[1] is the content
+                    if get_value_from_headers(self.al_headers, "Content-Type") == "application/octet-stream":
+                        # Specify binary content  - keep unchanged
+                        self.msg_body = msg_info[1]
                     else:
-                        if len(self.msg_body) and (self.msg_body[0] == ' ' or self.msg_body[-1] == ' '):
-                            self.msg_body = self.msg_body.strip()
+                        try:
+                            self.msg_body = msg_info[1].decode('iso-8859-1')    # Save the decoded body - being used in case of an error to provide error info
+                        except:
+                            self_command = (self.command + "\r\n") if hasattr(self, 'command') else ""
+                            err_msg = f"Failed to decode message body:{self_command}\r\n'Content-Length': {msg_body_length}\r\nmsg_info[0]: {msg_info[0]}\r\nmsg_info[1]: {msg_info[1]}"
+                            status.add_error(err_msg)
+                            utils_print.output_box(err_msg)
+                            ret_val = process_status.HTTP_failed_to_decode
+                        else:
+                            if len(self.msg_body) and (self.msg_body[0] == ' ' or self.msg_body[-1] == ' '):
+                                self.msg_body = self.msg_body.strip()
+        except:
+            # Socket may have been closed and self.msg_body will be returned as NULL
+            errno, value = sys.exc_info()[:2]
+            err_msg = f"Failed to read message body: {errno} : {value}"
+            status.add_error(err_msg)
+            utils_print.output_box(err_msg)
+            ret_val = process_status.HTTP_missing_data
 
 
         return [ret_val, self.msg_body, err_msg]
@@ -1743,7 +2216,11 @@ def show_info():
             caller = ""
 
     title = ["Caller", "Call", "Processed", "Errors", "Last Error", "First Call", "Last Call", "Last Caller"]
-    info_string = utils_print.output_nested_lists(info_table, "\r\nStatistics", title, True, "")
+    header = "Statistics for REST calls"
+    if http_server_info.connection:
+        header += f" using {http_server_info.connection}"
+
+    info_string = utils_print.output_nested_lists(info_table, header, title, True, "")
 
     return info_string
 
@@ -1811,9 +2288,17 @@ def get_info( status = None ):
     global http_server_info
 
     info_str = net_utils.get_connection_info(1)
+
+    mcp_threads = get_mcp_connections()
+
     if http_server_info.workers_pool:
         info_str += ", Threads Pool: %u" % http_server_info.workers_pool.get_number_of_threds()
+        if mcp_threads:
+            # consider threads used by MCP
+            info_str += f", {mcp_threads} Assigned to MCP"
     info_str += ", Timeout: %u, SSL: %s" % (http_server_info.timeout, http_server_info.is_ssl)
+
+
 
     return info_str
 
@@ -1824,6 +2309,7 @@ def rest_server(params: params, host: str, port: int, is_bind:bool, conditions):
     global declared_ip_port
 
     # init variables
+    ret_val = False
 
     http_server_info.is_ssl = interpreter.get_one_value_or_default(conditions, "ssl", False)
     if http_server_info.is_ssl:
@@ -1845,10 +2331,8 @@ def rest_server(params: params, host: str, port: int, is_bind:bool, conditions):
 
     declared_ip_port = host + ":" + str(port)
 
-    if is_bind:
-        bind_host = host
-    else:
-        bind_host = ""
+    bind_host = host if is_bind else ""
+
 
     try:
         # Server Initialization
@@ -1860,17 +2344,26 @@ def rest_server(params: params, host: str, port: int, is_bind:bool, conditions):
         return
 
     if http_server_info.is_ssl:
-        if with_open_ssl_:
-            # Adding SSL
+        # Adding SSL
+        try:
             ca_org = interpreter.get_one_value(conditions, "ca_org")      # Organization to locate the server certificate
             server_org = interpreter.get_one_value(conditions, "server_org")  # Organization to locate the server certificate
-            ret_val = connect_ssl(ca_org, server_org)
-            if not ret_val:
+
+            ssl_context = connect_ssl(ca_org, server_org)
+            if not ssl_context:
                 process_log.add_and_print("Error", "Failed to start REST server with SSL due to missing key files")
-        else:
-            message = "Failed to load pyOpenSSL library"
-            utils_print.output_box(message)
-            process_log.add(message)
+                ret_val = False
+            else:
+
+                # ✅ Wrap BEFORE serve_forever
+                http_server_info.server.socket = ssl_context.wrap_socket(
+                    http_server_info.server.socket,
+                    server_side=True,
+                    do_handshake_on_connect=True
+                )
+                ret_val = True
+        except Exception as e:
+            process_log.add_and_print("Error", f"REST SSL initialization failed: {e}")
             ret_val = False
     else:
         ret_val = True
@@ -1929,51 +2422,41 @@ def connect_ssl(ca_org, server_org):
         ret_val = True
 
     if not ret_val:
-        process_log.add_and_print("Error", "Missing file for ssl process: %s" % missing_file)
+        process_log.add_and_print("Error", "SSL Connection: Missing file for ssl process: %s" % missing_file)
+        return None
     else:
+        context = None
 
         try:
             # params are explained here - https://www.kite.com/python/docs/ssl.wrap_socket
 
-            try:
-                _create_unverified_https_context = ssl._create_unverified_context
-            except AttributeError:
-                # Legacy Python that doesn't verify HTTPS certificates by default
-                pass
-            else:
-                # Handle target environment that doesn't support HTTPS verification
-                ssl._create_default_https_context = _create_unverified_https_context
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 
-            context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-            context.verify_mode = ssl.CERT_REQUIRED
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            context.set_ciphers("DEFAULT@SECLEVEL=1")
+
+            context.load_cert_chain(
+                certfile=server_public_key_file,
+                keyfile=server_private_key_file
+            )
+
+            # ✅ DO NOT REQUIRE CLIENT CERTS
+            context.verify_mode = ssl.CERT_OPTIONAL     # can be also set to: ssl.CERT_REQUIRED
             context.check_hostname = False
 
-            context.load_cert_chain(certfile=server_public_key_file, keyfile=server_private_key_file) #### This is the certificate and private key of the server
-            context.load_verify_locations(cafile=ca_public_key_file) ### This is the certificate (public key) of the CA
+            # ✅ Optional: Trust your CA for future mTLS if needed
+            context.load_verify_locations(cafile=ca_public_key_file)
 
-            ssl_socket = context.wrap_socket(http_server_info.server.socket, server_side=True)
         except:
             error_type, error_value = sys.exc_info()[:2]
             process_log.add_and_print("Error", "SSL socket error - type: '%s' value: '%s " % (str(error_type), str(error_value)))
-            ret_val = False
         else:
-            # Close original socket
-            try:
-                http_server_info.server.socket.close()
-            except:
-                pass
-
             http_server_info.ca_public_key = ca_public_key_file  # The CA public key file
             http_server_info.node_cr = server_public_key_file  # The node Certificate Request file
             http_server_info.node_private_key = server_private_key_file  # The node private key file
 
-            # Set new socket
-            ssl_socket.verify_mode = ssl.CERT_REQUIRED      # ssl.CERT_OPTIONAL Or ssl.CERT_REQUIRED
 
-            http_server_info.server.socket = ssl_socket
-
-
-    return ret_val
+    return context
 
 # =======================================================================================================================
 # Review the headers from the Rest message and return a ret code and the message
@@ -2162,6 +2645,11 @@ def signal_rest_server():
     except:
         pass  # did not connect to REST server
 
+# =======================================================================================================================
+# Test https connection
+# =======================================================================================================================
+def is_https():
+    return True if http_server_info.connection and http_server_info.connection.startswith("https") else False
 
 # =======================================================================================================================
 # Get the REST API MESSAGE
@@ -2182,6 +2670,10 @@ def set_al_headers(input_headers):
     for entry in input_headers:
         if len(entry) == 2:
             header_dict[entry[0].lower().strip()] = entry[1].strip()
+
+    if "anylog-agent" in header_dict:
+        # Some browsers overwrite the user-agent - USE the value provided in anylog-agent
+        header_dict["user-agent"] = header_dict["anylog-agent"]
 
     return header_dict
 

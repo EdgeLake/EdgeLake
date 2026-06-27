@@ -38,7 +38,7 @@ def use_sql_helpers(dbms_type, helpers_count, process_dir):
         "current" : 1,        # The helper to use
         "helpers_count" : helpers_count,  # Number of helpers
         "dir" : [None],
-        "usage" : [0] * (helpers_count + 1),
+        "usage" : [0] * (helpers_count + 1),        # Files given to helper
         "dbms_type" : dbms_type,
     }
     # Details the dirs to use

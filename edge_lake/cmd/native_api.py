@@ -66,12 +66,15 @@ def exec_native_cmd(status, servers, command, timeout):
 # ------------------------------------------------------------------------
 # Call anylog command statement
 # Thread will be on wait for execution and return data
+
+# This call returns the value via rest HHTP socket
+
 # ------------------------------------------------------------------------
 def exec_al_cmd(status, al_command, wfile, into_output, timeout_sec):
     '''
     status - status object
     al_command - command or sql to execute
-    wfile - output file
+    wfile - output file - # This is the REST HTTP socket. MCP DOes not use it - all is kept in a buffer
     into_output - could be into HTML report
     '''
     end_job(status)  # If multiple queries are executed in the same session/report
@@ -99,6 +102,8 @@ def exec_al_cmd(status, al_command, wfile, into_output, timeout_sec):
 
     if command_ret_val:
         ret_val = command_ret_val
+
+    j_handle = status.get_job_handle()
 
     # Test for error on current thread or coming from an operator
     if not ret_val and not j_handle.is_subset():
@@ -181,11 +186,9 @@ def wait_for_reply(status, al_command, subset, timeout):
             if loop_time >= timeout:
                 if subset:
                     break           # with subset flag, a partial replies works
-                status.add_error("REST process exits wait after %u with timeout: '%s'" % (loop_time, al_command))
                 ret_val = process_status.TIMEOUT
-
-                status.keep_error(
-                    "{\"Result.set\":\"REST Server Timeout\"}")  # this message would be returned to the caller
+                error_msg = f'{{"Result.set":"REST Server Timeout after {loop_time}s waiting for data from operators"}}'
+                status.keep_error(error_msg)  # this message would be returned to the caller
                 if member_cmd.is_debug_method("rest"):
                     # Enabled by command:   -    debug on rest
                     job_status_info = []

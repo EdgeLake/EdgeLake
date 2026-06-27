@@ -781,7 +781,17 @@ def get_operators(status, dest_keys, include_tables, use_main, rr_id, is_dict):
                 ret_val, inc_operators = get_operators_by_keys(status, db_name, tb_name, use_main, rr_id, is_dict)
                 if ret_val:
                     break
-                operators_list += inc_operators     # Add the operators of the included tables
+                for new_operator in inc_operators:
+                    # validate that this is a new operator which is not already in the list
+                    # any() stops scanning as soon as a match is found.
+                    exists = any(
+                        op.ip == new_operator.ip and op.port == new_operator.port
+                        for op in operators_list
+                    )
+                    if not exists:
+                        operators_list.append(new_operator) #  Add the operators of the included tables
+
+
 
     else:
         operators_list = []     # Returns empty list without table name and dbms name

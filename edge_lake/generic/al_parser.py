@@ -86,6 +86,24 @@ class SelectParsed():
         self.extended_columns = None # list that extends the returned column values in the result set based on extend directive in the command line
         self.pass_through = False
         self.per_column = None      # A field name used in local query (with extended tables) to specify limit per table
+        self.avg_columns = []
+
+    # =======================================================================================================================
+    # Maintain a list of averages columns - because remote queries should ignore order by these columns
+    # =======================================================================================================================
+    def register_avg(self, avg_column):
+        self.avg_columns.append(avg_column)
+    # =======================================================================================================================
+    # Test if the column is an average column
+    # =======================================================================================================================
+    def is_avg_column(self, tested_column):
+        return True if tested_column in self.avg_columns else False
+
+    # =======================================================================================================================
+    # Test if average is requested - by considering the self.avg_columns list
+    # =======================================================================================================================
+    def is_with_avg(self):
+        return True if len(self.avg_columns) else False
 
     # =======================================================================================================================
     # Increment function info - used in trace mode by Grafana
@@ -98,6 +116,12 @@ class SelectParsed():
     # =======================================================================================================================
     def get_increment_info(self):
         return self.increment_info
+
+    # =======================================================================================================================
+    # Test increment function
+    # =======================================================================================================================
+    def is_with_incr(self):
+        return True if self.increment_info else False
 
     # =======================================================================================================================
     # A local query will do the limit locally (not in the SQL query)

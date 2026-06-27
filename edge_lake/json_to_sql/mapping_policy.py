@@ -95,6 +95,9 @@ def policy_to_columns_dict(status, dbms_name, table_name, instruct, columns):
 
     for column_name, column_data in schema.items():
 
+        if column_name.startswith("__") and column_name.endswith("__"):
+            continue        # Dummy column  - Ignore this column. It is used in mapping policies with scripts - i.e. "_-start__" as a column name
+
         if isinstance(column_data, dict):
             column_list = [column_data]  # Make a list with one attribute
         elif isinstance(column_data, list):
@@ -288,8 +291,11 @@ def process_event(status, readings, policy_inner, policy_id, dbms_name, table_na
     schema = policy_inner["schema"]
 
     secondary_index = 0                # Counter if * is used to add all columns
+    ret_val = process_status.SUCCESS
+
     for index, data_entry in enumerate(readings):  # data_entry is one reading from a list of readings
 
+        one_row = []
         for attr_name, attr_data in schema.items():
             # Go over all the columns in the schema and extract the data
 
@@ -314,6 +320,8 @@ def process_event(status, readings, policy_inner, policy_id, dbms_name, table_na
                                     source_columns = data_entry[bring_key]   # The attribute values to include
                                 if isinstance(source_columns, str) and len(source_columns):
                                     input_columns = utils_json.str_to_json(source_columns)
+                                    if input_columns is None:
+                                        input_columns = source_columns
                                 else:
                                     input_columns = source_columns
 
@@ -327,10 +335,27 @@ def process_event(status, readings, policy_inner, policy_id, dbms_name, table_na
                                         # add column to the relational table
                                         col_str = attr_name if bring_key == '*' else  f"{bring_key}_{attr_name}"    # Extend the name if pulled from a sub key
                                         column_name = utils_data.reset_str_chars(col_str)
-                                        ret_val = add_column_to_list(status, insert_list, index + secondary_index,column_name, unified_data_type, column_val, None, is_dest_string)
+                                        ret_val = add_column_to_list(status, one_row, 0,column_name, unified_data_type, column_val, None, is_dest_string)
+                                        if ret_val:
+                                            break
+                                else:
+                                    # bring_key is the column name and input_columns are the values
+                                    if isinstance(input_columns, list):
+                                        unified_data_type = "varchar"
+                                        column_val = source_columns     # Return to string representation
+                                    else:
+                                        data_type = type(input_columns).__name__
+                                        ret_val, unified_data_type = utils_data.unify_data_type(status, data_type)
                                         if ret_val:
                                             break
 
+                                        column_val = input_columns
+
+                                    column_name = utils_data.reset_str_chars(bring_key)
+
+                                    ret_val = add_column_to_list(status, one_row, 0, column_name, unified_data_type, column_val, None, is_dest_string)
+                                    if ret_val:
+                                        break
                             if ret_val:
                                 break
                 if ret_val:
@@ -350,6 +375,7 @@ def process_event(status, readings, policy_inner, policy_id, dbms_name, table_na
                 break
 
             is_apply = 0
+
             for column_info in attr_list:
                 # Because of condition, could have multiple column infos for a single attr_name
                 if is_apply:
@@ -373,6 +399,7 @@ def process_event(status, readings, policy_inner, policy_id, dbms_name, table_na
                             continue
                         if reply_code == process_status.IGNORE_EVENT:
                             # if ... then skip event - Skip this JSON
+                            one_row = []        # Avoid adding the row info
                             ret_val = process_status.SUCCESS
                             break  # Get next JSON
                         if reply_code == process_status.CHANGE_POLICY:
@@ -381,11 +408,14 @@ def process_event(status, readings, policy_inner, policy_id, dbms_name, table_na
                                 import_dictionary = working_policy["import_"]
                                 if isinstance(import_dictionary, dict) and info_if in import_dictionary:
                                     working_policy = import_dictionary[info_if]  # Change the policy and restart
+                                    one_row = []  # Avoid adding the row info
                                     break
 
                         ret_val = reply_code  # An error
                         schema["__error__"] = f"Failed processing of policy: '{policy_id}' 'script' of attribute: '{attr_name}' returned: '{process_status.get_status_text(ret_val)}'"
                         break
+                    if attr_name.startswith("__") and attr_name.endswith("__"):
+                        continue  # These are only for scripts. For example "__start__" and "__end__"
 
                 ret_val, data_type = get_policy_info(status, column_info, policy_id, "type", True)
                 if ret_val:
@@ -458,7 +488,16 @@ def process_event(status, readings, policy_inner, policy_id, dbms_name, table_na
                     if ret_val:
                         break
 
-                    policy_inner["bwatch_dir"] = True
+                    ### TODO RS: add file size & deleted=False
+                    # add column file size to the relational table
+                    file_path = f"{blobs_dir}{file_name_prefix}{column_val}"
+                    file_size = utils_io.get_file_size(status, file_path)
+                    # ret_val = add_column_to_list(status, insert_list, index + secondary_index, "file_size", "integer", file_size, None, is_dest_string)
+                    data_entry["file_size"] = file_size
+
+
+
+                    policy_inner["bwatch_dir"] = True  # This determines that the JSON is written to the bwatch_dir
 
                 else:
                     if "apply" in column_info:
@@ -474,15 +513,20 @@ def process_event(status, readings, policy_inner, policy_id, dbms_name, table_na
                     break
 
                 # add column to the relational table
-                ret_val = add_column_to_list(status, insert_list, index + secondary_index, attr_name, unified_data_type, column_val, None, is_dest_string)
+                ret_val = add_column_to_list(status, one_row, 0, attr_name, unified_data_type, column_val, None, is_dest_string)
                 if ret_val:
                     break
 
             if ret_val:
                 break
 
+
         if ret_val:
             break
+
+        if len(one_row):
+            # Add row to returned results list
+            insert_list.append(one_row[0])
 
     return [ret_val, working_policy]
 
@@ -668,7 +712,7 @@ def get_applied_val(status, applied_func, attr_val):
 # ----------------------------------------------------------------------
 def bring_and_default_to_data(status, column_info, policy_id, attr_name, data_entry):
     attr_val = None
-    ret_val, bring_cmd = utils_json.get_policy_val(status, column_info, policy_id, "bring", str, True, False)
+    ret_val, bring_cmd = utils_json.get_policy_val(status, attr_name, column_info, policy_id, "bring", str, True, False)
     if not ret_val:
         if "compiled_bring" in column_info:
             # get the bring command which was already processed using utils_data.cmd_line_to_list_with_json
@@ -690,7 +734,7 @@ def bring_and_default_to_data(status, column_info, policy_id, attr_name, data_en
             # Get the default
             data_type_name = column_info["type"] if "type" in column_info else None
             data_type = utils_columns.get_instance_by_name(data_type_name)
-            ret_val, attr_val = utils_json.get_policy_val(status, column_info, policy_id, "default", data_type, True,  True)
+            ret_val, attr_val = utils_json.get_policy_val(status, attr_name, column_info, policy_id, "default", data_type, True,  True)
             if not ret_val:
                 if isinstance(attr_val, str) and attr_val == "now()":
                     attr_val = utils_columns.get_current_utc_time()
@@ -907,6 +951,8 @@ def get_formatted_val(status, data_type, pulled_val):
             value_str = time_str
     elif data_type == "bool":
         value_str = str(attr_val).lower()
+    elif data_type == "nonetype":
+        value_str = "null"      # Using NULL would not allow to convert the string to a dict.
     else:
         value_str = str(attr_val)
 

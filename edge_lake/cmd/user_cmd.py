@@ -98,6 +98,7 @@ import edge_lake.generic.process_status as process_status
 import edge_lake.job.job_scheduler as job_scheduler
 import edge_lake.generic.input_kbrd as input_kbrd
 from edge_lake.generic.node_info import is_with_cli, get_license_message
+from edge_lake.job.task_scheduler import start_init_commands
 
 
 try:
@@ -299,21 +300,4 @@ def wait_to_exit():
             return
         time.sleep(5)       # wait 5 seconds
 
-# =======================================================
-# Start sys commands
-# =======================================================
-def start_init_commands(status, data_buffer):
-    # start a thread to track the failed nodes in the metadata
-    commands = [
-
-        "schedule time = 1 minute and scheduler = 0 and name = \"Metadata Ping\" task set servers ping",        # start a thread to track non responsive nodes
-
-        "run scheduler 0"       # Start the sys scheduler
-    ]
-    for command in commands:
-        ret_value = member_cmd.process_cmd(status=status, command=command, print_cmd=False, source_ip="",
-                                           source_port="", io_buffer_in=data_buffer)
-        if ret_value:
-            break
-    return ret_value
 

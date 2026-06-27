@@ -2,7 +2,7 @@
 """Client and server classes corresponding to protobuf-defined services."""
 import grpc
 
-import anylog_node.tcpip.grpc.dummy_pb2 as dummy__pb2
+import edge_lake.tcpip.grpc.dummy_pb2 as dummy__pb2
 
 
 class SerializeServiceStub(object):

@@ -396,7 +396,7 @@ def update_tsd_table(status, stream_info, dbms_name, table_name, source, instruc
 # =======================================================================================================================
 def add_data_prep_to_watch_dir(status, prep_dir, watch_dir, err_dir, dbms_name, table_name, source, instructions, tsd_file_name, file_type, user_data, hash_value, trace_level):
 
-    if version.prep_aggregations(dbms_name, table_name):  # Sets the monitored struct - or returns false if not monitored
+    if version.prep_aggregations(status, dbms_name, table_name, user_data):  # Sets the monitored struct - or returns false if not monitored
         ret_val = write_aggregations(status, prep_dir, watch_dir, err_dir, dbms_name, table_name, source, instructions, tsd_file_name, file_type, user_data, hash_value)
     else:
         ret_val = write_by_prep_move(status, prep_dir, watch_dir, err_dir, dbms_name, table_name, source, hash_value, instructions, tsd_file_name, user_data, file_type)
@@ -411,18 +411,31 @@ def write_aggregations(status, prep_dir, watch_dir, err_dir, dbms_name, table_na
 
     # Update the aggregations object for this table
 
+
+    trace_level = member_cmd._set_methods["aggregation"]["trace"]
+
     json_data = utils_json.str_to_json("[" + user_data.replace("\n", ',') + ']')
-    if json_data:
+
+    if json_data and len(json_data):
+        # Find if keys are with capital letters --> change to lower case
+        for key in json_data[0].keys():
+            if isinstance(key, str) and any(c.isupper() for c in key):
+                # At least one attribute name is with upper case
+                json_data = utils_json.lowercase_keys(json_data)    # Map to lower case
+                break
+
         table_agg = version.get_table_agg(status, dbms_name, table_name)  # get the list of columns, for each column, the aggregation info.
         if not table_agg:
             return process_status.ERR_process_failure
 
-        ret_val = process_status.SUCCESS
-        if version.is_ingest_data(dbms_name, table_name):
-            # Test if ingest the source data
+        source_ingest, target_ingest = version.is_ingest(dbms_name, table_name)
+        if source_ingest:
+            # Write the source data
             ret_val = write_by_prep_move(status, prep_dir, watch_dir, err_dir, dbms_name, table_name, source,
                                          hash_value, instructions, tsd_file_name, user_data, file_type)
+            source_ingest = True
         else:
+            source_ingest = False
             ret_val = process_status.SUCCESS
 
         if not ret_val:
@@ -432,21 +445,29 @@ def write_aggregations(status, prep_dir, watch_dir, err_dir, dbms_name, table_na
                 target_table = agg_info["target_table"]
 
                 ret_val, updated_data, encoding = version.process_agg_events(status, target_dbms, target_table, agg_info,
-                                                                             json_data)
+                                                                             json_data, trace_level)
                 if ret_val == process_status.IGNORE_EVENT:
                     # Ignore the operator process as it will be written (using aggregations) when time slot is full
                     ret_val = process_status.SUCCESS
                     continue
 
                 if ret_val == process_status.AGGREGATE:
-                    if dbms_name != target_dbms or table_name != target_table:
-                        # The source data was written - only target dbms and target table are written
-                        if version.is_ingest_data(target_dbms, target_table):
-                            # restructure as a string
-                            new_data = utils_json.to_string(updated_data)[1:-1].replace("},", "}\n")
-                            new_has_val = utils_data.get_string_hash('md5', new_data, target_dbms + '.' + target_table)  # Get the Hash of the data that is written to a file
-                            ret_val = write_by_prep_move(status, prep_dir, watch_dir, err_dir, target_dbms, target_table, source,
-                                                         new_has_val, "0", tsd_file_name, new_data, file_type)
+                    if source_ingest:
+                        # Change target table names if not provided
+                        if target_dbms == dbms_name:
+                            target_dbms = f"agg_{target_dbms}"
+                        if target_table == table_name:
+                            target_table = f"agg_{target_table}"
+                    ret_val = process_status.SUCCESS
+
+                    # Write the aggregation to the target DBMS and table
+                    if target_ingest: # Derived (aggregation ingest)
+                        # restructure as a string
+                        new_data = utils_json.to_string(updated_data)[1:-1].replace("},", "}\n")
+                        new_has_val = utils_data.get_string_hash('md5', new_data, target_dbms + '.' + target_table)  # Get the Hash of the data that is written to a file
+                        ret_val = write_by_prep_move(status, prep_dir, watch_dir, err_dir, target_dbms, target_table, source,
+                                                     new_has_val, "0", None, new_data, file_type)        # TSD is None - to eliminate write immediate
+
                 elif ret_val:
                     break  # Error
     else:
@@ -564,7 +585,9 @@ def flush_buffered_data(status, watch_dir, prep_dir = None, err_dir = None, igno
 
     trace_level = member_cmd.commands["run streamer"]['trace']
 
-    for key, stream_info in bufferd_data_.items():
+    # replacing -- key, stream_info in bufferd_data_.items() - because new entries can be added to bufferd_data_ durin itteration
+    for key in list(bufferd_data_): # This call avoids "dictionary changed size during iteration"
+        stream_info = bufferd_data_[key]
 
         stream_info.buffer_mutex.acquire()  # Mutex the specific key (specific table)
 
@@ -765,7 +788,8 @@ def show_info(config_only, out_format):
         else:
             # Provide data statistics -  File_counter, file_rows, stream_counter, stream_rows
             info_chart = []
-            for dbms_table, stat_list in stat_by_table_.items():
+            stat_table = stat_by_table_.copy()      # Make a copy because the table may be updated during iteration
+            for dbms_table, stat_list in stat_table.items():
                 files_put = format(stat_list[0], ",")
                 files_rows = format(stat_list[1], ",")
                 stream_put = format(stat_list[2], ",")
@@ -813,7 +837,10 @@ def get_cached_info(dbms_table):
     used_volume = 0     # The length of the current buffer used
     threshold_time = 0
     current_time = 0
-    for key, stream_info in bufferd_data_.items():
+
+    # replacing -- key, stream_info in bufferd_data_.items() - because new entries can be added to bufferd_data_ durin itteration
+    for key in list(bufferd_data_):  # This call avoids "dictionary changed size during iteration"
+        stream_info = bufferd_data_[key]
         if key.startswith(dbms_table):
             cached_rows += stream_info.buffered_counter
             threshold_volume += stream_info.max_volume

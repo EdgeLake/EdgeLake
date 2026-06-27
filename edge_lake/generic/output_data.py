@@ -109,14 +109,14 @@ class OutputManager():
         self.add_stat = add_stat          # Flag to include statistics on output
         self.nodes_count = nodes_count    # Nodes participating
 
-        self.out_list_counter = 0         # Counter for numbers of rows added to the table stucture
+        self.out_list_counter = 0         # Counter for numbers of rows added to the table structure
         self.out_list = []                # A structure to collect the data in a table format
         self.command = ""                 # The command processed
         self.file_name = file_name        # the name of the file if output is directed to file
         self.trusted_file = trusted_file     # A file name with complete output results for validation
         self.io_handle = None             # The file output handle - if output to file
         self.rest_socket = rest_socket    # The output socket to the REST caller (if used)
-        self.output_str = "["             # If data is buffered - Format: [{'Query': {'0': '18774'}}, {'Query': {'0': '18774'}}]
+        self.output_str = ""             # maintained buffered data
         self.title_list = None          # the projected columns
         self.data_types_list = None     # The projected data types
         self.dbms_name = None           # The database name
@@ -292,7 +292,7 @@ class OutputManager():
         elif out_dest == "rest":
            ret_val = self.rest_write(status, self.rest_socket, info_str, True, is_last, self.output_into)
         elif out_dest == "buffer":
-            self.output_str += info_str
+            params.extend_value(self.assign_key,  info_str)       # Add the ley to the value
         elif out_dest == "kafka":
             ret_val = al_kafka.send_data(status, self.kafka_producer, self.topic, info_str)
         else:
@@ -334,26 +334,26 @@ class OutputManager():
                 ret_val = self.output_table_entries(status, is_mutex, False)
         else:
             # use JSON format
-            if self.format_type == "json:output" or self.format_type == "json:list":
-                # Clean JSON rows
+            if self.format_type == "json:output" or self.format_type == "json:list" or self.format_type == "mcp":
+                # Clean JSON rows - (mcp format is same as json:list - clean JSON array)
                 if not rows_data:
                     # Data is not organized as a string
                     out_data = utils_sql.make_output_row(1, self.title_list, self.data_types_list, json_data)
                     if not offset_row:
-                        if self.format_type == "json:list":
-                            offset_new = 9      # Keep the [ parenthesis
+                        if self.format_type == "json:list"  or self.format_type == "mcp":
+                            offset_new = 9      # Keep the [ parenthesis -- {"Query":[ -- need to remove first 9
                         else:
                             # 10 is used because of the transformation from JSON
                             offset_new = 10 # Ignore the "{"Query":[" prefix
                     else:
                         offset_new = offset_row
-                    # not rhe first row - add comma to seperate between the JSON entries
+                    # not the first row - add comma to separate between the JSON entries
                     str_info = out_data[offset_new:]
                 else:
                     if not offset_row:
                         # 11 is used because of the AnyLog format
-                        if self.format_type == "json:list":
-                            offset_new = 10      # Keep the [ parenthesis
+                        if self.format_type == "json:list" or self.format_type == "mcp":
+                            offset_new = 9      # Keep the [ parenthesis -- {"Query":[ -- need to remove first 9
                         else:
                             offset_new = 11 # Ignore the "{"Query":[" prefix
                     else:
@@ -366,6 +366,7 @@ class OutputManager():
                         if self.format_type == "json:output":
                             str_info = "%s%s" % (self.new_line, str_info)
                         else:
+                            # json:list and mcp use comma-separated array format
                             str_info = ",%s%s" % (self.new_line, str_info)
                 else:
                     if self.destination == "stdout" or self.test:
@@ -460,6 +461,10 @@ class OutputManager():
                     if is_mutex:
                         utils_print.print_unlock()
 
+        if self.destination == "buffer":
+            # assign the output:
+            params.extend_value(self.assign_key, self.output_str)       # Add the ley to the value
+            self.output_str = ""                                        # Delivered
         return ret_val
 
     # =======================================================================================================================
@@ -475,12 +480,17 @@ class OutputManager():
             ret_val = process_status.SUCCESS
             if is_mutex:
                 utils_print.print_lock()  # avoid multiple threads printing at the same time
-            utils_print.print_data_list(self.out_list, self.out_list_counter + 1, True, False)
+            info_str = utils_print.print_data_list(status, self.out_list, self.out_list_counter + 1, True, False)
             if is_mutex:
                 utils_print.print_unlock()
+            if info_str is None:
+                ret_val = process_status.Inconsistent_row_struct
         else:
-            info_str = utils_print.print_data_list(self.out_list, self.out_list_counter + 1, True, True, self.new_line)
-            ret_val = self.output_info_string(status, info_str, None, is_last)
+            info_str = utils_print.print_data_list(status, self.out_list, self.out_list_counter + 1, True, True, self.new_line)
+            if info_str is None:
+                ret_val = process_status.Inconsistent_row_struct
+            else:
+                ret_val = self.output_info_string(status, info_str, None, is_last)
 
         self.out_list_counter = 0 # reset self.out_list
 
@@ -503,14 +513,7 @@ class OutputManager():
 
         # Complete the output of whatever is left in the buggers
 
-        if self.destination == "buffer":
-            # assign the output:
-            if self.format_type == "Table":
-                params.add_param(self.assign_key, (self.output_str[:-1] + "]"))
-            else:
-                # JSON - End the query info
-                params.add_param(self.assign_key, (self.output_str + "]}]"))
-        elif  self.format_type == "table":
+        if  self.format_type == "table":
             if self.out_list_counter:
                 # Print whatever is left in the table struct
                 is_last = True if (not self.add_stat and rows_counter and is_query_end) else False  # No more printouts after this one
@@ -542,7 +545,7 @@ class OutputManager():
                 else:
                     self.output_info_string(status, "{\"reply\" : \"Empty data set\"}", None, True)
 
-            elif self.format_type[:4] == "json":
+            elif self.format_type[:4] == "json" or self.format_type == "mcp":
                 if self.add_stat:
                     prefix_str = ""
                     double_lines_stat = False  # Place stat on a single line
@@ -554,7 +557,7 @@ class OutputManager():
                         else:
                             prefix_str = "]," + self.new_line
                     else:
-                        if self.format_type == "json:list":
+                        if self.format_type == "json:list" or self.format_type == "mcp":
                             if self.test:
                                 prefix_str = "]"
                             else:
@@ -569,7 +572,7 @@ class OutputManager():
 
                     if self.format_type == "json":
                         end_struct = "]}"
-                    elif self.format_type == "json:list":  # not JSON:output
+                    elif self.format_type == "json:list" or self.format_type == "mcp":  # not JSON:output
                         end_struct = "]"
                     elif self.format_type == "json:output":  # not JSON:output
                         end_struct = ""
@@ -578,6 +581,9 @@ class OutputManager():
                         ret_val = self.rest_write(status, self.rest_socket, end_struct, True, True, self.output_into)
                     elif self.destination == "stdout":
                         utils_print.output(end_struct, False)
+                    elif self.destination == "buffer":
+                        # assign the output:
+                        params.extend_value(self.assign_key, end_struct)       # Add the ley to the value
 
 
         # Close output file / Kafka connection
@@ -777,22 +783,29 @@ def process_table_list(data_types_list, table_list, rows_data, json_data, locati
             if (location + rows_counter) >= len(table_list[0]):
                 # add new list
                 for index, column_val in enumerate(row.values()):
+                    if index >= len(data_types_list):
+                        # This is the case of a query (of select *) with include, where the number of columns is different in every table
+                        break
                     print_val = str(column_val)
                     if not print_val:
                         print_val = "null"
-                    elif data_types_list and data_types_list[index][:4] == "bool":
+                    elif data_types_list and data_types_list[index].startswith("bool"):
                         if print_val == "0":
                             print_val = "false"
                         else:
                             print_val = "true"
                     table_list[index].append(print_val)
+
             else:
                 for index, column_val in enumerate(row.values()):
                     # reuse existing list
+                    if index >= len(data_types_list):
+                        # This is the case of a query (of select *) with include, where the number of columns is different in every table
+                        break
                     print_val = str(column_val)
                     if not print_val:
                         print_val = "null"
-                    elif data_types_list and data_types_list[index][:4] == "bool":
+                    elif data_types_list and data_types_list[index].startswith("bool"):
                         if print_val == "0":
                             print_val = "false"
                         else:

@@ -1458,9 +1458,12 @@ def set_sql_table_struct(status, dbms_name, table_name, reply_data):
 
     query_dt = j_handle.get_select_parsed().get_query_data_types()
 
+    grafana_dt = []     # A ;ost of the data types recognized by grafana
     for index, title in enumerate(title_list):
         source_data_type = query_dt[index]
         data_type = get_grafana_data_type(source_data_type)
+
+        grafana_dt.append(data_type)        # Save Grafana DT as f(column projected)
 
         if index:
             gr_reply += f',{{"text":"{title}", "type":"{data_type}"}}'
@@ -1478,6 +1481,10 @@ def set_sql_table_struct(status, dbms_name, table_name, reply_data):
         for index1, entry in enumerate(rows):
             row_str = ""
             for index2, value in enumerate(entry.values()):
+
+                if grafana_dt[index2] == "timestamp":
+                    value = value[:10] + "T" + value[11:] + "Z"    # Change to ISO Timestamp
+
                 if index2:
                     row_str += f',\"{value}\"'
                 else:

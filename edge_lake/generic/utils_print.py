@@ -231,11 +231,35 @@ def output(info, is_newLine, is_mutex = True):
 
 # =======================================================================================================================
 # Output box messages
+'''
+✅ Split by \n
+✅ Ignore \r
+✅ Ensure no resulting string exceeds 150 chars
+'''
 # =======================================================================================================================
-def output_box(info_string, color = "red"):
+def output_box(info_string, color = "red", max_len = 250):
+
 
     # remove '\r' and split by line
-    info_array = info_string.replace("\r","").split('\n')
+    s = info_string.replace('\r', '')
+
+    # Split by newline
+    parts = s.split('\n')
+    info_array = []
+
+    for part in parts:
+        encoded = part.encode('utf-8')
+        if len(encoded) <= max_len:
+            info_array.append(part)
+        else:
+            # Split long parts into chunks of <= max_bytes bytes
+            for part in parts:
+                if len(part) <= max_len:
+                    info_array.append(part)
+                else:
+                    # Split long parts into fixed-size chunks
+                    for i in range(0, len(part), max_len):
+                        info_array.append(part[i:i + max_len])
 
     # Get the longest line
     box_length = 0
@@ -287,7 +311,7 @@ def jput(json_data, is_newLine, indent = 1):
 
     try:
         if (is_newLine):
-            pprint.pprint(json_data, indent=indent)
+            pprint.pprint(json_data, indent=indent, width=160)
             new_line_counter += 1
             prompt = get_prompt()
             print(prompt, end='', flush=True)
@@ -870,7 +894,7 @@ def print_status(elements, prints_count, index, get_info_str: bool = False):
 # =======================================================================================================================
 # Print a list whereas every entry is a list of strings
 # =======================================================================================================================
-def print_data_list(out_list, rows_count, print_title, get_info_str, new_line = "\r\n"):
+def print_data_list(status, out_list, rows_count, print_title, get_info_str, new_line = "\r\n"):
     '''
     out_list -  a list to print
     rows_count - number of entries to print
@@ -882,6 +906,8 @@ def print_data_list(out_list, rows_count, print_title, get_info_str, new_line = 
     info_str = ""
 
     columns_count = len(out_list)
+    last_column = columns_count - 1
+
     columns_length = [0] * columns_count  # maintain the max length for each column
 
     # Get the max size for each column
@@ -892,17 +918,31 @@ def print_data_list(out_list, rows_count, print_title, get_info_str, new_line = 
 
     # print the data
     for row_counter in range(rows_count):  # rows_count in the number of rows to print
+
         for i in range(2):  # for title do twice
             if get_info_str:
                 info_str += new_line
             else:
                 output(new_line, False)
-            last_column = columns_count - 1
+
+
             for column_number in range(columns_count):
+
+                if not row_counter and len(out_list[column_number]) < rows_count:   # Cound be greater as buff does not reset for performance reason
+                    # Need to be done once for every column
+                    columns_in_row = len(out_list[row_counter]) - 1  # Ignore column name
+                    columns_expected = columns_count - 1  # Ignore column name
+                    error_msg = f"Query returned rows with {columns_in_row} columns, but {columns_expected} columns were expected. Test physical table structure in the DBMS"
+                    status.add_error(error_msg)
+                    output_box(error_msg)
+                    info_str = None
+                    break
+
                 length = columns_length[column_number]
                 if i == 1:
                     out_str = "-".ljust(length, '-') + ' '
                 else:
+
                     column_data = out_list[column_number][row_counter]
 
                     if is_right_shift(column_data):
@@ -919,13 +959,19 @@ def print_data_list(out_list, rows_count, print_title, get_info_str, new_line = 
                 else:
                     output(out_str, False)
 
-            if row_counter or not print_title:
+            if row_counter or not print_title or info_str is None:
                 break
 
+        if info_str is None:
+            break   # Inconsistent row structure
     if get_info_str:
-        info_str += new_line
+        if info_str is not None:
+            info_str += new_line
     else:
-        output(new_line, False)
+        if info_str is None:
+            output(f"\r\nError: Query Terminated", True)
+        else:
+            output(new_line, False)
     return info_str
 
 # =======================================================================================================================
@@ -1036,7 +1082,7 @@ def print_dictionary(offset, struct_data, max_str):
     for key, value in struct_data.items():
         if index:
             print_str += ',\r\n' + ' ' * offset
-        print_str += "'%s' : " % key
+        print_str += "\"%s\" : " % key
 
         # Try if string is an object
         if isinstance(value, str) and len(value) > 2:
@@ -1074,8 +1120,6 @@ def print_dictionary(offset, struct_data, max_str):
 # break string - long string are broken to multiple lines
 # =======================================================================================================================
 def break_string(str_val, offset, key_len, max_str):
-
-
     str_len = len(str_val)
     if max_str and str_len >= max_str:
         # Only print a representative of the string
@@ -1085,40 +1129,48 @@ def break_string(str_val, offset, key_len, max_str):
         str_offset = 0
 
         # test if string has \n character (i.e. Public or Private key)
-        str_list = str_val.replace('\r','').split('\n')
+        str_list = str_val.replace('\r', '').split('\n')
         list_size = len(str_list)
         list_index = 0
 
-        while True:
-            if list_index >= list_size:
-                break
-
+        while list_index < list_size:
             if list_size == 1:
                 # New Line every 64 chars
-                print_str += "'%s'" % str_val[str_offset:str_offset + 64]
+                print_str += "\"%s\"" % str_val[str_offset:str_offset + 64]
                 str_offset += 64
                 if str_offset >= str_len:
                     break
             else:
-                # Print from the list
+                # Skip empty lines (including trailing newline artifacts)
                 if not str_list[list_index]:
                     list_index += 1
-                    continue            # Empty line
+                    continue
 
-                print_str += "'%s'" % str_list[list_index]
+                print_str += "\"%s\"" % str_list[list_index]
                 list_index += 1
 
-                if list_index == (list_size - 1) and  str_list[list_index] == "":
-                    # Last one is empty
+                # Only add line continuation if there are more non-empty lines ahead
+                remaining = [s for s in str_list[list_index:] if s]
+                if not remaining:
                     break
 
+                if not print_str and key_len:
+                    # First line - print in the same line of the key
+                    print_str += ' ' * (offset + 3)
+                else:
+                    print_str += '\r\n' + ' ' * (offset + key_len + 5)
+
+                continue
+
             if not print_str and key_len:
-                # First line - print in the same line of the key:
+                # First line - print in the same line of the key
                 print_str += ' ' * (offset + 3)
             else:
                 print_str += '\r\n' + ' ' * (offset + key_len + 5)
 
     return print_str
+
+
 
 # =======================================================================================================================
 # Print debug
@@ -1178,3 +1230,47 @@ def print_dict_as_table(key, dict_list, info_struct, attr_names, get_info_str, l
     reply_data = output_nested_lists(print_list, title, attr_names, get_info_str, line_prefix, capital_title)
 
     return reply_data
+
+# =======================================================================================================================
+# Flat dictionary (key leading to a dictionary with flat attributes) to a table
+# {
+#     "key1": { "inner_key1" : "value1",
+#               "inner_key2" : "value2",
+#               "inner_key3" : "value3",
+#               },
+#     "key2": { "inner_key1" : "value1",
+#               "inner_key2" : "value2",
+#               "inner_key3" : "value3",
+#               },
+# }
+# Return the printable table as a string
+# =======================================================================================================================
+def print_flat_dict_as_table(source_dict, ignore_list, key_name, title, get_info_str):
+    '''
+    ignore_list - the attribute names that are ignored in the output - needs to be [] if to allow all
+    key_name - The title for the root attribute in the dict
+    source_dict - the dictionary to be printed
+    title - the title to be printed
+    get_info_str - True to return as a string (false - will print to stdout)
+    '''
+    if len(source_dict):
+        # With connected cameras
+        output_table = []
+        for index, key_val in enumerate(source_dict.items()):
+            key = key_val[0]
+            info = key_val[1]   # key value pairs
+
+            if not index:
+                # First entry - set the header
+                column_names = [key_name] + [inner_key for inner_key in info.keys() if not inner_key in ignore_list]
+
+
+            new_entry = [key] + [inner_val for inner_key, inner_val in info.items() if not inner_key in ignore_list]
+            output_table.append(new_entry)
+
+        info_str = output_nested_lists(nested_lists=output_table, header=title, column_names = column_names, get_info_str = get_info_str, line_prefix = "", capital_title = True)
+
+    else:
+        info_str = f"Dictionary {key_name} is empty"
+
+    return info_str
