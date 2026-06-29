@@ -1,6 +1,5 @@
 #!/bin/bash
 
-
 if [[ -z ${APP_NAME} ]] ; then
   export VERSION=$(grep '^version' $EDGELAKE_HOME/setup.cfg | awk -F' = ' '{print $2}')
   ARCH=$(uname -m)
